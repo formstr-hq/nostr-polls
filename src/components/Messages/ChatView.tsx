@@ -5,53 +5,25 @@ import {
   Avatar,
   IconButton,
   TextField,
-  Paper,
-  Chip,
   Modal,
-  Popover,
+  CircularProgress,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import SendIcon from "@mui/icons-material/Send";
-import AddReactionOutlinedIcon from "@mui/icons-material/AddReactionOutlined";
+import ReplyIcon from "@mui/icons-material/Reply";
+import CloseIcon from "@mui/icons-material/Close";
 import { useNavigate, useParams } from "react-router-dom";
 import { nip19 } from "nostr-tools";
-import dayjs from "dayjs";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import { useTheme } from "@mui/material/styles";
 import { useDMContext } from "../../hooks/useDMContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { useUserContext } from "../../hooks/useUserContext";
-import { getConversationId } from "../../nostr/nip17";
+import { getConversationId, fetchInboxRelays } from "../../nostr/nip17";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
-import { TextWithImages } from "../Common/Parsers/TextWithImages";
-
-const QUICK_EMOJIS = [
-  "\u{1F44D}",
-  "\u{2764}\u{FE0F}",
-  "\u{1F602}",
-  "\u{1F622}",
-  "\u{1F525}",
-];
-
-// Renders an emoji, supporting custom emoji shortcodes like :name:
-const RenderEmoji: React.FC<{ content: string; tags?: string[][] }> = ({ content, tags }) => {
-  const match = content.match(/^:([a-zA-Z0-9_]+):$/);
-  if (match && tags) {
-    const shortcode = match[1];
-    const emojiTag = tags.find(t => t[0] === "emoji" && t[1] === shortcode);
-    if (emojiTag && emojiTag[2]) {
-      return (
-        <img
-          src={emojiTag[2]}
-          alt={`:${shortcode}:`}
-          title={`:${shortcode}:`}
-          style={{ height: "1em", width: "auto", verticalAlign: "middle" }}
-        />
-      );
-    }
-  }
-  return <>{content}</>;
-};
+import { DMMessage } from "../../contexts/dm-context";
+import MessageBubble from "./MessageBubble";
+import MessageContextMenu from "./MessageContextMenu";
 
 const ChatView: React.FC = () => {
   const { npub } = useParams<{ npub: string }>();
@@ -62,10 +34,9 @@ const ChatView: React.FC = () => {
   const { user } = useUserContext();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [showPickerForMsg, setShowPickerForMsg] = useState<string | null>(null);
-  const [reactionAnchor, setReactionAnchor] = useState<HTMLElement | null>(
-    null,
-  );
+  const [contextMenuMsg, setContextMenuMsg] = useState<DMMessage | null>(null);
+  const [replyTo, setReplyTo] = useState<DMMessage | null>(null);
+  const [pickerForMsgId, setPickerForMsgId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const theme = useTheme();
 
@@ -84,7 +55,6 @@ const ChatView: React.FC = () => {
     // invalid npub
   }
 
-  // Find conversation
   const conversationId =
     user && recipientPubkey
       ? getConversationId(user.pubkey, [recipientPubkey])
@@ -93,41 +63,47 @@ const ChatView: React.FC = () => {
     ? conversations.get(conversationId)
     : null;
 
-  // Fetch profile
   useEffect(() => {
     if (recipientPubkey && !profiles?.get(recipientPubkey)) {
       fetchUserProfileThrottled(recipientPubkey);
     }
   }, [recipientPubkey, profiles, fetchUserProfileThrottled]);
 
-  // Mark as read
+  // Warm the inbox relay cache for both parties as soon as the chat opens,
+  // so the relay lookup is already resolved by the time the user hits send.
+  // persist=true only for the logged-in user — their relays are saved to localStorage.
+  useEffect(() => {
+    if (recipientPubkey && user?.pubkey) {
+      fetchInboxRelays(recipientPubkey);
+      fetchInboxRelays(user.pubkey, true);
+    }
+  }, [recipientPubkey, user?.pubkey]);
+
   useEffect(() => {
     if (conversationId && conversation && conversation.unreadCount > 0) {
       markAsRead(conversationId);
     }
   }, [conversationId, conversation, markAsRead]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversation?.messages?.length]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || !recipientPubkey || sending) return;
-
     const content = input.trim();
     setInput("");
     setSending(true);
-
     try {
-      await sendMessage(recipientPubkey, content);
+      await sendMessage(recipientPubkey, content, replyTo?.id);
+      setReplyTo(null);
     } catch (e) {
       console.error("Failed to send message:", e);
-      setInput(content); // Restore on failure
+      setInput(content);
     } finally {
       setSending(false);
     }
-  }, [input, recipientPubkey, sending, sendMessage]);
+  }, [input, recipientPubkey, sending, sendMessage, replyTo]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -139,8 +115,6 @@ const ChatView: React.FC = () => {
   const handleReaction = useCallback(
     async (emoji: string, messageId: string) => {
       if (!recipientPubkey) return;
-      setShowPickerForMsg(null);
-      setReactionAnchor(null);
       try {
         await sendReaction(recipientPubkey, emoji, messageId);
       } catch (e) {
@@ -230,10 +204,11 @@ const ChatView: React.FC = () => {
         {messages.map((msg) => {
           const isMine = msg.pubkey === user?.pubkey;
           const msgReactions = conversation?.reactions?.get(msg.id) || [];
-
-          // Group reactions by emoji with counts
           const groupedReactions = msgReactions.reduce<
-            Record<string, { emoji: string; count: number; pubkeys: string[]; tags?: string[][] }>
+            Record<
+              string,
+              { emoji: string; count: number; pubkeys: string[]; tags?: string[][] }
+            >
           >((acc, r) => {
             if (!acc[r.emoji]) {
               acc[r.emoji] = { emoji: r.emoji, count: 0, pubkeys: [], tags: r.tags };
@@ -243,174 +218,78 @@ const ChatView: React.FC = () => {
             return acc;
           }, {});
 
+          const replyTag = msg.tags.find(
+            (t) => t[0] === "e" && t[3] === "reply"
+          );
+          const referencedMsg = replyTag
+            ? messages.find((m) => m.id === replyTag[1])
+            : undefined;
+          const referencedMsgSenderName = referencedMsg
+            ? referencedMsg.pubkey === user?.pubkey
+              ? "You"
+              : recipientName
+            : undefined;
+
           return (
-            <Box
+            <MessageBubble
               key={msg.id}
-              display="flex"
-              flexDirection="column"
-              alignItems={isMine ? "flex-end" : "flex-start"}
-              sx={{
-                "&:hover .reaction-trigger": { opacity: 1 },
-              }}
-            >
-              <Box display="flex" alignItems="center" gap={0.5}>
-                {isMine && (
-                  <IconButton
-                    className="reaction-trigger"
-                    size="small"
-                    sx={{ opacity: 0, transition: "opacity 0.2s" }}
-                    onClick={(e) => {
-                      setShowPickerForMsg(msg.id);
-                      setReactionAnchor(e.currentTarget);
-                    }}
-                  >
-                    <AddReactionOutlinedIcon fontSize="small" />
-                  </IconButton>
-                )}
-                <Paper
-                  elevation={1}
-                  sx={{
-                    px: 2,
-                    py: 1,
-                    maxWidth: "85%",
-                    borderRadius: 2,
-                    overflow: "hidden",
-                    backgroundColor: isMine ? "primary.main" : "action.hover",
-                  }}
-                >
-                  <Box
-                    sx={{
-                      color: isMine ? "primary.contrastText" : "text.primary",
-                      wordBreak: "break-word",
-                      fontSize: "0.875rem",
-                      "& a": {
-                        color: isMine ? "primary.contrastText" : "#FAD13F",
-                      },
-                    }}
-                  >
-                    <TextWithImages content={msg.content} tags={msg.tags} />
-                  </Box>
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      color: isMine ? "primary.contrastText" : "text.secondary",
-                      opacity: 0.7,
-                      display: "block",
-                      textAlign: "right",
-                      mt: 0.5,
-                    }}
-                  >
-                    {dayjs.unix(msg.created_at).format("HH:mm")}
-                  </Typography>
-                </Paper>
-                {!isMine && (
-                  <IconButton
-                    className="reaction-trigger"
-                    size="small"
-                    sx={{ opacity: 0, transition: "opacity 0.2s" }}
-                    onClick={(e) => {
-                      setShowPickerForMsg(msg.id);
-                      setReactionAnchor(e.currentTarget);
-                    }}
-                  >
-                    <AddReactionOutlinedIcon fontSize="small" />
-                  </IconButton>
-                )}
-              </Box>
-
-              {/* Reaction badges */}
-              {Object.keys(groupedReactions).length > 0 && (
-                <Box display="flex" gap={0.5} mt={0.5} flexWrap="wrap">
-                  {Object.values(groupedReactions).map((r) => (
-                    <Chip
-                      key={r.emoji}
-                      label={
-                        <Box display="flex" alignItems="center" gap={0.5}>
-                          <RenderEmoji content={r.emoji} tags={r.tags} />
-                          {r.count > 1 && <span>{r.count}</span>}
-                        </Box>
-                      }
-                      size="small"
-                      variant="outlined"
-                      onClick={() => handleReaction(r.emoji, msg.id)}
-                      sx={{
-                        height: 24,
-                        fontSize: "0.75rem",
-                        cursor: "pointer",
-                      }}
-                    />
-                  ))}
-                </Box>
-              )}
-
-              {/* Quick react popover */}
-              <Popover
-                open={showPickerForMsg === msg.id && Boolean(reactionAnchor)}
-                anchorEl={reactionAnchor}
-                onClose={() => {
-                  setShowPickerForMsg(null);
-                  setReactionAnchor(null);
-                }}
-                anchorOrigin={{ vertical: "top", horizontal: "center" }}
-                transformOrigin={{ vertical: "bottom", horizontal: "center" }}
-              >
-                <Box display="flex" alignItems="center" p={0.5} gap={0.5}>
-                  {QUICK_EMOJIS.map((emoji) => (
-                    <IconButton
-                      key={emoji}
-                      size="small"
-                      onClick={() => handleReaction(emoji, msg.id)}
-                    >
-                      <span style={{ fontSize: 20 }}>{emoji}</span>
-                    </IconButton>
-                  ))}
-                  <IconButton
-                    size="small"
-                    onClick={() => setShowPickerForMsg(`picker_${msg.id}`)}
-                  >
-                    <AddReactionOutlinedIcon fontSize="small" />
-                  </IconButton>
-                </Box>
-              </Popover>
-
-              {/* Full emoji picker modal */}
-              <Modal
-                open={showPickerForMsg === `picker_${msg.id}`}
-                onClose={() => setShowPickerForMsg(null)}
-              >
-                <Box
-                  sx={{
-                    position: "absolute",
-                    top: "50%",
-                    left: "50%",
-                    transform: "translate(-50%, -50%)",
-                    bgcolor: "background.paper",
-                    boxShadow: 24,
-                    p: 2,
-                    borderRadius: 2,
-                    overscrollBehavior: "contain",
-                    touchAction: "pan-y",
-                  }}
-                  onWheel={(e) => e.stopPropagation()}
-                  onTouchMove={(e) => e.stopPropagation()}
-                >
-                  <EmojiPicker
-                    theme={
-                      theme.palette.mode === "light"
-                        ? ("light" as Theme)
-                        : ("dark" as Theme)
-                    }
-                    onEmojiClick={(emojiData) =>
-                      handleReaction(emojiData.emoji, msg.id)
-                    }
-                  />
-                </Box>
-              </Modal>
-            </Box>
+              msg={msg}
+              isMine={isMine}
+              reactions={groupedReactions}
+              referencedMsg={referencedMsg}
+              referencedMsgSenderName={referencedMsgSenderName}
+              onLongPress={setContextMenuMsg}
+              onReact={handleReaction}
+              onSwipeReply={setReplyTo}
+            />
           );
         })}
         <div ref={messagesEndRef} />
       </Box>
+
+      {/* Reply preview bar */}
+      {replyTo && (
+        <Box
+          display="flex"
+          alignItems="center"
+          gap={1}
+          px={2}
+          py={0.75}
+          sx={{
+            borderTop: 1,
+            borderLeft: 3,
+            borderColor: "primary.main",
+            bgcolor: "action.hover",
+          }}
+        >
+          <ReplyIcon fontSize="small" color="primary" />
+          <Box flex={1} minWidth={0}>
+            <Typography
+              variant="caption"
+              color="primary"
+              fontWeight={600}
+              display="block"
+            >
+              {replyTo.pubkey === user?.pubkey ? "You" : recipientName}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {replyTo.content}
+            </Typography>
+          </Box>
+          <IconButton size="small" onClick={() => setReplyTo(null)}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      )}
 
       {/* Input area */}
       <Box
@@ -437,9 +316,58 @@ const ChatView: React.FC = () => {
           onClick={handleSend}
           disabled={!input.trim() || sending}
         >
-          <SendIcon />
+          {sending ? (
+            <CircularProgress size={20} color="inherit" />
+          ) : (
+            <SendIcon />
+          )}
         </IconButton>
       </Box>
+
+      {/* Context menu */}
+      <MessageContextMenu
+        msg={contextMenuMsg}
+        onClose={() => setContextMenuMsg(null)}
+        onReact={handleReaction}
+        onReply={setReplyTo}
+        onCopy={(content) => navigator.clipboard.writeText(content)}
+        onOpenEmojiPicker={setPickerForMsgId}
+      />
+
+      {/* Full emoji picker — single instance, shared across all messages */}
+      <Modal
+        open={Boolean(pickerForMsgId)}
+        onClose={() => setPickerForMsgId(null)}
+      >
+        <Box
+          sx={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            bgcolor: "background.paper",
+            boxShadow: 24,
+            p: 2,
+            borderRadius: 2,
+            overscrollBehavior: "contain",
+            touchAction: "pan-y",
+          }}
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+        >
+          <EmojiPicker
+            theme={
+              theme.palette.mode === "light"
+                ? ("light" as Theme)
+                : ("dark" as Theme)
+            }
+            onEmojiClick={(emojiData) => {
+              if (pickerForMsgId) handleReaction(emojiData.emoji, pickerForMsgId);
+              setPickerForMsgId(null);
+            }}
+          />
+        </Box>
+      </Modal>
     </Box>
   );
 };

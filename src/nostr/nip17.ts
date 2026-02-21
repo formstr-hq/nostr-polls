@@ -16,11 +16,42 @@ import { signerManager } from "../singletons/Signer/SignerManager";
 // A rumor is an unsigned event with an id
 export type Rumor = UnsignedEvent & { id: string };
 
+interface CachedRelays {
+  relays: string[];
+  created_at: number;
+}
+
+const INBOX_RELAY_LS_PREFIX = "inbox_relays_";
+
+// Session-scoped in-memory layer on top of localStorage
+const inboxRelayCache = new Map<string, string[]>();
+
+function readRelayStore(pubkey: string): CachedRelays | null {
+  try {
+    const raw = localStorage.getItem(INBOX_RELAY_LS_PREFIX + pubkey);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRelayStore(pubkey: string, data: CachedRelays): void {
+  try {
+    localStorage.setItem(INBOX_RELAY_LS_PREFIX + pubkey, JSON.stringify(data));
+  } catch {
+    // localStorage full, ignore
+  }
+}
+
 /**
- * Fetch inbox relays (kind 10050) for a pubkey.
- * Falls back to wss://relay.damus.io/ if none found.
+ * Fetch from network and update caches if the event is newer than knownAt.
+ * When persist=true, also writes to localStorage (only for the logged-in user).
  */
-export async function fetchInboxRelays(pubkey: string): Promise<string[]> {
+async function fetchRelaysFromNetwork(
+  pubkey: string,
+  knownAt: number,
+  persist: boolean
+): Promise<string[]> {
   try {
     const event = await nostrRuntime.fetchOne(defaultRelays, {
       kinds: [10050],
@@ -31,13 +62,57 @@ export async function fetchInboxRelays(pubkey: string): Promise<string[]> {
       const relays = event.tags
         .filter((t) => t[0] === "relay")
         .map((t) => t[1]);
-      if (relays.length > 0) return relays;
+      if (relays.length > 0 && event.created_at > knownAt) {
+        inboxRelayCache.set(pubkey, relays);
+        if (persist) writeRelayStore(pubkey, { relays, created_at: event.created_at });
+        return relays;
+      }
     }
   } catch (e) {
     console.error("Error fetching inbox relays:", e);
   }
 
-  return ["wss://relay.damus.io/"];
+  // Network gave nothing newer — return whatever is already cached or fall back
+  if (inboxRelayCache.has(pubkey)) return inboxRelayCache.get(pubkey)!;
+
+  const fallback = ["wss://relay.damus.io/"];
+  inboxRelayCache.set(pubkey, fallback);
+  if (persist) writeRelayStore(pubkey, { relays: fallback, created_at: 0 });
+  return fallback;
+}
+
+/**
+ * Fetch inbox relays (kind 10050) for a pubkey.
+ *
+ * persist=true should only be passed for the logged-in user's own pubkey —
+ * it enables localStorage persistence across sessions (stale-while-revalidate).
+ * For recipient pubkeys, only the in-memory session cache is used.
+ *
+ *   1. In-memory hit       → instant
+ *   2. localStorage hit    → instant + background revalidation (persist only)
+ *   3. Cold start          → await network
+ */
+export async function fetchInboxRelays(
+  pubkey: string,
+  persist = false
+): Promise<string[]> {
+  // 1. In-memory hit
+  if (inboxRelayCache.has(pubkey)) {
+    return inboxRelayCache.get(pubkey)!;
+  }
+
+  // 2. localStorage hit (logged-in user only) — serve stale, revalidate in background
+  if (persist) {
+    const stored = readRelayStore(pubkey);
+    if (stored) {
+      inboxRelayCache.set(pubkey, stored.relays);
+      fetchRelaysFromNetwork(pubkey, stored.created_at, persist); // fire-and-forget
+      return stored.relays;
+    }
+  }
+
+  // 3. Cold start — must wait for network
+  return fetchRelaysFromNetwork(pubkey, 0, persist);
 }
 
 /**
@@ -234,10 +309,10 @@ export async function wrapAndSendDM(
   const signer = await signerManager.getSigner();
   const senderPubkey = await signer.getPublicKey();
 
-  // Fetch inbox relays for both parties
+  // Fetch inbox relays — persist only for the sender (logged-in user)
   const [recipientInbox, senderInbox] = await Promise.all([
     fetchInboxRelays(recipientPubkey),
-    fetchInboxRelays(senderPubkey),
+    fetchInboxRelays(senderPubkey, true),
   ]);
 
   // Create the rumor (unsigned kind 14)
@@ -310,7 +385,7 @@ export async function wrapAndSendReaction(
 
   const [recipientInbox, senderInbox] = await Promise.all([
     fetchInboxRelays(recipientPubkey),
-    fetchInboxRelays(senderPubkey),
+    fetchInboxRelays(senderPubkey, true),
   ]);
 
   // Create a kind 7 reaction rumor with e-tag for target message
