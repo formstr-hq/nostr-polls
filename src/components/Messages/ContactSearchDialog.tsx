@@ -4,7 +4,6 @@ import {
   DialogTitle,
   DialogContent,
   TextField,
-  List,
   ListItem,
   ListItemAvatar,
   ListItemText,
@@ -19,6 +18,7 @@ import {
   AvatarGroup,
   DialogActions,
 } from "@mui/material";
+import { Virtuoso } from "react-virtuoso";
 import SearchIcon from "@mui/icons-material/Search";
 import CloseIcon from "@mui/icons-material/Close";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
@@ -102,7 +102,7 @@ const ContactSearchDialog: React.FC<ContactSearchDialogProps> = ({
     return user.follows.filter((pubkey) => pubkey !== user.pubkey);
   }, [user]);
 
-  // Fetch missing profiles as a side effect, not inside useMemo
+  // Fetch profiles not already in the shared map, once when dialog opens
   useEffect(() => {
     if (!open) return;
     followPubkeys.forEach((pubkey) => {
@@ -110,7 +110,9 @@ const ContactSearchDialog: React.FC<ContactSearchDialogProps> = ({
         fetchUserProfileThrottled(pubkey);
       }
     });
-  }, [open, followPubkeys, profiles, fetchUserProfileThrottled]);
+    // profiles intentionally omitted — we only want to run on open, not on every profile load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, followPubkeys, fetchUserProfileThrottled]);
 
   const contacts = useMemo(() => {
     return followPubkeys.map((pubkey) => {
@@ -258,7 +260,11 @@ const ContactSearchDialog: React.FC<ContactSearchDialogProps> = ({
       onClose={sending ? undefined : resetAndClose}
       fullWidth
       maxWidth="xs"
-      PaperProps={{ sx: { maxHeight: "70vh" } }}
+      PaperProps={{
+        sx: { maxHeight: "70vh" },
+        onWheel: (e: React.WheelEvent) => e.stopPropagation(),
+        onTouchMove: (e: React.TouchEvent) => e.stopPropagation(),
+      }}
     >
       {step === "compose" ? (
         <>
@@ -430,16 +436,17 @@ const ContactSearchDialog: React.FC<ContactSearchDialogProps> = ({
                 </Typography>
               </Box>
             ) : (
-              <List disablePadding dense>
-                {filtered.map((c) => (
+              <Virtuoso
+                style={{ height: Math.min(filtered.length * 56, 350) }}
+                data={filtered}
+                itemContent={(_, contact) => (
                   <ContactRow
-                    key={c.pubkey}
-                    contact={c}
-                    selected={selectedSet.has(c.pubkey)}
+                    contact={contact}
+                    selected={selectedSet.has(contact.pubkey)}
                     onToggle={toggleContact}
                   />
-                ))}
-              </List>
+                )}
+              />
             )}
 
           </DialogContent>

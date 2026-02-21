@@ -13,11 +13,18 @@ import {
   Avatar,
   Typography,
   Alert,
+  IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@mui/material";
 import { Event } from "nostr-tools/lib/types/core";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { openProfileTab, signEvent } from "../../nostr";
 import { useRelays } from "../../hooks/useRelays";
+import { useListContext } from "../../hooks/useListContext";
+import { calculateTimeAgo } from "../../utils/common";
 import { FetchResults } from "./FetchResults";
 import { SingleChoiceOptions } from "./SingleChoiceOptions";
 import { MultipleChoiceOptions } from "./MultipleChoiceOptions";
@@ -33,7 +40,6 @@ import { bytesToHex } from "@noble/hashes/utils";
 import dayjs from "dayjs";
 import { useMiningWorker } from "../../hooks/useMiningWorker";
 import PollTimer from "./PollTimer";
-import { getColorsWithTheme } from "../../styles/theme";
 import { FeedbackMenu } from "../FeedbackMenu";
 import { useNotification } from "../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
@@ -58,11 +64,14 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
   const [filterPubkeys, setFilterPubkeys] = useState<string[]>([]);
   const [showPoWModal, setShowPoWModal] = useState<boolean>(false);
+  const [showContactListWarning, setShowContactListWarning] = useState(false);
+  const [pendingFollowKey, setPendingFollowKey] = useState<string | null>(null);
   const navigate = useNavigate();
   const { showNotification } = useNotification();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
-  const { user, setUser } = useUserContext();
+  const { user, setUser, requestLogin } = useUserContext();
   const { relays } = useRelays();
+  const { fetchLatestContactList } = useListContext();
   const difficulty = Number(
     pollEvent.tags.filter((t) => t[0] === "PoW")?.[0]?.[1]
   );
@@ -73,6 +82,40 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
   const { minePow, cancelMining, progress } = useMiningWorker(difficulty);
   const pollType =
     pollEvent.tags.find((t) => t[0] === "polltype")?.[1] || "singlechoice";
+
+  const updateContactList = async (
+    contactEvent: Event | null,
+    pubkeyToAdd: string
+  ) => {
+    const existingTags = contactEvent?.tags || [];
+    const pTags = existingTags.filter(([t]) => t === "p").map(([, pk]) => pk);
+    if (pTags.includes(pubkeyToAdd)) return;
+    const updatedTags = [...existingTags, ["p", pubkeyToAdd]];
+    const newEvent = {
+      kind: 3,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: updatedTags,
+      content: contactEvent?.content || "",
+    };
+    const signed = await signEvent(newEvent);
+    pool.publish(relays, signed);
+    setUser({ pubkey: signed.pubkey, ...user, follows: [...pTags, pubkeyToAdd] });
+  };
+
+  const addToContacts = async () => {
+    if (!user) {
+      requestLogin();
+      return;
+    }
+    const pubkeyToAdd = pollEvent.pubkey;
+    const contactEvent = await fetchLatestContactList();
+    if (!contactEvent) {
+      setPendingFollowKey(pubkeyToAdd);
+      setShowContactListWarning(true);
+      return;
+    }
+    await updateContactList(contactEvent, pubkeyToAdd);
+  };
 
   const displaySubmit = () => {
     if (showResults) return false;
@@ -225,62 +268,67 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
         <form onSubmit={handleSubmitResponse}>
           <Card variant="outlined">
             <CardHeader
-              title={<TextWithImages content={label} tags={pollEvent.tags} />}
-              subheader={
-                <div style={{ display: "flex", flexDirection: "column" }}>
-                  <Typography sx={{ fontSize: { xs: "0.85rem", sm: "1rem" } }}>
-                    required difficulty: {difficulty || 0} bits
-                  </Typography>
-                  <PollTimer pollExpiration={pollExpiration} />
-                </div>
-              }
               avatar={
                 <Avatar
-                  src={
-                    profiles?.get(pollEvent.pubkey)?.picture ||
-                    DEFAULT_IMAGE_URL
-                  }
-                  onClick={() => {
-                    openProfileTab(nip19.npubEncode(pollEvent.pubkey), navigate);
-                  }}
+                  src={profiles?.get(pollEvent.pubkey)?.picture || DEFAULT_IMAGE_URL}
+                  onClick={() => openProfileTab(nip19.npubEncode(pollEvent.pubkey), navigate)}
                   sx={{ cursor: "pointer" }}
                 />
               }
-              action={
-                <div>
-                  <Button
-                    onClick={(e) => {
-                      setIsDetailsOpen(!isDetailsOpen);
-                      setAnchorEl(e.currentTarget);
-                    }}
-                    sx={(theme) => ({
-                      ...getColorsWithTheme(theme, { color: "#000000" }),
-                    })}
-                    variant="text"
-                  >
-                    <MoreVertIcon />
-                  </Button>
-                  <Menu
-                    open={isDetailsOpen}
-                    anchorEl={anchorEl}
-                    onClose={() => {
-                      setAnchorEl(null);
-                      setIsDetailsOpen(false);
-                    }}
-                  >
-                    <MenuItem onClick={handleCopyNevent}>Copy Event Id</MenuItem>
-                    <MenuItem onClick={copyPollUrl}>Copy URL</MenuItem>
-                    <MenuItem onClick={handleCopyNpub}>Copy Author npub</MenuItem>
-                    <MenuItem onClick={copyRawEvent}>Copy Raw Event</MenuItem>
-                  </Menu>
+              title={
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <Typography>
+                    {profiles?.get(pollEvent.pubkey)?.name ||
+                      profiles?.get(pollEvent.pubkey)?.username ||
+                      profiles?.get(pollEvent.pubkey)?.nip05 ||
+                      (() => {
+                        const npub = nip19.npubEncode(pollEvent.pubkey);
+                        return npub.slice(0, 6) + "…" + npub.slice(-4);
+                      })()}
+                  </Typography>
+                  {user && !user.follows?.includes(pollEvent.pubkey) ? (
+                    <Button onClick={addToContacts}>Follow</Button>
+                  ) : null}
                 </div>
               }
-              titleTypographyProps={{
-                fontSize: 18,
-                fontWeight: "bold",
+              subheader={calculateTimeAgo(pollEvent.created_at)}
+              action={
+                <IconButton
+                  onClick={(e) => {
+                    setIsDetailsOpen(!isDetailsOpen);
+                    setAnchorEl(e.currentTarget);
+                  }}
+                >
+                  <MoreVertIcon />
+                </IconButton>
+              }
+              sx={{ m: 0, pl: 2, pt: 1 }}
+            />
+            <Menu
+              open={isDetailsOpen}
+              anchorEl={anchorEl}
+              onClose={() => {
+                setAnchorEl(null);
+                setIsDetailsOpen(false);
               }}
-            ></CardHeader>
+            >
+              <MenuItem onClick={handleCopyNevent}>Copy Event Id</MenuItem>
+              <MenuItem onClick={copyPollUrl}>Copy URL</MenuItem>
+              <MenuItem onClick={handleCopyNpub}>Copy Author npub</MenuItem>
+              <MenuItem onClick={copyRawEvent}>Copy Raw Event</MenuItem>
+            </Menu>
             <CardContent style={{ display: "flex", flexDirection: "column" }}>
+              <Typography variant="body1" sx={{ mb: 1 }}>
+                <TextWithImages content={label} tags={pollEvent.tags} />
+              </Typography>
+              <div style={{ display: "flex", flexDirection: "column", marginBottom: 8 }}>
+                {difficulty > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    required difficulty: {difficulty} bits
+                  </Typography>
+                )}
+                <PollTimer pollExpiration={pollExpiration} />
+              </div>
               <FormControl component="fieldset">
                 {!showResults ? (
                   pollType === "singlechoice" ? (
@@ -359,6 +407,29 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
           setShowPoWModal(false);
         }}
       />
+      <Dialog open={showContactListWarning} onClose={() => setShowContactListWarning(false)}>
+        <DialogTitle>Warning</DialogTitle>
+        <DialogContent>
+          <Typography>
+            We couldn't find your existing contact list. If you continue, your
+            follow list will only contain this person.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowContactListWarning(false)}>Cancel</Button>
+          <Button
+            onClick={() => {
+              if (pendingFollowKey) updateContactList(null, pendingFollowKey);
+              setShowContactListWarning(false);
+              setPendingFollowKey(null);
+            }}
+            color="primary"
+            variant="contained"
+          >
+            Continue Anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 };

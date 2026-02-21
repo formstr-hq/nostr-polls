@@ -57,7 +57,7 @@ const PollTimer: React.FC<PollTimerProps> = ({ pollExpiration }) => {
     return null;
   };
 
-  return <Typography sx={{ fontSize: { xs: "0.75rem", sm: "1rem" } }}>{renderExpirationMessage()}</Typography>;
+  return <Typography variant="caption" color="text.secondary">{renderExpirationMessage()}</Typography>;
 };
 
 export default PollTimer;
