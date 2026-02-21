@@ -16,6 +16,19 @@ import { signerManager } from "../singletons/Signer/SignerManager";
 // A rumor is an unsigned event with an id
 export type Rumor = UnsignedEvent & { id: string };
 
+export interface RelayPublish {
+  relay: string;
+  promise: Promise<string>;
+}
+
+export interface SendResult {
+  rumor: Rumor;
+  /** Per-relay publish promises (deduped union of recipient + sender relays). */
+  publishes: RelayPublish[];
+  /** Original signed gift wraps — stored so retry can republish without re-signing. */
+  retryWraps: { event: Event; relays: string[] }[];
+}
+
 interface CachedRelays {
   relays: string[];
   created_at: number;
@@ -305,7 +318,7 @@ export async function wrapAndSendDM(
   content: string,
   privateKey?: string,
   replyToId?: string
-): Promise<Rumor> {
+): Promise<SendResult> {
   const signer = await signerManager.getSigner();
   const senderPubkey = await signer.getPublicKey();
 
@@ -316,58 +329,48 @@ export async function wrapAndSendDM(
   ]);
 
   // Create the rumor (unsigned kind 14)
-  const rumor = createRumor(
-    senderPubkey,
-    recipientPubkey,
-    content,
-    replyToId
-  );
+  const rumor = createRumor(senderPubkey, recipientPubkey, content, replyToId);
 
-  // Publish to inbox relays + defaultRelays for reliability
   const recipientRelays = Array.from(new Set([...recipientInbox, ...defaultRelays]));
   const senderRelays = Array.from(new Set([...senderInbox, ...defaultRelays]));
 
+  let wraps: { event: Event; relays: string[] }[];
+
   if (privateKey) {
-    // LocalSigner path: use direct crypto with private key
     const privkeyBytes = hexToBytes(privateKey);
-
-    const wrapForRecipient = createGiftWrapLocal(
-      privkeyBytes,
-      rumor,
-      recipientPubkey
-    );
-    const wrapForSender = createGiftWrapLocal(
-      privkeyBytes,
-      rumor,
-      senderPubkey
-    );
-
-    await Promise.allSettled(pool.publish(recipientRelays, wrapForRecipient));
-    await Promise.allSettled(pool.publish(senderRelays, wrapForSender));
+    const wrapForRecipient = createGiftWrapLocal(privkeyBytes, rumor, recipientPubkey);
+    const wrapForSender = createGiftWrapLocal(privkeyBytes, rumor, senderPubkey);
+    wraps = [
+      { event: wrapForRecipient, relays: recipientRelays },
+      { event: wrapForSender,    relays: senderRelays },
+    ];
   } else {
-    // External signer path: manually construct seal + wrap
     if (!signer.nip44Encrypt) {
       throw new Error(
         "Your signer does not support NIP-44 encryption, which is required for DMs."
       );
     }
-
-    const recipientWrap = await createGiftWrapForSigner(
-      signer,
-      rumor,
-      recipientPubkey
-    );
-    await Promise.allSettled(pool.publish(recipientRelays, recipientWrap));
-
-    const senderWrap = await createGiftWrapForSigner(
-      signer,
-      rumor,
-      senderPubkey
-    );
-    await Promise.allSettled(pool.publish(senderRelays, senderWrap));
+    const recipientWrap = await createGiftWrapForSigner(signer, rumor, recipientPubkey);
+    const senderWrap = await createGiftWrapForSigner(signer, rumor, senderPubkey);
+    wraps = [
+      { event: recipientWrap, relays: recipientRelays },
+      { event: senderWrap,    relays: senderRelays },
+    ];
   }
 
-  return rumor;
+  // Fire off all publishes — don't await, return promises for UI tracking.
+  // Deduplicate by relay URL so we get one promise per unique relay.
+  const relayMap = new Map<string, RelayPublish>();
+  for (const { event, relays } of wraps) {
+    const promises = pool.publish(relays, event);
+    relays.forEach((relay, i) => {
+      if (!relayMap.has(relay)) {
+        relayMap.set(relay, { relay, promise: promises[i] });
+      }
+    });
+  }
+
+  return { rumor, publishes: Array.from(relayMap.values()), retryWraps: wraps };
 }
 
 /**

@@ -1,7 +1,10 @@
 import React, { useRef } from "react";
-import { Box, Typography, Paper, Chip } from "@mui/material";
+import { Box, Typography, Paper, Chip, CircularProgress, Tooltip } from "@mui/material";
 import ReplyIcon from "@mui/icons-material/Reply";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import TimerOffIcon from "@mui/icons-material/TimerOff";
 import { useTheme } from "@mui/material/styles";
+import { MsgSendStatus, RelayStatus } from "./ChatView";
 import dayjs from "dayjs";
 import { DMMessage } from "../../contexts/dm-context";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
@@ -15,15 +18,36 @@ interface GroupedReaction {
   tags?: string[][];
 }
 
+// Small dot showing a single relay's publish status
+const RelayDot: React.FC<{ relay: string; status: RelayStatus }> = ({ relay, status }) => {
+  const hostname = (() => { try { return new URL(relay).hostname; } catch { return relay; } })();
+
+  let indicator: React.ReactElement;
+  if (status === "pending") {
+    indicator = <CircularProgress size={7} thickness={5} sx={{ color: "text.disabled" }} />;
+  } else if (status === "sent") {
+    indicator = <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "success.main" }} />;
+  } else if (status === "timeout") {
+    indicator = <TimerOffIcon sx={{ fontSize: 11, color: "text.disabled" }} />;
+  } else {
+    // failed — relay actively rejected
+    indicator = <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "error.main" }} />;
+  }
+
+  return <Tooltip title={`${hostname} · ${status}`} placement="top">{indicator}</Tooltip>;
+};
+
 interface MessageBubbleProps {
   msg: DMMessage;
   isMine: boolean;
   reactions: Record<string, GroupedReaction>;
   referencedMsg?: DMMessage;
   referencedMsgSenderName?: string;
+  sendStatus?: MsgSendStatus;
   onLongPress: (msg: DMMessage) => void;
   onReact: (emoji: string, msgId: string) => void;
   onSwipeReply: (msg: DMMessage) => void;
+  onRetry?: () => void;
 }
 
 // Renders an emoji or a custom emoji shortcode like :name:
@@ -55,9 +79,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   reactions,
   referencedMsg,
   referencedMsgSenderName,
+  sendStatus,
   onLongPress,
   onReact,
   onSwipeReply,
+  onRetry,
 }) => {
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
@@ -293,6 +319,45 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           ))}
         </Box>
       )}
+
+      {/* Relay send status */}
+      {sendStatus && (() => {
+        const entries = Object.entries(sendStatus.relays);
+        const allSent = entries.every(([, s]) => s === "sent");
+        const allFailed = entries.length > 0 && entries.every(([, s]) => s === "failed" || s === "timeout");
+        if (allSent) return null;
+        return (
+          <Box
+            display="flex"
+            alignItems="center"
+            gap={0.5}
+            mt={0.5}
+            sx={{ alignSelf: isMine ? "flex-end" : "flex-start" }}
+          >
+            {!allFailed && entries.map(([relay, status]) => (
+              <RelayDot key={relay} relay={relay} status={status} />
+            ))}
+            {allFailed && (
+              <>
+                <WarningAmberIcon sx={{ fontSize: 13, color: "error.main" }} />
+                <Typography variant="caption" color="error.main" sx={{ fontSize: "0.7rem" }}>
+                  Not delivered
+                </Typography>
+                {onRetry && (
+                  <Typography
+                    variant="caption"
+                    color="primary"
+                    onClick={onRetry}
+                    sx={{ fontSize: "0.7rem", cursor: "pointer", textDecoration: "underline" }}
+                  >
+                    Retry
+                  </Typography>
+                )}
+              </>
+            )}
+          </Box>
+        );
+      })()}
     </Box>
   );
 };

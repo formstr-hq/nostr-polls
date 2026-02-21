@@ -16,6 +16,7 @@ import {
   wrapAndSendReaction,
   getConversationId,
   Rumor,
+  RelayPublish,
 } from "../nostr/nip17";
 import { defaultRelays } from "../nostr";
 
@@ -43,13 +44,19 @@ export interface Conversation {
   reactions: Map<string, DMReaction[]>; // messageId -> reactions
 }
 
+export interface SendTracking {
+  rumorId: string;
+  publishes: RelayPublish[];
+  retryWraps: { event: Event; relays: string[] }[];
+}
+
 interface DMContextInterface {
   conversations: Map<string, Conversation>;
   sendMessage: (
     recipientPubkey: string,
     content: string,
     replyToId?: string
-  ) => Promise<void>;
+  ) => Promise<SendTracking>;
   sendReaction: (
     recipientPubkey: string,
     emoji: string,
@@ -317,18 +324,20 @@ export function DMProvider({ children }: { children: ReactNode }) {
       recipientPubkey: string,
       content: string,
       replyToId?: string
-    ) => {
+    ): Promise<SendTracking> => {
       if (!user) throw new Error("Must be logged in to send DMs");
 
-      const rumor = await wrapAndSendDM(
+      const { rumor, publishes, retryWraps } = await wrapAndSendDM(
         recipientPubkey,
         content,
         user.privateKey,
         replyToId
       );
 
-      // Optimistically add to state
+      // Optimistically add to state immediately
       addMessage(rumor, `local_${rumor.id}`, user.pubkey);
+
+      return { rumorId: rumor.id, publishes, retryWraps };
     },
     [user, addMessage]
   );

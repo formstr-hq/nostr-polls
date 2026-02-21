@@ -4,16 +4,11 @@ import {
   Typography,
   Avatar,
   IconButton,
-  TextField,
   Modal,
-  CircularProgress,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import SendIcon from "@mui/icons-material/Send";
-import ReplyIcon from "@mui/icons-material/Reply";
-import CloseIcon from "@mui/icons-material/Close";
 import { useNavigate, useParams } from "react-router-dom";
-import { nip19 } from "nostr-tools";
+import { nip19, Event as NostrEvent } from "nostr-tools";
 import EmojiPicker, { Theme } from "emoji-picker-react";
 import { useTheme } from "@mui/material/styles";
 import { useDMContext } from "../../hooks/useDMContext";
@@ -21,9 +16,23 @@ import { useAppContext } from "../../hooks/useAppContext";
 import { useUserContext } from "../../hooks/useUserContext";
 import { getConversationId, fetchInboxRelays } from "../../nostr/nip17";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
-import { DMMessage } from "../../contexts/dm-context";
+import { DMMessage, SendTracking } from "../../contexts/dm-context";
+import { pool } from "../../singletons";
 import MessageBubble from "./MessageBubble";
 import MessageContextMenu from "./MessageContextMenu";
+import MessageInput from "./MessageInput";
+
+export type RelayStatus = "pending" | "sent" | "failed" | "timeout";
+
+const TIMEOUT_MARKER = "__send_timeout__";
+
+export interface MsgSendStatus {
+  relays: Record<string, RelayStatus>;
+  retryWraps: { event: NostrEvent; relays: string[] }[];
+}
+
+const SEND_TIMEOUT_MS = 10_000;
+
 
 const ChatView: React.FC = () => {
   const { npub } = useParams<{ npub: string }>();
@@ -32,11 +41,10 @@ const ChatView: React.FC = () => {
     useDMContext();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user } = useUserContext();
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
   const [contextMenuMsg, setContextMenuMsg] = useState<DMMessage | null>(null);
   const [replyTo, setReplyTo] = useState<DMMessage | null>(null);
   const [pickerForMsgId, setPickerForMsgId] = useState<string | null>(null);
+  const [sendStatuses, setSendStatuses] = useState<Map<string, MsgSendStatus>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const theme = useTheme();
 
@@ -89,28 +97,71 @@ const ChatView: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversation?.messages?.length]);
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || !recipientPubkey || sending) return;
-    const content = input.trim();
-    setInput("");
-    setSending(true);
-    try {
-      await sendMessage(recipientPubkey, content, replyTo?.id);
-      setReplyTo(null);
-    } catch (e) {
-      console.error("Failed to send message:", e);
-      setInput(content);
-    } finally {
-      setSending(false);
-    }
-  }, [input, recipientPubkey, sending, sendMessage, replyTo]);
+  const updateRelayStatus = useCallback(
+    (rumorId: string, relay: string, status: RelayStatus) => {
+      setSendStatuses(prev => {
+        const next = new Map(prev);
+        const s = next.get(rumorId);
+        if (s) next.set(rumorId, { ...s, relays: { ...s.relays, [relay]: status } });
+        return next;
+      });
+    },
+    []
+  );
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  const trackRelays = useCallback((tracking: SendTracking) => {
+    const { rumorId, publishes, retryWraps } = tracking;
+    const initialRelays: Record<string, RelayStatus> = {};
+    publishes.forEach(({ relay }) => { initialRelays[relay] = "pending"; });
+    setSendStatuses(prev => new Map(prev).set(rumorId, { relays: initialRelays, retryWraps }));
+
+    publishes.forEach(({ relay, promise }) => {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(TIMEOUT_MARKER)), SEND_TIMEOUT_MS)
+      );
+      Promise.race([promise, timeout])
+        .then(() => updateRelayStatus(rumorId, relay, "sent"))
+        .catch((err: unknown) => {
+          const isTimeout = err instanceof Error && err.message === TIMEOUT_MARKER;
+          updateRelayStatus(rumorId, relay, isTimeout ? "timeout" : "failed");
+        });
+    });
+  }, [updateRelayStatus]);
+
+  const handleRetry = useCallback((rumorId: string) => {
+    const status = sendStatuses.get(rumorId);
+    if (!status) return;
+
+    const resetRelays = Object.fromEntries(
+      Object.keys(status.relays).map(r => [r, "pending" as RelayStatus])
+    );
+    setSendStatuses(prev => new Map(prev).set(rumorId, { ...status, relays: resetRelays }));
+
+    const trackedRelays = new Set(Object.keys(status.relays));
+    status.retryWraps.forEach(({ event, relays }) => {
+      const pubs = pool.publish(relays, event);
+      relays.forEach((relay, i) => {
+        if (!trackedRelays.has(relay)) return;
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(TIMEOUT_MARKER)), SEND_TIMEOUT_MS)
+        );
+        Promise.race([pubs[i], timeout])
+          .then(() => updateRelayStatus(rumorId, relay, "sent"))
+          .catch((err: unknown) => {
+            const isTimeout = err instanceof Error && err.message === TIMEOUT_MARKER;
+            updateRelayStatus(rumorId, relay, isTimeout ? "timeout" : "failed");
+          });
+      });
+    });
+  }, [sendStatuses, updateRelayStatus]);
+
+  // Called by MessageInput — throwing here causes MessageInput to restore the draft
+  const handleSend = useCallback(async (content: string) => {
+    if (!recipientPubkey) throw new Error("No recipient");
+    const tracking = await sendMessage(recipientPubkey, content, replyTo?.id);
+    setReplyTo(null);
+    trackRelays(tracking);
+  }, [recipientPubkey, sendMessage, replyTo, trackRelays]);
 
   const handleReaction = useCallback(
     async (emoji: string, messageId: string) => {
@@ -238,91 +289,27 @@ const ChatView: React.FC = () => {
               reactions={groupedReactions}
               referencedMsg={referencedMsg}
               referencedMsgSenderName={referencedMsgSenderName}
+              sendStatus={sendStatuses.get(msg.id)}
               onLongPress={setContextMenuMsg}
               onReact={handleReaction}
               onSwipeReply={setReplyTo}
+              onRetry={() => handleRetry(msg.id)}
             />
           );
         })}
         <div ref={messagesEndRef} />
       </Box>
 
-      {/* Reply preview bar */}
-      {replyTo && (
-        <Box
-          display="flex"
-          alignItems="center"
-          gap={1}
-          px={2}
-          py={0.75}
-          sx={{
-            borderTop: 1,
-            borderLeft: 3,
-            borderColor: "primary.main",
-            bgcolor: "action.hover",
-          }}
-        >
-          <ReplyIcon fontSize="small" color="primary" />
-          <Box flex={1} minWidth={0}>
-            <Typography
-              variant="caption"
-              color="primary"
-              fontWeight={600}
-              display="block"
-            >
-              {replyTo.pubkey === user?.pubkey ? "You" : recipientName}
-            </Typography>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{
-                display: "block",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {replyTo.content}
-            </Typography>
-          </Box>
-          <IconButton size="small" onClick={() => setReplyTo(null)}>
-            <CloseIcon fontSize="small" />
-          </IconButton>
-        </Box>
-      )}
-
-      {/* Input area */}
-      <Box
-        display="flex"
-        alignItems="center"
-        gap={1}
-        px={2}
-        py={1.5}
-        sx={{ borderTop: 1, borderColor: "divider" }}
-      >
-        <TextField
-          fullWidth
-          size="small"
-          placeholder="Type a message..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          multiline
-          maxRows={4}
-          disabled={sending}
-        />
-        <IconButton
-          color="primary"
-          onClick={handleSend}
-          disabled={!input.trim() || sending}
-        >
-          {sending ? (
-            <CircularProgress size={20} color="inherit" />
-          ) : (
-            <SendIcon />
-          )}
-        </IconButton>
-      </Box>
+      <MessageInput
+        replyTo={replyTo}
+        replyToSenderName={
+          replyTo
+            ? replyTo.pubkey === user?.pubkey ? "You" : recipientName
+            : undefined
+        }
+        onClearReply={() => setReplyTo(null)}
+        onSend={handleSend}
+      />
 
       {/* Context menu */}
       <MessageContextMenu
