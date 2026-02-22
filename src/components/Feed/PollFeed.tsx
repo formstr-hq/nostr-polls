@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Event, Filter } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
 import { useUserContext } from "../../hooks/useUserContext";
@@ -6,19 +6,24 @@ import { useRelays } from "../../hooks/useRelays";
 import {
   Select,
   MenuItem,
-  Container,
   Box,
+  Typography,
 } from "@mui/material";
-import Grid from "@mui/material/Grid2";
 import { styled } from "@mui/system";
 import { nostrRuntime } from "../../singletons";
 import { SubscriptionHandle } from "../../nostrRuntime/types";
-import { Feed } from "./Feed";
 import UnifiedFeed from "./UnifiedFeed";
+import PollResponseForm from "../PollResponse/PollResponseForm";
+import ReplayIcon from "@mui/icons-material/Replay";
+import OverlappingAvatars from "../Common/OverlappingAvatars";
 
 const KIND_POLL = 1068;
 const KIND_RESPONSE = [1018, 1070];
 const KIND_REPOST = 16;
+
+// Stable empty array — avoids creating a new reference on every render for
+// polls that have no reposts, which would defeat React.memo on PollFeedItem.
+const EMPTY_REPOSTS: Event[] = [];
 
 const StyledSelect = styled(Select)`
   &::before,
@@ -32,13 +37,57 @@ const CenteredBox = styled(Box)`
   justify-content: center;
 `;
 
+// ---------------------------------------------------------------------------
+// PollFeedItem
+//
+// Defined OUTSIDE PollFeed so its reference is stable across renders.
+// Renders PollResponseForm directly — no internal useState/useEffect — so
+// Virtuoso always sees a single, synchronous render per item.  The old Feed
+// wrapper used useEffect+setState (a two-render cycle) which caused item
+// heights to differ between the first and second render, corrupting Virtuoso's
+// top-spacer calculation and making items at the top "disappear" after
+// scrolling down and back up.
+// ---------------------------------------------------------------------------
+interface PollFeedItemProps {
+  event: Event;
+  reposts: Event[];
+  userResponse: Event | undefined;
+}
+
+const PollFeedItem = React.memo(
+  ({ event, reposts, userResponse }: PollFeedItemProps) => {
+    const repostedBy = reposts.map((r) => r.pubkey);
+    return (
+      <Box sx={{ margin: "20px auto", width: "100%", maxWidth: "600px" }}>
+        {repostedBy.length > 0 && (
+          <Box
+            sx={{
+              fontSize: "0.75rem",
+              color: "#4caf50",
+              ml: "10px",
+              mr: "10px",
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+            }}
+          >
+            <ReplayIcon />
+            <Typography sx={{ mr: 1 }}>Reposted by</Typography>
+            <OverlappingAvatars ids={repostedBy} />
+          </Box>
+        )}
+        <PollResponseForm pollEvent={event} userResponse={userResponse} />
+      </Box>
+    );
+  }
+);
+
 // Note: Chunking is now handled automatically by nostrRuntime
 
 export const PollFeed = () => {
   const [pollEvents, setPollEvents] = useState<Event[]>([]);
   const [repostEvents, setRepostEvents] = useState<Event[]>([]);
   const [userResponses, setUserResponses] = useState<Event[]>([]);
-  // Add "webOfTrust" to eventSource type
   const [eventSource, setEventSource] = useState<
     "global" | "following" | "webOfTrust"
   >("global");
@@ -47,6 +96,9 @@ export const PollFeed = () => {
   >();
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
+  const [pendingPollEvents, setPendingPollEvents] = useState<Event[]>([]);
+  // Ref so handleIncomingEvent can read the current value without a stale closure
+  const loadingInitialRef = useRef(true);
 
   const { user } = useUserContext();
   const { relays } = useRelays();
@@ -59,17 +111,29 @@ export const PollFeed = () => {
     return Array.from(map.values()).sort((a, b) => b.created_at - a.created_at);
   };
 
-  const handleIncomingEvent = useCallback(
-    (event: Event) => {
-      if (!verifyEvent(event)) return;
-      if (event.kind === KIND_REPOST) {
-        setRepostEvents((prev) => mergeEvents(prev, [event]));
-      } else {
-        setPollEvents((prev) => mergeEvents(prev, [event]));
-      }
-    },
-    [setPollEvents, setRepostEvents]
-  );
+  // Keep the ref in sync so handleIncomingEvent always sees the live value
+  useEffect(() => {
+    loadingInitialRef.current = loadingInitial;
+  }, [loadingInitial]);
+
+  const handleIncomingEvent = useCallback((event: Event) => {
+    if (!verifyEvent(event)) return;
+    if (event.kind === KIND_REPOST) {
+      // Reposts affect sort order of existing items — add immediately
+      setRepostEvents((prev) => mergeEvents(prev, [event]));
+    } else if (loadingInitialRef.current) {
+      // Initial load — add directly so the feed populates
+      setPollEvents((prev) => mergeEvents(prev, [event]));
+    } else {
+      // After initial load — buffer so the user can choose when to show them
+      setPendingPollEvents((prev) => mergeEvents(prev, [event]));
+    }
+  }, []);
+
+  const showNewPolls = useCallback(() => {
+    setPollEvents((prev) => mergeEvents(prev, pendingPollEvents));
+    setPendingPollEvents([]);
+  }, [pendingPollEvents]);
 
   // Helper to subscribe - runtime handles chunking automatically for large author lists
   const subscribeWithAuthors = useCallback(
@@ -227,6 +291,7 @@ export const PollFeed = () => {
     () => getLatestResponsesByPoll(userResponses),
     [userResponses]
   );
+
   const repostsByPollId = useMemo(() => {
     const map = new Map<string, Event[]>();
     repostEvents.forEach((repost) => {
@@ -240,32 +305,19 @@ export const PollFeed = () => {
     return map;
   }, [repostEvents]);
 
-  // Combine poll events and reposts into one feed, sorted by created_at descending
+  // Sort by creation time only — repost activity intentionally excluded from sort key.
+  // Sorting by repost time caused `combinedEvents` to re-sort on every incoming repost,
+  // which moved items between indices mid-scroll and corrupted Virtuoso's top spacer,
+  // making the newest items unreachable after scrolling down and back up.
   const combinedEvents = useMemo(() => {
-    // For sorting, consider max repost created_at or poll created_at
-    return [...pollEvents].sort((a, b) => {
-      const aReposts = repostsByPollId.get(a.id) || [];
-      const bReposts = repostsByPollId.get(b.id) || [];
-
-      const aLatestRepost = aReposts.reduce(
-        (max, e) => (e.created_at > max ? e.created_at : max),
-        0
-      );
-      const bLatestRepost = bReposts.reduce(
-        (max, e) => (e.created_at > max ? e.created_at : max),
-        0
-      );
-
-      const aTime = Math.max(a.created_at, aLatestRepost);
-      const bTime = Math.max(b.created_at, bLatestRepost);
-      return bTime - aTime;
-    });
-  }, [pollEvents, repostsByPollId]);
+    return [...pollEvents].sort((a, b) => b.created_at - a.created_at);
+  }, [pollEvents]);
 
   useEffect(() => {
     if (feedSubscription) feedSubscription.unsubscribe();
     setPollEvents([]);
     setRepostEvents([]);
+    setPendingPollEvents([]);
     setLoadingInitial(true);
     const closer = fetchInitialPolls();
     setFeedSubscription(closer);
@@ -289,55 +341,54 @@ export const PollFeed = () => {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pollEvents, repostEvents, relays, eventSource]);
-  return (
-    <Container maxWidth="lg" disableGutters>
-      <Grid container spacing={2}>
-        <Grid size={12}>
-          <CenteredBox>
-            <StyledSelect
-              variant="standard"
-              onChange={(e) =>
-                setEventSource(
-                  e.target.value as "global" | "following" | "webOfTrust"
-                )
-              }
-              value={eventSource}
-            >
-              <MenuItem value="global">global polls</MenuItem>
-              <MenuItem
-                value="following"
-                disabled={!user || !user.follows?.length}
-              >
-                polls from people you follow
-              </MenuItem>
-              <MenuItem
-                value="webOfTrust"
-                disabled={!user || !user.webOfTrust || !user.webOfTrust.size}
-              >
-                polls from your web of trust
-              </MenuItem>
-            </StyledSelect>
-          </CenteredBox>
-        </Grid>
 
-        <Grid size={12}>
-          <UnifiedFeed
-            data={combinedEvents}
-            loading={loadingInitial}
-            loadingMore={loadingMore}
-            onEndReached={loadMore}
-            itemContent={(index, event) => (
-              <div key={event.id}>
-                <Feed
-                  events={[event]}
-                  userResponses={latestResponses}
-                  reposts={repostsByPollId}
-                />
-              </div>
-            )}
-          />
-        </Grid>
-      </Grid>
-    </Container>
+  return (
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <CenteredBox>
+        <StyledSelect
+          variant="standard"
+          onChange={(e) =>
+            setEventSource(
+              e.target.value as "global" | "following" | "webOfTrust"
+            )
+          }
+          value={eventSource}
+        >
+          <MenuItem value="global">global polls</MenuItem>
+          <MenuItem
+            value="following"
+            disabled={!user || !user.follows?.length}
+          >
+            polls from people you follow
+          </MenuItem>
+          <MenuItem
+            value="webOfTrust"
+            disabled={!user || !user.webOfTrust || !user.webOfTrust.size}
+          >
+            polls from your web of trust
+          </MenuItem>
+        </StyledSelect>
+      </CenteredBox>
+
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+        <UnifiedFeed
+          data={combinedEvents}
+          loading={loadingInitial}
+          loadingMore={loadingMore}
+          onEndReached={loadMore}
+          computeItemKey={(_, event) => event.id}
+          newItemCount={pendingPollEvents.length}
+          onShowNewItems={showNewPolls}
+          newItemLabel="polls"
+          itemContent={(_, event) => (
+            <PollFeedItem
+              event={event}
+              reposts={repostsByPollId.get(event.id) ?? EMPTY_REPOSTS}
+              userResponse={latestResponses.get(event.id)}
+            />
+          )}
+        />
+      </Box>
+    </Box>
   );
 };

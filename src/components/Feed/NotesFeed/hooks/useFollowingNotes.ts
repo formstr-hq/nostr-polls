@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Event, Filter } from "nostr-tools";
 import { useRelays } from "../../../../hooks/useRelays";
 import { nostrRuntime } from "../../../../singletons";
@@ -6,37 +6,32 @@ import { useUserContext } from "../../../../hooks/useUserContext";
 
 export const useFollowingNotes = () => {
   const [loadingMore, setLoadingMore] = useState(false);
-  const [version, setVersion] = useState(0); // Trigger for re-queries
+  const [version, setVersion] = useState(0);
+  const [pendingCount, setPendingCount] = useState(0);
   const missingNotesRef = useRef<Set<string>>(new Set());
+  const initialLoadDoneRef = useRef(false);
 
   const { relays } = useRelays();
   const { user } = useUserContext();
 
-  // Query runtime for notes and reposts
   const notes = useCallback(() => {
     if (!user?.follows?.length) return new Map<string, Event>();
-
     const events = nostrRuntime.query({
       kinds: [1],
       authors: Array.from(user.follows),
     });
-
     const noteMap = new Map<string, Event>();
-    for (const event of events) {
-      noteMap.set(event.id, event);
-    }
+    for (const event of events) noteMap.set(event.id, event);
     return noteMap;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.follows, version]);
 
   const reposts = useCallback(() => {
     if (!user?.follows?.length) return new Map<string, Event[]>();
-
     const events = nostrRuntime.query({
       kinds: [6],
       authors: Array.from(user.follows),
     });
-
     const repostMap = new Map<string, Event[]>();
     for (const event of events) {
       const originalNoteId = event.tags.find((t) => t[0] === "e")?.[1];
@@ -51,18 +46,44 @@ export const useFollowingNotes = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.follows, version]);
 
+  // Poll for newer notes every 60s after initial load; buffer count rather than displaying immediately
+  useEffect(() => {
+    if (!user?.follows?.length || !relays?.length) return;
+
+    const poll = () => {
+      if (!initialLoadDoneRef.current) return;
+      const authors = Array.from(user.follows!);
+      const currentEvents = nostrRuntime.query({ kinds: [1], authors });
+      if (!currentEvents.length) return;
+      const since = Math.max(...currentEvents.map((e) => e.created_at));
+      const handle = nostrRuntime.subscribe(
+        relays,
+        [{ kinds: [1], authors, since: since + 1, limit: 20 }],
+        {
+          onEvent: () => setPendingCount((c) => c + 1),
+          onEose: () => handle.unsubscribe(),
+        }
+      );
+    };
+
+    const interval = setInterval(poll, 60_000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.follows, relays]);
+
+  // Merge buffered notes into the displayed list
+  const mergeNewNotes = useCallback(() => {
+    setVersion((v) => v + 1);
+    setPendingCount(0);
+  }, []);
+
+  // Load older notes (pagination down) or initial load
   const fetchNotes = async () => {
     if (!user?.follows?.length || loadingMore) return;
-
     setLoadingMore(true);
     const authors = Array.from(user.follows);
 
-    const noteFilter: Filter = {
-      kinds: [1],
-      authors,
-      limit: 10,
-    };
-
+    const noteFilter: Filter = { kinds: [1], authors, limit: 10 };
     const currentNotes = notes();
     if (currentNotes.size > 0) {
       noteFilter.until = Array.from(currentNotes.values()).sort(
@@ -70,12 +91,7 @@ export const useFollowingNotes = () => {
       )[0].created_at;
     }
 
-    const repostFilter: Filter = {
-      kinds: [6],
-      authors,
-      limit: 10,
-    };
-
+    const repostFilter: Filter = { kinds: [6], authors, limit: 10 };
     const currentReposts = reposts();
     if (currentReposts.size > 0) {
       const oldestRepostTime = Math.min(
@@ -88,68 +104,15 @@ export const useFollowingNotes = () => {
       onEvent: (event: Event) => {
         if (event.kind === 6) {
           const originalNoteId = event.tags.find((t) => t[0] === "e")?.[1];
-          if (originalNoteId) {
-            missingNotesRef.current.add(originalNoteId);
-          }
+          if (originalNoteId) missingNotesRef.current.add(originalNoteId);
         }
-        // Events are automatically added to runtime by SubscriptionManager
         setVersion((v) => v + 1);
       },
       onEose: () => {
         handle.unsubscribe();
         startMissingNotesFetcher();
         setLoadingMore(false);
-      },
-    });
-  };
-
-  const fetchNewerNotes = async () => {
-    if (!user?.follows?.length) return;
-
-    setLoadingMore(true);
-    const authors = Array.from(user.follows);
-
-    const noteFilter: Filter = {
-      kinds: [1],
-      authors,
-    };
-
-    const currentNotes = notes();
-    if (currentNotes.size > 0) {
-      const latest = Array.from(currentNotes.values()).sort(
-        (a, b) => b.created_at - a.created_at
-      )[0];
-      noteFilter.since = latest.created_at + 1;
-    }
-
-    const repostFilter: Filter = {
-      kinds: [6],
-      authors,
-    };
-
-    const currentReposts = reposts();
-    if (currentReposts.size > 0) {
-      const latestRepost = Array.from(currentReposts.values())
-        .flat()
-        .sort((a, b) => b.created_at - a.created_at)[0];
-      repostFilter.since = latestRepost.created_at + 1;
-    }
-
-    const handle = nostrRuntime.subscribe(relays, [noteFilter, repostFilter], {
-      onEvent: (event: Event) => {
-        if (event.kind === 6) {
-          const originalNoteId = event.tags.find((t) => t[0] === "e")?.[1];
-          if (originalNoteId) {
-            missingNotesRef.current.add(originalNoteId);
-          }
-        }
-        // Events are automatically added to runtime by SubscriptionManager
-        setVersion((v) => v + 1);
-      },
-      onEose: () => {
-        handle.unsubscribe();
-        startMissingNotesFetcher();
-        setLoadingMore(false);
+        initialLoadDoneRef.current = true;
       },
     });
   };
@@ -159,15 +122,9 @@ export const useFollowingNotes = () => {
     if (idsToFetch.length === 0) return;
 
     const fetchedIds = new Set<string>();
-
     const handle = nostrRuntime.subscribe(
       relays,
-      [
-        {
-          kinds: [1],
-          ids: idsToFetch,
-        },
-      ],
+      [{ kinds: [1], ids: idsToFetch }],
       {
         onEvent: (event: Event) => {
           fetchedIds.add(event.id);
@@ -184,23 +141,12 @@ export const useFollowingNotes = () => {
         missingNotesRef.current.clear();
         return;
       }
-
-      // Retry fetching missing notes
-      nostrRuntime.subscribe(
-        relays,
-        [
-          {
-            kinds: [1],
-            ids: stillMissing,
-          },
-        ],
-        {
-          onEvent: (event: Event) => {
-            fetchedIds.add(event.id);
-            setVersion((v) => v + 1);
-          },
-        }
-      );
+      nostrRuntime.subscribe(relays, [{ kinds: [1], ids: stillMissing }], {
+        onEvent: (event: Event) => {
+          fetchedIds.add(event.id);
+          setVersion((v) => v + 1);
+        },
+      });
     }, 1000);
 
     setTimeout(() => {
@@ -214,7 +160,8 @@ export const useFollowingNotes = () => {
     notes: notes(),
     reposts: reposts(),
     fetchNotes,
-    fetchNewerNotes,
     loadingMore,
+    pendingCount,
+    mergeNewNotes,
   };
 };

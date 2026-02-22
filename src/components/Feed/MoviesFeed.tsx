@@ -94,7 +94,7 @@ const MoviesFeed: React.FC = () => {
   }, []);
 
   return (
-    <>
+    <Box sx={{ height: "100%", overflowY: "auto" }}>
       <Card
         variant="outlined"
         sx={{ mb: 2 }}
@@ -116,9 +116,7 @@ const MoviesFeed: React.FC = () => {
         <Box>
           <Typography style={{margin: 10, fontSize: 18}}>Recently Rated</Typography>
           {Array.from(movieIds).map((id) => (
-            <div
-              key={id}
-            >
+            <div key={id}>
               <MovieCard imdbId={id} />
             </div>
           ))}
@@ -139,7 +137,7 @@ const MoviesFeed: React.FC = () => {
       )}
 
       <RateMovieModal open={modalOpen} onClose={() => setModalOpen(false)} />
-    </>
+    </Box>
   );
 };
 

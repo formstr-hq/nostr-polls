@@ -178,7 +178,7 @@ const TopicsFeed: React.FC = () => {
     <Box
       sx={{
         px: 2,
-        height: "100vh",
+        height: "100%",
         display: "flex",
         flexDirection: "column",
       }}

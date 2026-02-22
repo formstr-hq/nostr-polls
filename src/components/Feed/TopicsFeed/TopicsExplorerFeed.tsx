@@ -545,7 +545,7 @@ const TopicExplorer: React.FC = () => {
   return (
     <Box
       ref={scrollContainerRef}
-      sx={{ px: 2, py: 4, height: "100vh", overflowY: "auto" }}
+      sx={{ px: 2, py: 4, height: "100%", overflowY: "auto" }}
     >
       <Button
         variant="outlined"

@@ -19,7 +19,7 @@ const NotesFeed = () => {
   const showNoteFilter = activeTab === "following" || activeTab === "discover";
 
   return (
-    <>
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <NotesFeedTabs activeTab={activeTab} setActiveTab={setActiveTab} />
 
       <Typography sx={{ mt: 2 }}>
@@ -49,18 +49,20 @@ const NotesFeed = () => {
         </Box>
       )}
 
-      <Suspense fallback={<CircularProgress sx={{ m: 4 }} />}>
-        {activeTab === "following" ? (
-          <FollowingFeed noteMode={noteMode} />
-        ) : activeTab === "reacted" ? (
-          <ReactedFeed />
-        ) : (
-          <DiscoverFeed noteMode={noteMode} />
-        )}
-      </Suspense>
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+        <Suspense fallback={<CircularProgress sx={{ m: 4 }} />}>
+          {activeTab === "following" ? (
+            <FollowingFeed noteMode={noteMode} />
+          ) : activeTab === "reacted" ? (
+            <ReactedFeed />
+          ) : (
+            <DiscoverFeed noteMode={noteMode} />
+          )}
+        </Suspense>
+      </Box>
 
       <RateEventModal open={modalOpen} onClose={() => setModalOpen(false)} />
-    </>
+    </Box>
   );
 };
 

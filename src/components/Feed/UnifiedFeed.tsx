@@ -2,8 +2,8 @@ import React, { useRef } from "react";
 import { Box, CircularProgress, Fab } from "@mui/material";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
-import useImmersiveScroll from "../../hooks/useImmersiveScroll";
 import useTopicExplorerScroll from "../../hooks/useTopicExplorerScroll";
+import { useFeedScroll } from "../../contexts/FeedScrollContext";
 
 interface UnifiedFeedProps<T> {
   // Data
@@ -30,6 +30,7 @@ interface UnifiedFeedProps<T> {
   // New items FAB
   newItemCount?: number;
   onShowNewItems?: () => void;
+  newItemLabel?: string;
 
   // Content above Virtuoso inside the scroll container
   headerContent?: React.ReactNode;
@@ -52,6 +53,7 @@ function UnifiedFeed<T>({
   emptyState,
   newItemCount,
   onShowNewItems,
+  newItemLabel = "posts",
   headerContent,
   followOutput,
   virtuosoRef: externalVirtuosoRef,
@@ -65,13 +67,9 @@ function UnifiedFeed<T>({
   const isNested = !!scrollContainerRef;
   const isImmersive = !isEmbedded && !isNested;
 
-  // Hooks are always called, but they no-op when their refs are null
-  useImmersiveScroll(
-    isImmersive ? containerRef : { current: null },
-    isImmersive ? virtuosoRef : { current: null },
-    { smooth: true },
-  );
+  const { reportScroll, resetScroll } = useFeedScroll();
 
+  // Only active in nested (topic explorer) mode
   useTopicExplorerScroll(
     isNested ? containerRef : { current: null },
     isNested ? virtuosoRef : { current: null },
@@ -130,7 +128,7 @@ function UnifiedFeed<T>({
   // scroll hooks can attach their listeners to it.
   return (
     <>
-      <div ref={containerRef} style={{ height: "100vh" }}>
+      <div ref={containerRef} style={{ height: "100%" }}>
         {headerContent}
         {showLoading ? (
           <Box
@@ -155,6 +153,13 @@ function UnifiedFeed<T>({
             endReached={onEndReached}
             startReached={onStartReached}
             followOutput={followOutput}
+            increaseViewportBy={{ top: 3000, bottom: 400 }}
+            defaultItemHeight={350}
+            onScroll={
+              isImmersive
+                ? (e) => reportScroll(e.currentTarget.scrollTop)
+                : undefined
+            }
             components={{
               Footer: () =>
                 loadingMore ? (
@@ -171,9 +176,19 @@ function UnifiedFeed<T>({
 
       {newItemCount != null && newItemCount > 0 && onShowNewItems && (
         <Fab
+          variant="extended"
           color="primary"
-          aria-label="new posts"
-          onClick={onShowNewItems}
+          aria-label={`new ${newItemLabel}`}
+          onClick={() => {
+            onShowNewItems();
+            // Wait for React to commit the new items into the list, then jump to top.
+            // setTimeout(0) yields after the current synchronous work and scheduled
+            // microtasks so the state update is committed before we scroll.
+            setTimeout(() => {
+              virtuosoRef.current?.scrollToIndex({ index: 0, behavior: "smooth" });
+              resetScroll(); // re-show the header
+            }, 0);
+          }}
           sx={{
             position: "fixed",
             bottom: 24,
@@ -181,7 +196,8 @@ function UnifiedFeed<T>({
             transform: "translateX(-50%)",
           }}
         >
-          <KeyboardArrowUpIcon /> See {newItemCount} new posts
+          <KeyboardArrowUpIcon sx={{ mr: 0.5 }} />
+          {newItemCount} new {newItemLabel}
         </Fab>
       )}
     </>

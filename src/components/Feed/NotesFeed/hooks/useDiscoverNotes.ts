@@ -1,77 +1,81 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { nostrRuntime } from "../../../../singletons";
 import { useRelays } from "../../../../hooks/useRelays";
 import { Filter } from "nostr-tools/lib/types";
-import { useUserContext } from "../../../../hooks/useUserContext";
 
 const LOAD_TIMEOUT_MS = 5000;
 
 export const useDiscoverNotes = () => {
     const { relays } = useRelays();
-    useUserContext();
     const [version, setVersion] = useState(0);
-    const [newNotesVersion, setNewNotesVersion] = useState(0);
+    const [pendingCount, setPendingCount] = useState(0);
     const [loadingMore, setLoadingMore] = useState(false);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
     const subscriptionHandleRef = useRef<any>(null);
     const fetchedRef = useRef(false);
+    const webOfTrustRef = useRef<Set<string>>(new Set());
 
-    // Query runtime for notes
+    // Query runtime for notes (only re-queries when version bumps, i.e. when user merges)
     const notes = useCallback(() => {
         const events = nostrRuntime.query({ kinds: [1] });
         const noteMap = new Map<string, any>();
-        for (const event of events) {
-            noteMap.set(event.id, event);
-        }
+        for (const event of events) noteMap.set(event.id, event);
         return noteMap;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [version]);
 
-    // New notes buffer (before merge)
-    const newNotes = useCallback(() => {
-        // In the new architecture, we don't need a separate buffer
-        // since runtime handles all storage
-        // Return empty map for compatibility
-        return new Map<string, any>();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [newNotesVersion]);
-
+    // Merge buffered notes into the displayed list
     const mergeNewNotes = useCallback(() => {
-        // No-op in new architecture since runtime stores everything together
-        // Just trigger a re-render
         setVersion((v) => v + 1);
-        setNewNotesVersion(0);
+        setPendingCount(0);
     }, []);
+
+    // Poll for newer notes every 60s after initial load; buffer count rather than displaying immediately
+    useEffect(() => {
+        if (!initialLoadComplete || !relays?.length) return;
+
+        const poll = () => {
+            const authors = Array.from(webOfTrustRef.current);
+            if (!authors.length) return;
+            const currentEvents = nostrRuntime.query({ kinds: [1] });
+            if (!currentEvents.length) return;
+            const since = Math.max(...currentEvents.map((e: any) => e.created_at));
+            const handle = nostrRuntime.subscribe(
+                relays,
+                [{ kinds: [1], authors, since: since + 1, limit: 20 }],
+                {
+                    onEvent: () => setPendingCount((c) => c + 1),
+                    onEose: () => handle.unsubscribe(),
+                }
+            );
+        };
+
+        const interval = setInterval(poll, 60_000);
+        return () => clearInterval(interval);
+    }, [initialLoadComplete, relays]);
 
     const fetchNotes = useCallback((webOfTrust: Set<string>) => {
         if (!webOfTrust?.size || !relays?.length || fetchedRef.current) return;
 
         fetchedRef.current = true;
+        webOfTrustRef.current = webOfTrust;
 
-        // Close previous subscription if exists
         if (subscriptionHandleRef.current) {
             subscriptionHandleRef.current.unsubscribe();
         }
-
-        const filteredAuthors = Array.from(webOfTrust);
 
         setLoadingMore(true);
 
         const filter: Filter = {
             kinds: [1],
-            authors: filteredAuthors,
-            limit: 20
+            authors: Array.from(webOfTrust),
+            limit: 20,
         };
 
-        // Runtime automatically chunks large author lists
         const handle = nostrRuntime.subscribe(relays, [filter], {
-            onEvent: (event) => {
-                // All events go to runtime automatically
-                if (initialLoadComplete) {
-                    setNewNotesVersion((v) => v + 1);
-                } else {
-                    setVersion((v) => v + 1);
-                }
+            onEvent: () => {
+                // During initial load, bump version so items appear as they arrive
+                setVersion((v) => v + 1);
             },
             onEose: () => {
                 setLoadingMore(false);
@@ -94,13 +98,13 @@ export const useDiscoverNotes = () => {
             }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [relays, initialLoadComplete]);
+    }, [relays]);
 
     return {
         notes: notes(),
-        newNotes: newNotes(),
+        pendingCount,
         loadingMore,
         fetchNotes,
-        mergeNewNotes
+        mergeNewNotes,
     };
 };

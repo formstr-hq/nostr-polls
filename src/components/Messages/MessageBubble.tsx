@@ -19,8 +19,13 @@ interface GroupedReaction {
 }
 
 // Small dot showing a single relay's publish status
-const RelayDot: React.FC<{ relay: string; status: RelayStatus }> = ({ relay, status }) => {
+const RelayDot: React.FC<{ relay: string; status: RelayStatus; reason?: string }> = ({
+  relay,
+  status,
+  reason,
+}) => {
   const hostname = (() => { try { return new URL(relay).hostname; } catch { return relay; } })();
+  const label = reason ? `${hostname}: ${reason}` : `${hostname} · ${status}`;
 
   let indicator: React.ReactElement;
   if (status === "pending") {
@@ -30,11 +35,10 @@ const RelayDot: React.FC<{ relay: string; status: RelayStatus }> = ({ relay, sta
   } else if (status === "timeout") {
     indicator = <TimerOffIcon sx={{ fontSize: 11, color: "text.disabled" }} />;
   } else {
-    // failed — relay actively rejected
     indicator = <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "error.main" }} />;
   }
 
-  return <Tooltip title={`${hostname} · ${status}`} placement="top">{indicator}</Tooltip>;
+  return <Tooltip title={label} placement="top">{indicator}</Tooltip>;
 };
 
 interface MessageBubbleProps {
@@ -335,7 +339,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             sx={{ alignSelf: isMine ? "flex-end" : "flex-start" }}
           >
             {!allFailed && entries.map(([relay, status]) => (
-              <RelayDot key={relay} relay={relay} status={status} />
+              <RelayDot key={relay} relay={relay} status={status} reason={sendStatus.reasons[relay]} />
             ))}
             {allFailed && (
               <>

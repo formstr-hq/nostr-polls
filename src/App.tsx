@@ -28,9 +28,10 @@ import { RelayProvider } from "./contexts/relay-context";
 import { NostrNotificationsProvider } from "./contexts/nostr-notification-context";
 import { DMProvider } from "./contexts/dm-context";
 import { TranslationBatchProvider } from "./contexts/translation-batch-context";
+import { FeedScrollProvider, useFeedScroll } from "./contexts/FeedScrollContext";
 
 import CssBaseline from "@mui/material/CssBaseline";
-import { ThemeProvider } from "@mui/material";
+import { ThemeProvider, Box } from "@mui/material";
 import { baseTheme } from "./styles/theme";
 
 import EventList from "./components/Feed/FeedsLayout";
@@ -51,6 +52,86 @@ declare global {
   interface Window {
     nostr?: any;
   }
+}
+
+// Inner component: reads scroll state and renders layout
+function AppContent() {
+  const { isScrolledDown } = useFeedScroll();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Animated header wrapper — collapses when scrolled down */}
+      <Box
+        sx={{
+          overflow: "hidden",
+          height: isScrolledDown ? 0 : "auto",
+        }}
+      >
+        <Box
+          sx={{
+            opacity: isScrolledDown ? 0 : 1,
+            transition: "opacity 0.2s ease",
+          }}
+        >
+          <div className="header-safe-area">
+            <Header />
+          </div>
+        </Box>
+      </Box>
+
+      {/* Routes fill remaining space */}
+      <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <Routes>
+          <Route path="/create" element={<EventCreator />} />
+          <Route
+            path="/respond/:eventId"
+            element={<PollResponse />}
+          />
+          <Route
+            path="note/:eventId"
+            element={<PrepareNoteWrapper />}
+          />
+          <Route
+            path="/profile/:npubOrNprofile"
+            element={<ProfilePage />}
+          />
+          <Route
+            path="/result/:eventId"
+            element={<PollResults />}
+          />
+          <Route path="/messages" element={<ConversationList />} />
+          <Route path="/messages/new" element={<NewConversation />} />
+          <Route path="/messages/:npub" element={<ChatView />} />
+          <Route path="/ratings" element={<EventList />} />
+
+          <Route path="/feeds" element={<FeedsLayout />}>
+            <Route path="notes" element={<NotesFeed />} />
+            <Route path="profiles" element={<ProfilesFeed />} />
+            <Route path="topics" element={<TopicsFeed />}>
+              <Route path=":tag" element={<TopicExplorer />} />
+            </Route>
+            <Route path="polls" index element={<PollFeed />} />
+
+            <Route element={<Outlet />}>
+              <Route path="movies" element={<MoviesFeed />} />
+              <Route
+                path="movies/:imdbId"
+                element={<MoviePage />}
+              />
+            </Route>
+
+            <Route index element={<PollFeed />} />
+          </Route>
+
+          <Route
+            index
+            path="/"
+            element={<Navigate to="/feeds/polls" replace />}
+          />
+        </Routes>
+      </Box>
+    </div>
+  );
 }
 
 const App: React.FC = () => {
@@ -100,64 +181,14 @@ const App: React.FC = () => {
                       <CssBaseline />
                       <MetadataProvider>
                         <Router>
-                        {/* ✅ Safe-area header wrapper */}
-                        <div className="header-safe-area">
-                          <Header />
-                        </div>
-
-                        <Routes>
-                          <Route path="/create" element={<EventCreator />} />
-                          <Route
-                            path="/respond/:eventId"
-                            element={<PollResponse />}
-                          />
-                          <Route
-                            path="note/:eventId"
-                            element={<PrepareNoteWrapper />}
-                          />
-                          <Route
-                            path="/profile/:npubOrNprofile"
-                            element={<ProfilePage />}
-                          />
-                          <Route
-                            path="/result/:eventId"
-                            element={<PollResults />}
-                          />
-                          <Route path="/messages" element={<ConversationList />} />
-                          <Route path="/messages/new" element={<NewConversation />} />
-                          <Route path="/messages/:npub" element={<ChatView />} />
-                          <Route path="/ratings" element={<EventList />} />
-
-                          <Route path="/feeds" element={<FeedsLayout />}>
-                            <Route path="notes" element={<NotesFeed />} />
-                            <Route path="profiles" element={<ProfilesFeed />} />
-                            <Route path="topics" element={<TopicsFeed />}>
-                              <Route path=":tag" element={<TopicExplorer />} />
-                            </Route>
-                            <Route path="polls" index element={<PollFeed />} />
-
-                            <Route element={<Outlet />}>
-                              <Route path="movies" element={<MoviesFeed />} />
-                              <Route
-                                path="movies/:imdbId"
-                                element={<MoviePage />}
-                              />
-                            </Route>
-
-                            <Route index element={<PollFeed />} />
-                          </Route>
-
-                          <Route
-                            index
-                            path="/"
-                            element={<Navigate to="/feeds/polls" replace />}
-                          />
-                        </Routes>
-                      </Router>
-                    </MetadataProvider>
-                  </RatingProvider>
-                </ListProvider>
-              </TranslationBatchProvider>
+                          <FeedScrollProvider>
+                            <AppContent />
+                          </FeedScrollProvider>
+                        </Router>
+                      </MetadataProvider>
+                    </RatingProvider>
+                  </ListProvider>
+                </TranslationBatchProvider>
               </NostrNotificationsProvider>
               </DMProvider>
             </RelayProvider>
@@ -168,11 +199,18 @@ const App: React.FC = () => {
   );
 };
 
-// Wrapper to pass eventId to PrepareNote
+// Wrapper to pass eventId to PrepareNote.
+// Needs its own overflow-y:auto scroll container because the global layout
+// locks html/body overflow (Virtuoso is the scroller on feed pages).
+// Without this, comments expand but can't be scrolled — they're clipped.
 function PrepareNoteWrapper() {
   const { eventId } = useParams();
   if (!eventId) return null;
-  return <PrepareNote neventId={eventId} />;
+  return (
+    <Box sx={{ height: "100%", overflowY: "auto" }}>
+      <PrepareNote neventId={eventId} />
+    </Box>
+  );
 }
 
 export default App;

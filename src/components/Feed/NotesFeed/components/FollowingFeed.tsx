@@ -11,7 +11,7 @@ const isRootNote = (event: { tags: string[][] }) =>
 
 const FollowingFeed = ({ noteMode }: { noteMode: NoteMode }) => {
   const { user, requestLogin } = useUserContext();
-  const { notes, reposts, fetchNotes, loadingMore, fetchNewerNotes } =
+  const { notes, reposts, fetchNotes, loadingMore, pendingCount, mergeNewNotes } =
     useFollowingNotes();
 
   // Merge notes and reposts for sorting by created_at
@@ -46,7 +46,7 @@ const FollowingFeed = ({ noteMode }: { noteMode: NoteMode }) => {
   }, [user]);
 
   return (
-    <div>
+    <div style={{ height: "100%", overflow: "hidden" }}>
       {!user ? (
         <div
           style={{
@@ -65,8 +65,11 @@ const FollowingFeed = ({ noteMode }: { noteMode: NoteMode }) => {
       <UnifiedFeed
         data={mergedNotes}
         followOutput={false}
-        onStartReached={fetchNewerNotes}
         onEndReached={fetchNotes}
+        computeItemKey={(_, item) => item.note.id}
+        newItemCount={pendingCount}
+        onShowNewItems={mergeNewNotes}
+        newItemLabel="notes"
         itemContent={(index, item) => (
           <RepostsCard
             note={item.note}
