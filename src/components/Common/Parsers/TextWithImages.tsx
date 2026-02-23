@@ -19,6 +19,7 @@ import {
   getCachedTranslation,
   setCachedTranslation,
 } from "../../../utils/translation-cache";
+import { LinkPreviewCard } from "./LinkPreviewCard";
 
 interface TextWithImagesProps {
   content: string;
@@ -421,27 +422,46 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
     const lines = text.split(/\n/);
     return lines.map((line, lineIndex) => {
       const parts = line.split(/(\s+)/);
+      const previewUrls: string[] = [];
+
+      const renderedParts = parts.map((part, index) => {
+        const key = `${lineIndex}-${index}`;
+        const parserResult =
+          YouTubeParser({ part }) ||
+          ImageParser({ part, index }) ||
+          VideoParser({ part, index }) ||
+          URLParser({ part, index, color: theme.palette.primary.main }) ||
+          HashtagParser({ part, index, color: theme.palette.primary.main }) ||
+          NostrParser({
+            part,
+            index,
+            profiles,
+            fetchUserProfileThrottled,
+          }) ||
+          LightningInvoiceParser({ part, index }) ||
+          CustomEmojiParser({ part, index, emojiMap });
+
+        // Collect plain URLs that aren't already embedded as media
+        const urlMatch = part.match(urlRegex)?.[0];
+        if (
+          urlMatch &&
+          !isImageUrl(urlMatch) &&
+          !isVideoUrl(urlMatch) &&
+          !isEmbeddableYouTubeUrl(urlMatch) &&
+          !previewUrls.includes(urlMatch)
+        ) {
+          previewUrls.push(urlMatch);
+        }
+
+        return parserResult ?? <PlainTextRenderer part={part} key={key} />;
+      });
+
       return (
         <div key={lineIndex} style={{ wordBreak: "break-word" }}>
-          {parts.map((part, index) => {
-            const key = `${lineIndex}-${index}`;
-            const parserResult =
-              YouTubeParser({ part }) ||
-              ImageParser({ part, index }) ||
-              VideoParser({ part, index }) ||
-              URLParser({ part, index, color: theme.palette.primary.main }) ||
-              HashtagParser({ part, index, color: theme.palette.primary.main }) ||
-              NostrParser({
-                part,
-                index,
-                profiles,
-                fetchUserProfileThrottled,
-              }) ||
-              LightningInvoiceParser({ part, index }) ||
-              CustomEmojiParser({ part, index, emojiMap });
-
-            return parserResult ?? <PlainTextRenderer part={part} key={key} />;
-          })}
+          {renderedParts}
+          {previewUrls.map((url) => (
+            <LinkPreviewCard key={url} url={url} />
+          ))}
           <br />
         </div>
       );

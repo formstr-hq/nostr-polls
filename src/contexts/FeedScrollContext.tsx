@@ -1,13 +1,17 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from "react";
 
+// How many px of continuous downward scroll to fully collapse headers.
+// Scrolling up any amount immediately starts revealing them again.
+const COLLAPSE_PX = 80;
+
 type FeedScrollCtx = {
-  isScrolledDown: boolean;
+  headerProgress: number; // 0 = fully visible, 1 = fully hidden
   reportScroll: (scrollTop: number) => void;
   resetScroll: () => void;
 };
 
 const FeedScrollContext = createContext<FeedScrollCtx>({
-  isScrolledDown: false,
+  headerProgress: 0,
   reportScroll: () => {},
   resetScroll: () => {},
 });
@@ -15,28 +19,38 @@ const FeedScrollContext = createContext<FeedScrollCtx>({
 export const FeedScrollProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [isScrolledDown, setIsScrolledDown] = useState(false);
+  // Virtual offset: 0–COLLAPSE_PX. Increases on downward scroll, decreases
+  // on upward scroll. Never tied to absolute scroll position so the header
+  // comes back as soon as the user scrolls up even a little.
+  const [offset, setOffset] = useState(0);
   const lastScrollTopRef = useRef(0);
 
   const reportScroll = useCallback((scrollTop: number) => {
-    const last = lastScrollTopRef.current;
-    if (scrollTop <= 10) {
-      setIsScrolledDown(false);
-    } else if (scrollTop > last + 5) {
-      setIsScrolledDown(true);
-    } else if (scrollTop < last - 5) {
-      setIsScrolledDown(false);
-    }
+    const delta = scrollTop - lastScrollTopRef.current;
     lastScrollTopRef.current = scrollTop;
+
+    // Always reset when at the very top of the feed
+    if (scrollTop <= 0) {
+      setOffset(0);
+      return;
+    }
+
+    setOffset((prev) => Math.max(0, Math.min(COLLAPSE_PX, prev + delta)));
   }, []);
 
   const resetScroll = useCallback(() => {
-    setIsScrolledDown(false);
+    setOffset(0);
     lastScrollTopRef.current = 0;
   }, []);
 
   return (
-    <FeedScrollContext.Provider value={{ isScrolledDown, reportScroll, resetScroll }}>
+    <FeedScrollContext.Provider
+      value={{
+        headerProgress: offset / COLLAPSE_PX,
+        reportScroll,
+        resetScroll,
+      }}
+    >
       {children}
     </FeedScrollContext.Provider>
   );

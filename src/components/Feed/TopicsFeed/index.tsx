@@ -25,11 +25,13 @@ import TopicCard from "./TopicsCard";
 import { useListContext } from "../../../hooks/useListContext";
 import MyTopicsFeed from "./MyTopicsFeed";
 import { useUserContext } from "../../../hooks/useUserContext";
+import { useFeedScroll } from "../../../contexts/FeedScrollContext";
 
 const TopicsFeed: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
     "discover" | "myTopics" | "interests"
   >("interests");
+  const { headerProgress } = useFeedScroll();
   const [tagsMap, setTagsMap] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -184,49 +186,57 @@ const TopicsFeed: React.FC = () => {
       }}
     >
       <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="flex-start"
+        sx={{
+          overflow: "hidden",
+          height: Math.max(0, 64 * (1 - headerProgress)),
+          opacity: 1 - headerProgress,
+        }}
       >
-        <Tabs
-          value={activeTab}
-          onChange={(_, newValue) => setActiveTab(newValue)}
-          variant="scrollable"
-          scrollButtons="auto"
-          allowScrollButtonsMobile
-          sx={{
-            mb: 2,
-            borderBottom: `1px solid ${theme.palette.divider}`,
-            "& .MuiTab-root": {
-              textTransform: "none",
-              minWidth: isMobile ? 80 : 120,
-              fontWeight: 500,
-            },
-          }}
+        <Box
+          display="flex"
+          justifyContent="space-between"
+          alignItems="flex-start"
         >
-          <Tab
-            label="Notes from Interests"
-            value="interests"
-            sx={{ py: 0, textTransform: "none" }}
-          />
-          <Tab
-            label="My Interests"
-            value="myTopics"
-            sx={{ py: 0, textTransform: "none" }}
-          />
-          <Tab
-            label="Recently Rated"
-            value="discover"
-            sx={{ py: 0, textTransform: "none" }}
-          />
-        </Tabs>
-        <IconButton
-          onClick={() => setSearchOpen(true)}
-          aria-label="Search topics"
-          sx={{ mt: -1 }}
-        >
-          <SearchIcon />
-        </IconButton>
+          <Tabs
+            value={activeTab}
+            onChange={(_, newValue) => setActiveTab(newValue)}
+            variant="scrollable"
+            scrollButtons="auto"
+            allowScrollButtonsMobile
+            sx={{
+              mb: 2,
+              borderBottom: `1px solid ${theme.palette.divider}`,
+              "& .MuiTab-root": {
+                textTransform: "none",
+                minWidth: isMobile ? 80 : 120,
+                fontWeight: 500,
+              },
+            }}
+          >
+            <Tab
+              label="Notes from Interests"
+              value="interests"
+              sx={{ py: 0, textTransform: "none" }}
+            />
+            <Tab
+              label="My Interests"
+              value="myTopics"
+              sx={{ py: 0, textTransform: "none" }}
+            />
+            <Tab
+              label="Recently Rated"
+              value="discover"
+              sx={{ py: 0, textTransform: "none" }}
+            />
+          </Tabs>
+          <IconButton
+            onClick={() => setSearchOpen(true)}
+            aria-label="Search topics"
+            sx={{ mt: -1 }}
+          >
+            <SearchIcon />
+          </IconButton>
+        </Box>
       </Box>
 
       <Box sx={{ flexGrow: 1, minHeight: 0 }}>

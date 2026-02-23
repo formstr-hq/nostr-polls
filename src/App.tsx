@@ -1,5 +1,5 @@
 // App.tsx
-import React, { useEffect } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   BrowserRouter as Router,
   Route,
@@ -56,27 +56,30 @@ declare global {
 
 // Inner component: reads scroll state and renders layout
 function AppContent() {
-  const { isScrolledDown } = useFeedScroll();
+  const { headerProgress } = useFeedScroll();
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [headerH, setHeaderH] = useState(80);
+
+  // Measure actual header height once on mount so the animation has no dead zone
+  useLayoutEffect(() => {
+    if (innerRef.current) setHeaderH(innerRef.current.offsetHeight);
+  }, []);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Animated header wrapper — collapses when scrolled down */}
+      {/* Header collapses in sync with scroll */}
       <Box
         sx={{
           overflow: "hidden",
-          height: isScrolledDown ? 0 : "auto",
+          height: Math.max(0, headerH * (1 - headerProgress)),
+          opacity: 1 - headerProgress,
         }}
       >
-        <Box
-          sx={{
-            opacity: isScrolledDown ? 0 : 1,
-            transition: "opacity 0.2s ease",
-          }}
-        >
+        <div ref={innerRef}>
           <div className="header-safe-area">
             <Header />
           </div>
-        </Box>
+        </div>
       </Box>
 
       {/* Routes fill remaining space */}

@@ -16,7 +16,7 @@ const FeedsLayout: React.FC = () => {
   const location = useLocation();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const { isScrolledDown, resetScroll } = useFeedScroll();
+  const { headerProgress, resetScroll } = useFeedScroll();
 
   // Extract feed from URL path like "/feeds/movies" -> "movies"
   const currentFeed = location.pathname.split("/")[2] || "polls";
@@ -38,11 +38,12 @@ const FeedsLayout: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Feed-selector tabs animate out when scrolled down */}
+      {/* Feed-selector tabs collapse in sync with scroll */}
       <Box
         sx={{
           overflow: "hidden",
-          height: isScrolledDown ? 0 : "auto",
+          height: Math.max(0, 64 * (1 - headerProgress)),
+          opacity: 1 - headerProgress,
         }}
       >
         <Tabs
