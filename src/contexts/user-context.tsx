@@ -23,23 +23,24 @@ export const ANONYMOUS_USER_NAME = "Anon...";
 export const UserContext = createContext<UserContextInterface | null>(null);
 
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  // Initialise from the signerManager's synchronously-loaded cache so the UI
+  // never flashes a "logged out" state while the signer finishes initialising.
+  const [user, setUser] = useState<User | null>(() => signerManager.getUser());
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
-  useEffect(() => {
-    if (!user) {
-      console.log("ATTEMPTING RESTORE FROM LOCAL STORAGE");
-      signerManager.restoreFromStorage();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   useEffect(() => {
     signerManager.registerLoginModal(() => {
       return new Promise<void>((resolve) => {
         setLoginModalOpen(true);
       });
     });
-    signerManager.onChange(async () => {
-      setUser(await signerManager.getUser());
+    signerManager.onChange(() => {
+      setUser((prev) => {
+        const next = signerManager.getUser();
+        // Keep the same object reference when it's the same user so that
+        // effects depending on [user] don't fire spuriously (e.g. on signer init).
+        if (next?.pubkey && next.pubkey === prev?.pubkey) return prev;
+        return next;
+      });
     });
   }, []);
 

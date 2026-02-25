@@ -23,6 +23,7 @@ const FeedsLayout: React.FC = () => {
 
   const handleChange = (_: any, newValue: string) => {
     resetScroll();
+    localStorage.setItem("pollerama:lastFeed", newValue);
     navigate(`/feeds/${newValue}`);
   };
 

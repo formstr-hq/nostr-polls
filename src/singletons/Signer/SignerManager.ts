@@ -31,9 +31,12 @@ class SignerManager {
   private onChangeCallbacks: Set<() => void> = new Set();
   private loginModalCallback: (() => Promise<void>) | null = null;
   private pendingSignPromises: Map<string, (event: Event) => void> = new Map();
+  private initPromise: Promise<void> | null = null;
 
   constructor() {
-    this.restoreFromStorage();
+    this.initPromise = this.restoreFromStorage().finally(() => {
+      this.initPromise = null;
+    });
   }
 
   async publishKind0(user: User) {
@@ -252,6 +255,12 @@ class SignerManager {
 
   async getSigner(): Promise<NostrSigner> {
     if (this.signer) return this.signer;
+
+    // Still initialising — wait for it before deciding to show the login modal
+    if (this.initPromise) {
+      await this.initPromise;
+      if (this.signer) return this.signer;
+    }
 
     if (this.loginModalCallback) {
       await this.loginModalCallback();

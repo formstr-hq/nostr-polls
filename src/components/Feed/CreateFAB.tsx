@@ -32,12 +32,16 @@ const CreateFAB: React.FC = () => {
   }, []);
 
   const handleClick = () => {
-    // Pre-fill hashtag from topics feed
-    const match = location.pathname.match(/\/feeds\/topics\/(.+)/);
-    if (match) {
-      navigate(`/create?hashtag=${encodeURIComponent(match[1])}`);
+    if (location.pathname.startsWith("/feeds/polls")) {
+      navigate("/create?type=poll");
     } else {
-      navigate("/create");
+      // Pre-fill hashtag from topics feed
+      const match = location.pathname.match(/\/feeds\/topics\/(.+)/);
+      if (match) {
+        navigate(`/create?hashtag=${encodeURIComponent(match[1])}`);
+      } else {
+        navigate("/create");
+      }
     }
   };
 

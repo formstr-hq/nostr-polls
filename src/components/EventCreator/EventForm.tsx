@@ -4,10 +4,17 @@ import EditNoteIcon from "@mui/icons-material/EditNote";
 import PollIcon from "@mui/icons-material/Poll";
 import NoteTemplateForm from "./NoteTemplateForm";
 import PollTemplateForm from "./PollTemplateForm";
+import { useSearchParams } from "react-router-dom";
 
 const EventForm = () => {
-  const [tabIndex, setTabIndex] = useState(0);
-  const [eventContent, setEventContent] = useState("");
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get("type") === "poll" ? 1 : 0;
+  const initialHashtag = searchParams.get("hashtag");
+
+  const [tabIndex, setTabIndex] = useState(initialTab);
+  const [eventContent, setEventContent] = useState(
+    initialHashtag ? `#${initialHashtag} ` : ""
+  );
 
   return (
     <Container maxWidth="md" sx={{ py: 3 }}>

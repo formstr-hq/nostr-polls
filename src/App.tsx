@@ -126,7 +126,7 @@ function AppContent() {
           <Route
             index
             path="/"
-            element={<Navigate to="/feeds/polls" replace />}
+            element={<Navigate to={`/feeds/${localStorage.getItem("pollerama:lastFeed") || "polls"}`} replace />}
           />
         </Routes>
       </Box>
