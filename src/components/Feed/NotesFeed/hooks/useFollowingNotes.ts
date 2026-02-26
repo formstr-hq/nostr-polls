@@ -3,6 +3,7 @@ import { Event, Filter } from "nostr-tools";
 import { useRelays } from "../../../../hooks/useRelays";
 import { nostrRuntime } from "../../../../singletons";
 import { useUserContext } from "../../../../hooks/useUserContext";
+import { useFeedScroll } from "../../../../contexts/FeedScrollContext";
 
 export const useFollowingNotes = () => {
   const [loadingMore, setLoadingMore] = useState(false);
@@ -13,6 +14,9 @@ export const useFollowingNotes = () => {
 
   const { relays } = useRelays();
   const { user } = useUserContext();
+  const { isScrolledDown } = useFeedScroll();
+  const isScrolledDownRef = useRef(false);
+  useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
 
   const notes = useCallback(() => {
     if (!user?.follows?.length) return new Map<string, Event>();
@@ -106,7 +110,11 @@ export const useFollowingNotes = () => {
           const originalNoteId = event.tags.find((t) => t[0] === "e")?.[1];
           if (originalNoteId) missingNotesRef.current.add(originalNoteId);
         }
-        setVersion((v) => v + 1);
+        if (isScrolledDownRef.current) {
+          setPendingCount((c) => c + 1);
+        } else {
+          setVersion((v) => v + 1);
+        }
       },
       onEose: () => {
         handle.unsubscribe();

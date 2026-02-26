@@ -10,6 +10,7 @@ import {
   loadModeratorPrefs,
   saveModeratorPrefs,
 } from "../utils/localStorage";
+import { useFeedScroll } from "../contexts/FeedScrollContext";
 
 export const OFFTOPIC_KIND = 1011;
 
@@ -37,11 +38,17 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
   const [selectedModsByTopic, setSelectedModsByTopic] = useState<
     Map<string, string[]>
   >(new Map());
+  const [pendingCount, setPendingCount] = useState(0);
 
   const moderationByTopic = useRef<Map<string, TopicModeration>>(new Map());
   const seenNotes = useRef<Set<string>>(new Set());
   const seenModeration = useRef<Set<string>>(new Set());
   const deletedModerationIds = useRef<Set<string>>(new Set());
+  const pendingNotesRef = useRef<Map<string, TopicNote>>(new Map());
+
+  const { isScrolledDown } = useFeedScroll();
+  const isScrolledDownRef = useRef(false);
+  useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
 
   /* ------------------ moderation processing ------------------ */
 
@@ -233,11 +240,16 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
 
             if (topics.length === 0) return;
 
-            setNotes((prev) => {
-              const next = new Map(prev);
-              next.set(event.id, { event, topics });
-              return next;
-            });
+            if (isScrolledDownRef.current) {
+              pendingNotesRef.current.set(event.id, { event, topics });
+              setPendingCount((c) => c + 1);
+            } else {
+              setNotes((prev) => {
+                const next = new Map(prev);
+                next.set(event.id, { event, topics });
+                return next;
+              });
+            }
             setLoading(false);
           }
         },
@@ -346,6 +358,18 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
       .sort((a, b) => b.event.created_at - a.event.created_at);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notes, feedMode, showAnyway, user?.follows, selectedModsByTopic, user, moderationVersion]);
+
+  /* ------------------ merge pending notes ------------------ */
+
+  const mergeNewNotes = useCallback(() => {
+    setNotes((prev) => {
+      const next = new Map(prev);
+      pendingNotesRef.current.forEach((value, key) => next.set(key, value));
+      pendingNotesRef.current.clear();
+      return next;
+    });
+    setPendingCount(0);
+  }, []);
 
   /* ------------------ actions ------------------ */
 
@@ -506,5 +530,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     moderatorsByTopic,
     selectedModsByTopic,
     setSelectedModeratorsForTopic,
+    pendingCount,
+    mergeNewNotes,
   };
 }

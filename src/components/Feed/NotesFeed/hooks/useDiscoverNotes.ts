@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { nostrRuntime } from "../../../../singletons";
 import { useRelays } from "../../../../hooks/useRelays";
 import { Filter } from "nostr-tools/lib/types";
+import { useFeedScroll } from "../../../../contexts/FeedScrollContext";
 
 const LOAD_TIMEOUT_MS = 5000;
 
@@ -14,6 +15,9 @@ export const useDiscoverNotes = () => {
     const subscriptionHandleRef = useRef<any>(null);
     const fetchedRef = useRef(false);
     const webOfTrustRef = useRef<Set<string>>(new Set());
+    const { isScrolledDown } = useFeedScroll();
+    const isScrolledDownRef = useRef(false);
+    useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
 
     // Query runtime for notes (only re-queries when version bumps, i.e. when user merges)
     const notes = useCallback(() => {
@@ -74,8 +78,11 @@ export const useDiscoverNotes = () => {
 
         const handle = nostrRuntime.subscribe(relays, [filter], {
             onEvent: () => {
-                // During initial load, bump version so items appear as they arrive
-                setVersion((v) => v + 1);
+                if (isScrolledDownRef.current) {
+                    setPendingCount((c) => c + 1);
+                } else {
+                    setVersion((v) => v + 1);
+                }
             },
             onEose: () => {
                 setLoadingMore(false);

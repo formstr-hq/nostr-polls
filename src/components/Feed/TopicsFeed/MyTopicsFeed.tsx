@@ -37,6 +37,8 @@ const MyTopicsFeed = ({ onNavigateToDiscover }: MyTopicsFeedProps) => {
     moderatorsByTopic,
     selectedModsByTopic,
     setSelectedModeratorsForTopic,
+    pendingCount,
+    mergeNewNotes,
   } = useMyTopicsFeed(myTopics || new Set());
   const { user, requestLogin } = useUserContext();
 
@@ -119,6 +121,9 @@ const MyTopicsFeed = ({ onNavigateToDiscover }: MyTopicsFeedProps) => {
     <>
       <UnifiedFeed
         data={notes}
+        newItemCount={pendingCount}
+        onShowNewItems={mergeNewNotes}
+        newItemLabel="notes"
         headerContent={
           hasModerators ? (
             <Box
