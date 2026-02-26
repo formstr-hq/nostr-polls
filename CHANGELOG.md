@@ -1,3 +1,7 @@
+# 1,2.15
+
+- Bug fix: fixed an issue where the feed load interrupts reading experience.
+
 # 1.2.11
 
 - DM UI gets an uplift, added swipe to reply, hold to react gestures
