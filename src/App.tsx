@@ -82,10 +82,10 @@ function AppContent() {
       {/* Routes fill remaining space */}
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         <Routes>
-          <Route path="/create" element={<EventCreator />} />
+          <Route path="/create" element={<ScrollPage><EventCreator /></ScrollPage>} />
           <Route
             path="/respond/:eventId"
-            element={<PollResponse />}
+            element={<ScrollPage><PollResponse /></ScrollPage>}
           />
           <Route
             path="note/:eventId"
@@ -97,10 +97,10 @@ function AppContent() {
           />
           <Route
             path="/result/:eventId"
-            element={<PollResults />}
+            element={<ScrollPage><PollResults /></ScrollPage>}
           />
-          <Route path="/messages" element={<ConversationList />} />
-          <Route path="/messages/new" element={<NewConversation />} />
+          <Route path="/messages" element={<ScrollPage><ConversationList /></ScrollPage>} />
+          <Route path="/messages/new" element={<ScrollPage><NewConversation /></ScrollPage>} />
           <Route path="/messages/:npub" element={<ChatView />} />
           <Route path="/ratings" element={<EventList />} />
 
@@ -199,10 +199,17 @@ const App: React.FC = () => {
   );
 };
 
+// Standalone pages need their own overflow-y:auto container because the global
+// layout locks html/body overflow so Virtuoso can be the sole scroller on feeds.
+function ScrollPage({ children }: { children: React.ReactNode }) {
+  return (
+    <Box sx={{ height: "100%", overflowY: "auto" }}>
+      {children}
+    </Box>
+  );
+}
+
 // Wrapper to pass eventId to PrepareNote.
-// Needs its own overflow-y:auto scroll container because the global layout
-// locks html/body overflow (Virtuoso is the scroller on feed pages).
-// Without this, comments expand but can't be scrolled — they're clipped.
 function PrepareNoteWrapper() {
   const { eventId } = useParams();
   if (!eventId) return null;
