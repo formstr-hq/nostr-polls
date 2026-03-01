@@ -29,6 +29,7 @@ import { NostrNotificationsProvider } from "./contexts/nostr-notification-contex
 import { DMProvider } from "./contexts/dm-context";
 import { TranslationBatchProvider } from "./contexts/translation-batch-context";
 import { FeedScrollProvider, useFeedScroll } from "./contexts/FeedScrollContext";
+import { useAndroidNotifications } from "./hooks/useAndroidNotifications";
 
 import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider, Box } from "@mui/material";
@@ -52,6 +53,11 @@ declare global {
   interface Window {
     nostr?: any;
   }
+}
+
+function AndroidNotifications() {
+  useAndroidNotifications();
+  return null;
 }
 
 // Inner component: reads scroll state and renders layout
@@ -175,6 +181,7 @@ const App: React.FC = () => {
             <RelayProvider>
               <DMProvider>
               <NostrNotificationsProvider>
+                <AndroidNotifications />
                 <TranslationBatchProvider>
                   <ListProvider>
                     <RatingProvider>

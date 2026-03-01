@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="140"
+    android:viewportHeight="98">
+    <!-- Pollerama logo — two poll bars, white monochrome for notification status bar -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22.4236,7.33331H88.083C93.4046,7.33331 98.709,9.95954 100.13,15.0878C101.709,20.782 101.126,26.0778 99.8354,30.2072C98.4366,34.6824 93.9122,36.9928 89.2286,37.2111C62.6644,38.449 19.1398,39.7074 11.7941,36.8452C6.27402,34.6943 6.72579,25.6851 8.63951,17.4744C10.0956,11.2272 16.0091,7.33331 22.4236,7.33331Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22.7133,59.4166H119.19C123.757,59.4166 128.382,61.283 130.326,65.4154C133.674,72.5329 132.333,79.1629 129.943,83.8624C128.134,87.4204 124.173,89.0182 120.184,89.1638C85.2582,90.4385 23.4205,91.8916 13.281,88.9285C5.47425,86.6471 6.62573,76.6497 9.55968,68.0733C11.4373,62.5849 16.9126,59.4166 22.7133,59.4166Z" />
+</vector>

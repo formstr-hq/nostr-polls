@@ -1180,6 +1180,11 @@
   resolved "https://registry.yarnpkg.com/@capacitor/device/-/device-8.0.0.tgz#4b0ca1a35c896e32dd125dba5fa9b681badd9c8d"
   integrity sha512-qFmlTDnAvUwIg93YUF3u3ovqpDFqUl2RFkf2dVIF8Py7vTA+GjQIHQWITcBKfeUENoVXPNn04t5nxg5mAkjNEA==
 
+"@capacitor/local-notifications@^8.0.1":
+  version "8.0.1"
+  resolved "https://registry.yarnpkg.com/@capacitor/local-notifications/-/local-notifications-8.0.1.tgz#02ae2fcfa066d005c50ebe77c09ae37058f28278"
+  integrity sha512-BWYg3wTCFQ9lsbE6tyHmJaE2IbxUuKYq4SeMIHQ9ZqVclrlTO6326sPT0sxM61YfR6K3G3fJGvyJqn89LzDk8A==
+
 "@capacitor/preferences@^8.0.0":
   version "8.0.0"
   resolved "https://registry.yarnpkg.com/@capacitor/preferences/-/preferences-8.0.0.tgz#43fa0b7c538bc0ad9b8625b457cba2a8835bb14e"
