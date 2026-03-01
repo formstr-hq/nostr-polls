@@ -1,4 +1,9 @@
-# 1,2.15
+# 1.3.0
+
+- Add Search
+- Add notifications
+
+# 1.2.15
 
 - Bug fix: fixed an issue where the feed load interrupts reading experience.
 
