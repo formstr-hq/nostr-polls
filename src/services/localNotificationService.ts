@@ -9,6 +9,14 @@ export async function initLocalNotifications(): Promise<boolean> {
   try {
     const result = await LocalNotifications.requestPermissions();
     console.log('[LocalNotif] requestPermissions result:', JSON.stringify(result));
+
+    // Bring the app to the foreground when a notification is tapped
+    LocalNotifications.addListener('localNotificationActionPerformed', () => {
+      // Capacitor routes the intent back to the WebView; the app opens automatically.
+      // This listener ensures the event is consumed so the OS doesn't drop it.
+      console.log('[LocalNotif] notification tapped — app should be foreground');
+    });
+
     return result.display === 'granted';
   } catch (e) { console.warn('[LocalNotif] requestPermissions error:', e); return false; }
 }

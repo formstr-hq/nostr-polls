@@ -1,8 +1,11 @@
 package com.formstr.pollerama;
 
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Build;
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
 import androidx.work.Worker;
@@ -137,6 +140,14 @@ public class NotificationWorker extends Worker {
         // Save last check timestamp
         prefs.edit().putLong(KEY_LAST, nowSec).apply();
 
+        // PendingIntent that launches MainActivity when notification is tapped
+        Intent launchIntent = new Intent(getApplicationContext(), MainActivity.class);
+        launchIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT |
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+        PendingIntent launchPi = PendingIntent.getActivity(
+                getApplicationContext(), 0, launchIntent, piFlags);
+
         // Post notifications
         NotificationManager nm = (NotificationManager)
                 getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
@@ -150,6 +161,7 @@ public class NotificationWorker extends Worker {
                         .setContentTitle("Pollerama")
                         .setContentText(body)
                         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                        .setContentIntent(launchPi)
                         .setAutoCancel(true)
                         .build());
             }
@@ -162,6 +174,7 @@ public class NotificationWorker extends Worker {
                         .setContentTitle("Pollerama")
                         .setContentText(body)
                         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                        .setContentIntent(launchPi)
                         .setAutoCancel(true)
                         .build());
             }

@@ -293,6 +293,10 @@ export function SearchModal({ open, onClose }: Props) {
           mt: { xs: 0, sm: "8vh" },
           mx: { xs: 0, sm: 2 },
           mb: { xs: 0, sm: "auto" },
+          // Inset content below the status bar on Android/iOS.
+          // border-box sizing means the content area shrinks by this amount,
+          // so height:100dvh stays correct without overflow.
+          paddingTop: { xs: "env(safe-area-inset-top)", sm: 0 },
           height: { xs: "100dvh", sm: "auto" },
           maxHeight: { xs: "100dvh", sm: "78vh" },
           display: "flex",
