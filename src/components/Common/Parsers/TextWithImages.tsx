@@ -347,7 +347,7 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
     }
     return map;
   }, [tags]);
-  const [displayedText, setDisplayedText] = useState<string>(content);
+  const [displayedText, setDisplayedText] = useState<string>(content ?? "");
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [shouldShowTranslate, setShouldShowTranslate] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -360,7 +360,7 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
   const hasAI = true; // AI service available via nRPC
 
   useEffect(() => {
-    setDisplayedText(content);
+    setDisplayedText(content ?? "");
     if (!hasAI || !aiSettings.model) return;
 
     const detectLang = async () => {
@@ -419,6 +419,7 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
   };
 
   const renderContent = (text: string) => {
+    if (!text) return null;
     const lines = text.split(/\n/);
     return lines.map((line, lineIndex) => {
       const parts = line.split(/(\s+)/);

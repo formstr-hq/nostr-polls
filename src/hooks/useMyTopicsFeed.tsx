@@ -46,7 +46,8 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
   const deletedModerationIds = useRef<Set<string>>(new Set());
   const pendingNotesRef = useRef<Map<string, TopicNote>>(new Map());
 
-  const { isScrolledDown } = useFeedScroll();
+  const { headerProgress } = useFeedScroll();
+  const isScrolledDown = headerProgress > 0;
   const isScrolledDownRef = useRef(false);
   useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
 

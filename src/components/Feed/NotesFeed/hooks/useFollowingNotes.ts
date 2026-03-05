@@ -14,7 +14,8 @@ export const useFollowingNotes = () => {
 
   const { relays } = useRelays();
   const { user } = useUserContext();
-  const { isScrolledDown } = useFeedScroll();
+  const { headerProgress } = useFeedScroll();
+  const isScrolledDown = headerProgress > 0;
   const isScrolledDownRef = useRef(false);
   useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
 

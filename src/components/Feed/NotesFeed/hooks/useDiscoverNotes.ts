@@ -15,7 +15,8 @@ export const useDiscoverNotes = () => {
     const subscriptionHandleRef = useRef<any>(null);
     const fetchedRef = useRef(false);
     const webOfTrustRef = useRef<Set<string>>(new Set());
-    const { isScrolledDown } = useFeedScroll();
+    const { headerProgress } = useFeedScroll();
+    const isScrolledDown = headerProgress > 0;
     const isScrolledDownRef = useRef(false);
     useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
 
