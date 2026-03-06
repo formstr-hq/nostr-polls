@@ -2,6 +2,17 @@ import React, { useEffect, useRef } from "react";
 import { Box, Typography } from "@mui/material";
 import { useVideoPlayer } from "../../../contexts/VideoPlayerContext";
 
+/** Walk up the DOM to find the nearest element that actually scrolls. */
+function findScrollContainer(el: Element): Element | null {
+  let parent = el.parentElement;
+  while (parent && parent !== document.body) {
+    const { overflow, overflowY } = window.getComputedStyle(parent);
+    if (/(auto|scroll)/.test(overflow + overflowY)) return parent;
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
 declare global {
   interface Window {
     YT: any;
@@ -89,6 +100,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
         playerVars: {
           start: Math.floor(startTime),
           autoplay: isFloating ? 1 : 0,
+          playsinline: 1,
         },
         events: {
           onReady: (event: any) => {
@@ -112,10 +124,13 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, isFloating, isThisFloating]);
 
-  // Auto-float when playing and scrolled completely out of view
+  // Auto-float when playing and scrolled completely out of view.
+  // Use the nearest scrollable ancestor as root so the check works inside
+  // Virtuoso's scroll container (body never scrolls in this app).
   useEffect(() => {
     if (isFloating || !wrapperRef.current) return;
 
+    const root = findScrollContainer(wrapperRef.current);
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry.isIntersecting && isPlayingRef.current) {
@@ -123,7 +138,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
           setFloatingVideo({ type: "youtube", url, startTime: time });
         }
       },
-      { threshold: 0 }
+      { threshold: 0, root }
     );
 
     observer.observe(wrapperRef.current);

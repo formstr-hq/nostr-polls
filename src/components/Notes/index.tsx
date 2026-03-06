@@ -245,7 +245,7 @@ export const Notes: React.FC<NotesProps> = ({
   const theme = useTheme();
   const isSmall = useMediaQuery(theme.breakpoints.down("sm"));
   const isMedium = useMediaQuery(theme.breakpoints.between("sm", "md"));
-  const maxContentHeight = isSmall ? 150 : isMedium ? 250 : 350;
+  const maxContentHeight = isSmall ? 400 : isMedium ? 500 : 600;
   const primaryColor = theme.palette.primary.main;
   const subtleGradient = `linear-gradient(
     to bottom,
