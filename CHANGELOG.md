@@ -1,3 +1,9 @@
+# 1.4.0
+
+- Add PIP video player for uninterrupted 24/7 video streaming.
+- Fix feed issues
+- Add method to upload files
+
 # 1.3.0
 
 - Add Search
