@@ -1,4 +1,4 @@
-import { ReactNode, createContext, useRef, useState, useMemo } from "react";
+import { ReactNode, createContext, useRef, useState, useMemo, useCallback } from "react";
 import { Event } from "nostr-tools/lib/types/core";
 import { Profile } from "../nostr/types";
 import { Throttler } from "../nostr/requestThrottler";
@@ -35,36 +35,47 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     JSON.parse(localStorage.getItem("ai-settings") || "{}"),
   );
 
-  // Version counter to track runtime updates
-  const [version, setVersion] = useState(0);
+  // Separate version counters so profile updates don't invalidate reaction maps and vice-versa
+  const [profilesVersion, setProfilesVersion] = useState(0);
+  const [dataVersion, setDataVersion] = useState(0);
+
+  // Debounce timers — coalesce rapid per-event bumps into a single re-render
+  const profilesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dataTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const bumpProfilesVersion = useCallback(() => {
+    if (profilesTimerRef.current) clearTimeout(profilesTimerRef.current);
+    profilesTimerRef.current = setTimeout(() => setProfilesVersion((v) => v + 1), 50);
+  }, []);
+
+  const bumpDataVersion = useCallback(() => {
+    if (dataTimerRef.current) clearTimeout(dataTimerRef.current);
+    dataTimerRef.current = setTimeout(() => setDataVersion((v) => v + 1), 50);
+  }, []);
 
   // Add event to runtime store (for profiles)
-  const addEventToProfiles = (event: Event) => {
+  const addEventToProfiles = useCallback((event: Event) => {
     nostrRuntime.addEvent(event);
-    // Trigger re-render
-    setVersion((v) => v + 1);
-  };
+    bumpProfilesVersion();
+  }, [bumpProfilesVersion]);
 
   // Batch add events to runtime
-  const addEventsToProfiles = (events: Event[]) => {
+  const addEventsToProfiles = useCallback((events: Event[]) => {
     nostrRuntime.addEvents(events);
-    // Trigger re-render
-    setVersion((v) => v + 1);
-  };
+    bumpProfilesVersion();
+  }, [bumpProfilesVersion]);
 
   // Add event to runtime store (for reactions, comments, zaps, reposts)
-  const addEventToMap = (event: Event) => {
+  const addEventToMap = useCallback((event: Event) => {
     nostrRuntime.addEvent(event);
-    // Trigger re-render
-    setVersion((v) => v + 1);
-  };
+    bumpDataVersion();
+  }, [bumpDataVersion]);
 
   // Batch add events to runtime
-  const addEventsToMap = (events: Event[]) => {
+  const addEventsToMap = useCallback((events: Event[]) => {
     nostrRuntime.addEvents(events);
-    // Trigger re-render
-    setVersion((v) => v + 1);
-  };
+    bumpDataVersion();
+  }, [bumpDataVersion]);
 
   // Query runtime for profiles
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -83,7 +94,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
 
     return profileMap;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version]);
+  }, [profilesVersion]);
 
   // Query runtime for comments map (kind 1 with e tags)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,7 +113,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
 
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version]);
+  }, [dataVersion]);
 
   // Query runtime for likes map (kind 7 with e tags)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,7 +132,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
 
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version]);
+  }, [dataVersion]);
 
   // Query runtime for zaps map (kind 9735 with e tags)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -140,7 +151,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
 
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version]);
+  }, [dataVersion]);
 
   // Query runtime for reposts map (kind 6 or 16 with e tags)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -159,7 +170,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
 
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version]);
+  }, [dataVersion]);
 
   // Getter methods for individual queries
   const getProfile = (pubkey: string): Profile | undefined => {

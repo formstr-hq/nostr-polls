@@ -18,6 +18,7 @@ import { useUserContext } from "../../../hooks/useUserContext";
 import { TextWithImages } from "../Parsers/TextWithImages";
 import { calculateTimeAgo } from "../../../utils/common";
 import CommentInput from "./CommentInput";
+import { extractMentionTags } from '../../EventCreator/MentionTextArea';
 import { getColorsWithTheme } from "../../../styles/theme";
 import { useNotification } from "../../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../../constants/notifications";
@@ -92,6 +93,7 @@ const CommentSection: React.FC<CommentSectionProps> = ({
       kind: 1,
       content: content,
       tags: [
+        ...extractMentionTags(content),
         ["e", eventId, "", "root"],
         ...(parentId ? [["e", parentId, "", "reply"]] : []),
       ],

@@ -195,11 +195,11 @@ export class NostrRuntime {
         }
       );
 
-      // Timeout fallback (10s) in case EOSE never arrives
+      // Timeout fallback (2.5s) in case EOSE never arrives
       setTimeout(() => {
         handle.unsubscribe();
         resolve(collected);
-      }, 10000);
+      }, 2500);
     });
   }
 

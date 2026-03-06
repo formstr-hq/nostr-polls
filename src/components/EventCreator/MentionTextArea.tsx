@@ -21,6 +21,8 @@ interface MentionTextAreaProps {
   required?: boolean;
   minRows?: number;
   maxRows?: number;
+  /** Called when the user pastes an image/video file into the textarea */
+  onFilePaste?: (file: File, cursorPos: number) => void;
 }
 
 interface ProfileMatch {
@@ -38,6 +40,7 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
   required,
   minRows = 4,
   maxRows = 8,
+  onFilePaste,
 }) => {
   const { profiles } = useAppContext();
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -138,6 +141,18 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
     setMentionStart(-1);
   };
 
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (!onFilePaste) return;
+    const file = Array.from(e.clipboardData.files).find(
+      (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
+    );
+    if (file) {
+      e.preventDefault();
+      const cursorPos = inputRef.current?.selectionStart ?? value.length;
+      onFilePaste(file, cursorPos);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!open) return;
 
@@ -165,6 +180,7 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         required={required}
         multiline
         minRows={minRows}

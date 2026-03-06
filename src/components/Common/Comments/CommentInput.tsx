@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { TextField, Button } from "@mui/material";
+import { Button } from "@mui/material";
+import MentionTextArea from "../../EventCreator/MentionTextArea";
 
 interface CommentInputProps {
   onSubmit: (content: string) => void;
@@ -21,19 +22,18 @@ const CommentInput: React.FC<CommentInputProps> = ({
 
   return (
     <div>
-      <TextField
-        value={newComment}
-        onChange={(e) => setNewComment(e.target.value)}
+      <MentionTextArea
         label="Add a comment"
-        fullWidth
-        multiline
-        rows={2}
-        style={{ marginBottom: 8 }}
+        value={newComment}
+        onChange={setNewComment}
+        minRows={2}
+        maxRows={6}
       />
-      <Button 
-        onClick={handleSubmit} 
-        variant="contained" 
+      <Button
+        onClick={handleSubmit}
+        variant="contained"
         color="secondary"
+        style={{ marginTop: 8 }}
       >
         Submit Comment
       </Button>

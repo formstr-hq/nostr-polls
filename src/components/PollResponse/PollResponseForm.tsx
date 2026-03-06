@@ -31,6 +31,9 @@ import { MultipleChoiceOptions } from "./MultipleChoiceOptions";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { useAppContext } from "../../hooks/useAppContext";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import CellTowerIcon from "@mui/icons-material/CellTower";
+import CircularProgress from "@mui/material/CircularProgress";
+import { waitForPublish } from "../../utils/publish";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
 import { Filters } from "./Filter";
 import { useUserContext } from "../../hooks/useUserContext";
@@ -60,6 +63,22 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
   );
   const [showResults, setShowResults] = useState<boolean>(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState<boolean>(false);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [broadcastResult, setBroadcastResult] = useState<{ accepted: number; total: number } | null>(null);
+
+  const handleBroadcast = async () => {
+    if (isBroadcasting) return;
+    setIsBroadcasting(true);
+    setBroadcastResult(null);
+    try {
+      const res = await waitForPublish(relays, pollEvent);
+      setBroadcastResult({ accepted: res.accepted, total: res.total });
+    } catch {
+      setBroadcastResult({ accepted: 0, total: relays.length });
+    } finally {
+      setIsBroadcasting(false);
+    }
+  };
   const [error, setError] = useState<string>("");
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
   const [filterPubkeys, setFilterPubkeys] = useState<string[]>([]);
@@ -312,6 +331,22 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                 setIsDetailsOpen(false);
               }}
             >
+              <MenuItem
+                onClick={handleBroadcast}
+                disabled={isBroadcasting}
+                sx={{ gap: 1 }}
+              >
+                {isBroadcasting ? (
+                  <CircularProgress size={16} />
+                ) : (
+                  <CellTowerIcon fontSize="small" sx={broadcastResult ? { color: broadcastResult.accepted > 0 ? "success.main" : "error.main" } : {}} />
+                )}
+                {isBroadcasting
+                  ? "Broadcasting…"
+                  : broadcastResult
+                  ? `Broadcasted: ${broadcastResult.accepted} / ${broadcastResult.total} relays`
+                  : "Broadcast"}
+              </MenuItem>
               <MenuItem onClick={handleCopyNevent}>Copy Event Id</MenuItem>
               <MenuItem onClick={copyPollUrl}>Copy URL</MenuItem>
               <MenuItem onClick={handleCopyNpub}>Copy Author npub</MenuItem>

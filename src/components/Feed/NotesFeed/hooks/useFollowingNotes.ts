@@ -14,10 +14,7 @@ export const useFollowingNotes = () => {
 
   const { relays } = useRelays();
   const { user } = useUserContext();
-  const { headerProgress } = useFeedScroll();
-  const isScrolledDown = headerProgress > 0;
-  const isScrolledDownRef = useRef(false);
-  useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
+  const { getScrollTop } = useFeedScroll();
 
   const notes = useCallback(() => {
     if (!user?.follows?.length) return new Map<string, Event>();
@@ -51,7 +48,7 @@ export const useFollowingNotes = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.follows, version]);
 
-  // Poll for newer notes every 60s after initial load; buffer count rather than displaying immediately
+  // Poll for newer notes every 60s after initial load; buffer via pendingCount
   useEffect(() => {
     if (!user?.follows?.length || !relays?.length) return;
 
@@ -76,11 +73,23 @@ export const useFollowingNotes = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.follows, relays]);
 
-  // Merge buffered notes into the displayed list
   const mergeNewNotes = useCallback(() => {
     setVersion((v) => v + 1);
     setPendingCount(0);
   }, []);
+
+  // Fetch the original notes for any reposts in one shot, no polling loop
+  const startMissingNotesFetcher = useCallback(() => {
+    const idsToFetch = Array.from(missingNotesRef.current);
+    missingNotesRef.current.clear();
+    if (!idsToFetch.length || !relays?.length) return;
+
+    nostrRuntime
+      .querySync(relays, { kinds: [1], ids: idsToFetch })
+      .then((events) => {
+        if (events.length > 0) setVersion((v) => v + 1);
+      });
+  }, [relays]);
 
   // Load older notes (pagination down) or initial load
   const fetchNotes = async () => {
@@ -111,7 +120,7 @@ export const useFollowingNotes = () => {
           const originalNoteId = event.tags.find((t) => t[0] === "e")?.[1];
           if (originalNoteId) missingNotesRef.current.add(originalNoteId);
         }
-        if (isScrolledDownRef.current) {
+        if (getScrollTop() > 0) {
           setPendingCount((c) => c + 1);
         } else {
           setVersion((v) => v + 1);
@@ -124,45 +133,6 @@ export const useFollowingNotes = () => {
         initialLoadDoneRef.current = true;
       },
     });
-  };
-
-  const startMissingNotesFetcher = () => {
-    const idsToFetch = Array.from(missingNotesRef.current);
-    if (idsToFetch.length === 0) return;
-
-    const fetchedIds = new Set<string>();
-    const handle = nostrRuntime.subscribe(
-      relays,
-      [{ kinds: [1], ids: idsToFetch }],
-      {
-        onEvent: (event: Event) => {
-          fetchedIds.add(event.id);
-          setVersion((v) => v + 1);
-        },
-      }
-    );
-
-    const interval = setInterval(() => {
-      const stillMissing = idsToFetch.filter((id) => !fetchedIds.has(id));
-      if (stillMissing.length === 0) {
-        clearInterval(interval);
-        handle.unsubscribe();
-        missingNotesRef.current.clear();
-        return;
-      }
-      nostrRuntime.subscribe(relays, [{ kinds: [1], ids: stillMissing }], {
-        onEvent: (event: Event) => {
-          fetchedIds.add(event.id);
-          setVersion((v) => v + 1);
-        },
-      });
-    }, 1000);
-
-    setTimeout(() => {
-      clearInterval(interval);
-      handle.unsubscribe();
-      missingNotesRef.current.clear();
-    }, 5000);
   };
 
   return {

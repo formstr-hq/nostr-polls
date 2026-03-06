@@ -5,6 +5,7 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Build;
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
@@ -140,13 +141,8 @@ public class NotificationWorker extends Worker {
         // Save last check timestamp
         prefs.edit().putLong(KEY_LAST, nowSec).apply();
 
-        // PendingIntent that launches MainActivity when notification is tapped
-        Intent launchIntent = new Intent(getApplicationContext(), MainActivity.class);
-        launchIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT |
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
-        PendingIntent launchPi = PendingIntent.getActivity(
-                getApplicationContext(), 0, launchIntent, piFlags);
 
         // Post notifications
         NotificationManager nm = (NotificationManager)
@@ -155,26 +151,42 @@ public class NotificationWorker extends Worker {
         if (nm != null) {
             int dms = dmCount.get();
             if (dms > 0) {
+                // Deep link → /messages screen
+                Intent dmIntent = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("nostr-polls://app/messages"));
+                dmIntent.setClass(getApplicationContext(), MainActivity.class);
+                dmIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                PendingIntent dmPi = PendingIntent.getActivity(
+                        getApplicationContext(), 1, dmIntent, piFlags);
+
                 String body = dms == 1 ? "You have a new message" : "You have " + dms + " new messages";
                 nm.notify(NOTIF_DMS, new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
                         .setSmallIcon(R.drawable.ic_notification)
                         .setContentTitle("Pollerama")
                         .setContentText(body)
                         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                        .setContentIntent(launchPi)
+                        .setContentIntent(dmPi)
                         .setAutoCancel(true)
                         .build());
             }
 
             int events = eventCount.get();
             if (events > 0) {
+                // Deep link → /notifications screen
+                Intent eventsIntent = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("nostr-polls://app/notifications"));
+                eventsIntent.setClass(getApplicationContext(), MainActivity.class);
+                eventsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                PendingIntent eventsPi = PendingIntent.getActivity(
+                        getApplicationContext(), 2, eventsIntent, piFlags);
+
                 String body = events == 1 ? "You have a new notification" : "You have " + events + " new notifications";
                 nm.notify(NOTIF_EVENTS, new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
                         .setSmallIcon(R.drawable.ic_notification)
                         .setContentTitle("Pollerama")
                         .setContentText(body)
                         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                        .setContentIntent(launchPi)
+                        .setContentIntent(eventsPi)
                         .setAutoCancel(true)
                         .build());
             }

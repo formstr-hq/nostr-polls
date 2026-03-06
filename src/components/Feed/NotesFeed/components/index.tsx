@@ -11,9 +11,20 @@ const DiscoverFeed = lazy(() => import("./DiscoverFeed"));
 export type NoteMode = "notes" | "conversations";
 
 const NotesFeed = () => {
-  const [activeTab, setActiveTab] = useState<
-    "following" | "reacted" | "discover"
-  >("discover");
+  const NOTES_TAB_KEY = "pollerama:lastNotesTab";
+  const [activeTab, setActiveTab] = useState<"following" | "reacted" | "discover">(
+    () => {
+      const saved = localStorage.getItem(NOTES_TAB_KEY);
+      return (saved === "following" || saved === "reacted" || saved === "discover")
+        ? saved
+        : "discover";
+    }
+  );
+
+  const handleSetActiveTab = (tab: "following" | "reacted" | "discover") => {
+    setActiveTab(tab);
+    localStorage.setItem(NOTES_TAB_KEY, tab);
+  };
   const [modalOpen, setModalOpen] = useState(false);
   const [noteMode, setNoteMode] = useState<NoteMode>("notes");
   const { headerProgress } = useFeedScroll();
@@ -29,7 +40,7 @@ const NotesFeed = () => {
           opacity: 1 - headerProgress,
         }}
       >
-        <NotesFeedTabs activeTab={activeTab} setActiveTab={setActiveTab} />
+        <NotesFeedTabs activeTab={activeTab} setActiveTab={handleSetActiveTab} />
 
         <Typography sx={{ mt: 2 }}>
           {activeTab === "following"

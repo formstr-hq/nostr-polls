@@ -1,13 +1,16 @@
 import { useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { Preferences } from '@capacitor/preferences';
-import { Event } from 'nostr-tools';
+import { useNavigate } from 'react-router-dom';
+import { Event, nip19 } from 'nostr-tools';
 import { useNostrNotifications } from '../contexts/nostr-notification-context';
 import { Conversation } from '../contexts/dm-context';
 import { useDMContext } from './useDMContext';
 import { useUserContext } from './useUserContext';
 import { useRelays } from './useRelays';
-import { initLocalNotifications, fireNotification } from '../services/localNotificationService';
+import { initLocalNotifications, fireNotification, NotifExtra } from '../services/localNotificationService';
 
 // TODO: change to 60 * 60 * 1000 (1 hour) for production
 const JS_CHECK_MS = 5 * 60 * 1000; // 5 minutes — JS foreground interval
@@ -52,7 +55,32 @@ function buildDMBody(conversations: Map<string, Conversation>, userPubkey: strin
   return `${total} new messages from ${unreadConvs.length} people`;
 }
 
+/** Resolve the npub of the other participant if there's exactly one unread DM conversation */
+function getSingleDMNpub(conversations: Map<string, Conversation>, userPubkey: string | undefined): string | undefined {
+  const unreadConvs = Array.from(conversations.values()).filter(c => c.unreadCount > 0);
+  if (unreadConvs.length !== 1) return undefined;
+  const otherPubkey = unreadConvs[0].participants.find(p => p !== userPubkey);
+  if (!otherPubkey) return undefined;
+  try { return nip19.npubEncode(otherPubkey); } catch { return undefined; }
+}
+
+function handleDeepLink(url: string, navigate: ReturnType<typeof useNavigate>) {
+  console.log('[AndroidNotif] handleDeepLink:', url);
+  // nostr-polls://app/messages/npub1...  →  /messages/:npub
+  // nostr-polls://app/messages            →  /messages
+  // nostr-polls://app/notifications       →  /notifications
+  if (url.includes('/messages/')) {
+    const npub = url.split('/messages/')[1];
+    navigate(`/messages/${npub}`);
+  } else if (url.includes('/messages')) {
+    navigate('/messages');
+  } else if (url.includes('/notifications')) {
+    navigate("/notifications");
+  }
+}
+
 export function useAndroidNotifications() {
+  const navigate = useNavigate();
   const { unreadCount, notifications, lastSeen } = useNostrNotifications();
   const { unreadTotal: dmUnread, conversations } = useDMContext();
   const { user } = useUserContext();
@@ -60,15 +88,41 @@ export function useAndroidNotifications() {
   const permitted = useRef(false);
   const prevEvents = useRef(0);
   const prevDMs    = useRef(0);
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
-  // Request permission once
+  // Request permission + register listeners once
   useEffect(() => {
     console.log('[AndroidNotif] hook mounted, requesting permission');
     initLocalNotifications().then(ok => {
       console.log('[AndroidNotif] permission granted:', ok);
       permitted.current = ok;
     });
-  }, []);
+
+    // Handle taps on JS-side local notifications (app alive/backgrounded)
+    const tapSub = LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
+      const extra = action.notification.extra as NotifExtra | undefined;
+      console.log('[AndroidNotif] notification tapped, extra:', extra);
+      if (extra?.target === 'messages') {
+        navigateRef.current(extra.npub ? `/messages/${extra.npub}` : '/messages');
+      } else if (extra?.target === 'notifications') {
+        navigate("/notifications");
+      }
+    });
+
+    // Handle WorkManager deep links (app was killed, custom URL scheme)
+    App.getLaunchUrl().then(result => {
+      if (result?.url) handleDeepLink(result.url, navigateRef.current);
+    });
+    const urlSub = App.addListener('appUrlOpen', ({ url }) => {
+      handleDeepLink(url, navigateRef.current);
+    });
+
+    return () => {
+      tapSub.then(h => h.remove());
+      urlSub.then(h => h.remove());
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bridge: save pubkey for WorkManager Worker
   useEffect(() => {
@@ -92,7 +146,8 @@ export function useAndroidNotifications() {
       '| prev:', prevEvents.current, '| permitted:', permitted.current, '| hidden:', document.hidden);
     if (!permitted.current) { prevEvents.current = unreadCount; return; }
     if (unreadCount > prevEvents.current && document.hidden) {
-      fireNotification(NOTIF_ID_EVENTS, 'Pollerama', buildEventBody(notifications, lastSeen));
+      fireNotification(NOTIF_ID_EVENTS, 'Pollerama', buildEventBody(notifications, lastSeen),
+        { target: 'notifications' });
     }
     prevEvents.current = unreadCount;
   }, [unreadCount, notifications, lastSeen]);
@@ -103,7 +158,9 @@ export function useAndroidNotifications() {
       '| prev:', prevDMs.current, '| permitted:', permitted.current, '| hidden:', document.hidden);
     if (!permitted.current) { prevDMs.current = dmUnread; return; }
     if (dmUnread > prevDMs.current && document.hidden) {
-      fireNotification(NOTIF_ID_DMS, 'Pollerama', buildDMBody(conversations, user?.pubkey));
+      const npub = getSingleDMNpub(conversations, user?.pubkey);
+      const extra: NotifExtra = { target: 'messages', ...(npub ? { npub } : {}) };
+      fireNotification(NOTIF_ID_DMS, 'Pollerama', buildDMBody(conversations, user?.pubkey), extra);
     }
     prevDMs.current = dmUnread;
   }, [dmUnread, conversations, user?.pubkey]);
@@ -113,9 +170,13 @@ export function useAndroidNotifications() {
     const id = setInterval(() => {
       if (!permitted.current || !document.hidden) return;
       if (unreadCount > 0)
-        fireNotification(NOTIF_ID_EVENTS, 'Pollerama', buildEventBody(notifications, lastSeen));
-      if (dmUnread > 0)
-        fireNotification(NOTIF_ID_DMS, 'Pollerama', buildDMBody(conversations, user?.pubkey));
+        fireNotification(NOTIF_ID_EVENTS, 'Pollerama', buildEventBody(notifications, lastSeen),
+          { target: 'notifications' });
+      if (dmUnread > 0) {
+        const npub = getSingleDMNpub(conversations, user?.pubkey);
+        const extra: NotifExtra = { target: 'messages', ...(npub ? { npub } : {}) };
+        fireNotification(NOTIF_ID_DMS, 'Pollerama', buildDMBody(conversations, user?.pubkey), extra);
+      }
     }, JS_CHECK_MS);
     return () => clearInterval(id);
   }, [unreadCount, dmUnread, notifications, lastSeen, conversations, user?.pubkey]);

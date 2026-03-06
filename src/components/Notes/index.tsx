@@ -33,6 +33,8 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { useResizeObserver } from "../../hooks/useResizeObserver";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import SummarizeIcon from "@mui/icons-material/Summarize";
+import CellTowerIcon from "@mui/icons-material/CellTower";
+import { waitForPublish } from "../../utils/publish";
 import RateEventModal from "../../components/Ratings/RateEventModal";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
@@ -81,6 +83,24 @@ export const Notes: React.FC<NotesProps> = ({
   const [showContactListWarning, setShowContactListWarning] = useState(false);
   const [pendingFollowKey, setPendingFollowKey] = useState<string | null>(null);
   const { showNotification } = useNotification();
+
+  // Broadcast state
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [broadcastResult, setBroadcastResult] = useState<{ accepted: number; total: number } | null>(null);
+
+  const handleBroadcast = async () => {
+    if (isBroadcasting) return;
+    setIsBroadcasting(true);
+    setBroadcastResult(null);
+    try {
+      const res = await waitForPublish(relays, event);
+      setBroadcastResult({ accepted: res.accepted, total: res.total });
+    } catch {
+      setBroadcastResult({ accepted: 0, total: relays.length });
+    } finally {
+      setIsBroadcasting(false);
+    }
+  };
 
   // Summarization state
   const [summary, setSummary] = useState<string | null>(null);
@@ -340,6 +360,22 @@ export const Notes: React.FC<NotesProps> = ({
                   : "Summarize"}
               </MenuItem>
             )}
+            <MenuItem
+              onClick={handleBroadcast}
+              disabled={isBroadcasting}
+              sx={{ gap: 1 }}
+            >
+              {isBroadcasting ? (
+                <CircularProgress size={16} />
+              ) : (
+                <CellTowerIcon fontSize="small" sx={broadcastResult ? { color: broadcastResult.accepted > 0 ? "success.main" : "error.main" } : {}} />
+              )}
+              {isBroadcasting
+                ? "Broadcasting…"
+                : broadcastResult
+                ? `Broadcasted: ${broadcastResult.accepted} / ${broadcastResult.total} relays`
+                : "Broadcast"}
+            </MenuItem>
             <MenuItem onClick={handleCopyNevent}>Copy Event Id</MenuItem>
             <MenuItem onClick={copyNoteUrl}>Copy Link</MenuItem>
             <MenuItem onClick={handleCopyNpub}>Copy Author npub</MenuItem>

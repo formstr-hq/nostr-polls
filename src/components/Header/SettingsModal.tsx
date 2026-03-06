@@ -2,6 +2,7 @@ import { Box, Modal, Tab, Tabs, Typography, useTheme } from "@mui/material";
 import { useState } from "react";
 import { RelaySettings } from "./RelaySettings";
 import { AISettings } from "./AISettings";
+import { BlossomSettings } from "./BlossomSettings";
 
 interface SettingsModalProps {
   open: boolean;
@@ -41,10 +42,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         >
           <Tab label="Relay Settings" />
           <Tab label="AI Settings" />
+          <Tab label="Media" />
         </Tabs>
 
         {tabIndex === 0 && <RelaySettings />}
         {tabIndex === 1 && <AISettings />}
+        {tabIndex === 2 && <BlossomSettings />}
       </Box>
     </Modal>
   );

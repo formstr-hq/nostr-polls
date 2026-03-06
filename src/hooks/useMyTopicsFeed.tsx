@@ -46,10 +46,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
   const deletedModerationIds = useRef<Set<string>>(new Set());
   const pendingNotesRef = useRef<Map<string, TopicNote>>(new Map());
 
-  const { headerProgress } = useFeedScroll();
-  const isScrolledDown = headerProgress > 0;
-  const isScrolledDownRef = useRef(false);
-  useEffect(() => { isScrolledDownRef.current = isScrolledDown; }, [isScrolledDown]);
+  const { getScrollTop } = useFeedScroll();
 
   /* ------------------ moderation processing ------------------ */
 
@@ -241,7 +238,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
 
             if (topics.length === 0) return;
 
-            if (isScrolledDownRef.current) {
+            if (getScrollTop() > 0) {
               pendingNotesRef.current.set(event.id, { event, topics });
               setPendingCount((c) => c + 1);
             } else {

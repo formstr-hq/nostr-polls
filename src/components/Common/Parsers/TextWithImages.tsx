@@ -12,6 +12,7 @@ import { TranslationPopover } from "./../TranslationPopover";
 import TranslateIcon from "@mui/icons-material/Translate";
 import { isEmbeddableYouTubeUrl } from "../Utils";
 import { YouTubePlayer } from "../Youtube";
+import { InlineVideo } from "./InlineVideo";
 import { Link } from "react-router-dom";
 import { aiService } from "../../../services/ai-service";
 import { useTranslationBatch } from "../../../contexts/translation-batch-context";
@@ -33,31 +34,12 @@ const isVideoUrl = (url: string) =>
 
 // ---- Parsers ----
 
-const YouTubeParser = ({ part }: { part: string }) => {
-  return isEmbeddableYouTubeUrl(part) ? <YouTubePlayer url={part} /> : null;
-};
-
 const ImageParser = ({ part, index }: { part: string; index: number }) => {
   return isImageUrl(part) ? (
     <img
       key={index}
       src={part}
       alt={`img-${index}`}
-      style={{
-        maxWidth: "100%",
-        marginBottom: "0.5rem",
-        maxHeight: "400px",
-      }}
-    />
-  ) : null;
-};
-
-const VideoParser = ({ part, index }: { part: string; index: number }) => {
-  return isVideoUrl(part) ? (
-    <video
-      key={index}
-      src={part}
-      controls
       style={{
         maxWidth: "100%",
         marginBottom: "0.5rem",
@@ -180,6 +162,8 @@ const LightningInvoiceParser = ({
   );
 };
 
+const NIP19_BARE_PREFIXES = ["npub1", "note1", "nevent1", "nprofile1", "naddr1"];
+
 const NostrParser = ({
   part,
   index,
@@ -191,10 +175,12 @@ const NostrParser = ({
   profiles: Map<string, any> | undefined;
   fetchUserProfileThrottled: (pubkey: string) => void;
 }) => {
-  if (!part.startsWith("nostr:")) return null;
+  const isNostrUri = part.startsWith("nostr:");
+  const isBareNip19 = NIP19_BARE_PREFIXES.some((p) => part.startsWith(p));
+  if (!isNostrUri && !isBareNip19) return null;
 
   try {
-    const raw = part.replace("nostr:", "");
+    const raw = isNostrUri ? part.replace("nostr:", "") : part;
     // Strip trailing non-bech32 characters (e.g. 's possessive, punctuation)
     const bech32Match = raw.match(/^([a-zA-Z0-9]+)(.*)/);
     if (!bech32Match) return null;
@@ -427,10 +413,17 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
 
       const renderedParts = parts.map((part, index) => {
         const key = `${lineIndex}-${index}`;
+
+        // YouTube and video use hooks internally — render as proper JSX components
+        if (isEmbeddableYouTubeUrl(part)) {
+          return <YouTubePlayer key={key} url={part} />;
+        }
+        if (isVideoUrl(part)) {
+          return <InlineVideo key={key} src={part} />;
+        }
+
         const parserResult =
-          YouTubeParser({ part }) ||
           ImageParser({ part, index }) ||
-          VideoParser({ part, index }) ||
           URLParser({ part, index, color: theme.palette.primary.main }) ||
           HashtagParser({ part, index, color: theme.palette.primary.main }) ||
           NostrParser({

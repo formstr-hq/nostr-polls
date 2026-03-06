@@ -29,6 +29,8 @@ import { NostrNotificationsProvider } from "./contexts/nostr-notification-contex
 import { DMProvider } from "./contexts/dm-context";
 import { TranslationBatchProvider } from "./contexts/translation-batch-context";
 import { FeedScrollProvider, useFeedScroll } from "./contexts/FeedScrollContext";
+import { VideoPlayerProvider } from "./contexts/VideoPlayerContext";
+import { FloatingVideoPlayer } from "./components/Common/FloatingVideoPlayer";
 import { useAndroidNotifications } from "./hooks/useAndroidNotifications";
 
 import CssBaseline from "@mui/material/CssBaseline";
@@ -48,6 +50,7 @@ import ProfilePage from "./components/Profile/ProfilePage";
 import ConversationList from "./components/Messages/ConversationList";
 import ChatView from "./components/Messages/ChatView";
 import NewConversation from "./components/Messages/NewConversation";
+import NotificationsPage from "./components/Notifications/NotificationsPage";
 
 declare global {
   interface Window {
@@ -108,6 +111,7 @@ function AppContent() {
             path="/result/:eventId"
             element={<ScrollPage><PollResults /></ScrollPage>}
           />
+          <Route path="/notifications" element={<ScrollPage><NotificationsPage /></ScrollPage>} />
           <Route path="/messages" element={<ScrollPage><ConversationList /></ScrollPage>} />
           <Route path="/messages/new" element={<ScrollPage><NewConversation /></ScrollPage>} />
           <Route path="/messages/:npub" element={<ChatView />} />
@@ -159,6 +163,12 @@ const App: React.FC = () => {
     setupStatusBar();
   }, []);
 
+  // Prune events older than 7 days every 10 minutes to keep memory bounded
+  useEffect(() => {
+    const interval = setInterval(() => nostrRuntime.debug.pruneOldEvents(7), 10 * 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Reconnect relay subscriptions when the app returns from background/idle
   useEffect(() => {
     let hiddenAt = 0;
@@ -184,17 +194,20 @@ const App: React.FC = () => {
             <RelayProvider>
               <DMProvider>
               <NostrNotificationsProvider>
-                <AndroidNotifications />
                 <TranslationBatchProvider>
                   <ListProvider>
                     <RatingProvider>
                       <CssBaseline />
                       <MetadataProvider>
-                        <Router>
-                          <FeedScrollProvider>
-                            <AppContent />
-                          </FeedScrollProvider>
-                        </Router>
+                        <VideoPlayerProvider>
+                          <Router>
+                            <AndroidNotifications />
+                            <FeedScrollProvider>
+                              <AppContent />
+                            </FeedScrollProvider>
+                            <FloatingVideoPlayer />
+                          </Router>
+                        </VideoPlayerProvider>
                       </MetadataProvider>
                     </RatingProvider>
                   </ListProvider>
