@@ -8,7 +8,6 @@ import {
   ListItemText,
   Avatar,
   Divider,
-  CircularProgress,
   IconButton,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
