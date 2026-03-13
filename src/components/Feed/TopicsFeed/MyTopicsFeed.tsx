@@ -13,6 +13,7 @@ import {
   IconButton,
 } from "@mui/material";
 import ShieldIcon from "@mui/icons-material/Shield";
+import SearchIcon from "@mui/icons-material/Search";
 import { useEffect, useState } from "react";
 import { useListContext } from "../../../hooks/useListContext";
 import { useMyTopicsFeed } from "../../../hooks/useMyTopicsFeed";
@@ -24,9 +25,10 @@ import UnifiedFeed from "../UnifiedFeed";
 
 interface MyTopicsFeedProps {
   onNavigateToDiscover?: () => void;
+  onSearchClick?: () => void;
 }
 
-const MyTopicsFeed = ({ onNavigateToDiscover }: MyTopicsFeedProps) => {
+const MyTopicsFeed = ({ onNavigateToDiscover, onSearchClick }: MyTopicsFeedProps) => {
   const { myTopics } = useListContext();
   const {
     notes,
@@ -125,32 +127,23 @@ const MyTopicsFeed = ({ onNavigateToDiscover }: MyTopicsFeedProps) => {
         onShowNewItems={mergeNewNotes}
         newItemLabel="notes"
         headerContent={
-          hasModerators ? (
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                px: 1,
-                py: 0.5,
-              }}
-            >
-              <IconButton
-                size="small"
-                onClick={() => setModeratorDialogOpen(true)}
-                title="Manage moderators"
-              >
-                <ShieldIcon fontSize="small" />
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1, py: 0.5 }}>
+            {hasModerators ? (
+              <Box sx={{ display: "flex", alignItems: "center", cursor: "pointer" }} onClick={() => setModeratorDialogOpen(true)}>
+                <IconButton size="small" title="Manage moderators">
+                  <ShieldIcon fontSize="small" />
+                </IconButton>
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                  Moderators
+                </Typography>
+              </Box>
+            ) : <Box />}
+            {onSearchClick && (
+              <IconButton size="small" onClick={onSearchClick} aria-label="Search topics">
+                <SearchIcon fontSize="small" />
               </IconButton>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ ml: 0.5, cursor: "pointer" }}
-                onClick={() => setModeratorDialogOpen(true)}
-              >
-                Moderators
-              </Typography>
-            </Box>
-          ) : undefined
+            )}
+          </Box>
         }
         itemContent={(_, item) => {
           const { event, topics, hidden, moderators, moderatedTopics, myOffTopicTopics, myBlockedUserTopics } = item;

@@ -3,7 +3,6 @@ import { Box, CircularProgress, Fab } from "@mui/material";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { useNotification } from "../../contexts/notification-context";
 import useTopicExplorerScroll from "../../hooks/useTopicExplorerScroll";
-import { useFeedScroll } from "../../contexts/FeedScrollContext";
 import PullToRefresh from "../Common/PullToRefresh";
 
 interface UnifiedFeedProps<T> {
@@ -74,8 +73,6 @@ function UnifiedFeed<T>({
   const isEmbedded = !!customScrollParent;
   const isNested = !!scrollContainerRef;
   const isImmersive = !isEmbedded && !isNested;
-
-  const { reportScroll } = useFeedScroll();
 
   // Only active in nested (topic explorer) mode
   useTopicExplorerScroll(
@@ -159,14 +156,10 @@ function UnifiedFeed<T>({
             endReached={onEndReached}
             startReached={onStartReached}
             followOutput={followOutput}
-            increaseViewportBy={{ top: 2000, bottom: 1200 }}
-            defaultItemHeight={600}
+            increaseViewportBy={{ top: 400, bottom: 600 }}
+            defaultItemHeight={380}
             scrollerRef={(el) => { virtuosoScrollerRef.current = el as HTMLElement | null; }}
-            onScroll={
-              isImmersive
-                ? (e) => reportScroll(e.currentTarget.scrollTop)
-                : undefined
-            }
+            onScroll={undefined}
             components={{
               Footer: () =>
                 loadingMore ? (

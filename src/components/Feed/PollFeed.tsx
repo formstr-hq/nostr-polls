@@ -4,19 +4,14 @@ import { verifyEvent } from "nostr-tools";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useRelays } from "../../hooks/useRelays";
 import { useReports } from "../../hooks/useReports";
-import {
-  Select,
-  MenuItem,
-  Box,
-  Typography,
-} from "@mui/material";
-import { styled } from "@mui/system";
+import { Box, Typography } from "@mui/material";
 import { nostrRuntime } from "../../singletons";
 import { SubscriptionHandle } from "../../nostrRuntime/types";
 import UnifiedFeed from "./UnifiedFeed";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import ReplayIcon from "@mui/icons-material/Replay";
 import OverlappingAvatars from "../Common/OverlappingAvatars";
+import { useSubNav } from "../../contexts/SubNavContext";
 
 const KIND_POLL = 1068;
 const KIND_RESPONSE = [1018, 1070];
@@ -25,18 +20,6 @@ const KIND_REPOST = 16;
 // Stable empty array — avoids creating a new reference on every render for
 // polls that have no reposts, which would defeat React.memo on PollFeedItem.
 const EMPTY_REPOSTS: Event[] = [];
-
-const StyledSelect = styled(Select)`
-  &::before,
-  &::after {
-    border-bottom: none !important;
-  }
-`;
-
-const CenteredBox = styled(Box)`
-  display: flex;
-  justify-content: center;
-`;
 
 // ---------------------------------------------------------------------------
 // PollFeedItem
@@ -59,7 +42,7 @@ const PollFeedItem = React.memo(
   ({ event, reposts, userResponse }: PollFeedItemProps) => {
     const repostedBy = reposts.map((r) => r.pubkey);
     return (
-      <Box sx={{ margin: "20px auto", width: "100%", maxWidth: "600px" }}>
+      <Box sx={{ my: "20px", mx: { xs: 0, sm: "auto" }, width: "100%", maxWidth: { xs: "100%", sm: "600px" } }}>
         {repostedBy.length > 0 && (
           <Box
             sx={{
@@ -89,9 +72,11 @@ export const PollFeed = () => {
   const [pollEvents, setPollEvents] = useState<Event[]>([]);
   const [repostEvents, setRepostEvents] = useState<Event[]>([]);
   const [userResponses, setUserResponses] = useState<Event[]>([]);
-  const [eventSource, setEventSource] = useState<
-    "global" | "following" | "webOfTrust"
-  >("global");
+  const POLL_SOURCE_KEY = "pollerama:pollSource";
+  const [eventSource, setEventSource] = useState<"global" | "following" | "webOfTrust">(() => {
+    const saved = localStorage.getItem("pollerama:pollSource");
+    return (saved === "following" || saved === "webOfTrust") ? saved : "global";
+  });
   const [feedSubscription, setFeedSubscription] = useState<
     SubscriptionHandle | undefined
   >();
@@ -104,6 +89,34 @@ export const PollFeed = () => {
   const { user } = useUserContext();
   const { relays } = useRelays();
   const { requestReportCheck, requestUserReportCheck } = useReports();
+  const { setItems, clearItems } = useSubNav();
+
+  useEffect(() => {
+    localStorage.setItem("pollerama:pollSource", eventSource);
+    setItems([
+      {
+        key: "global",
+        label: "Global",
+        active: eventSource === "global",
+        onClick: () => setEventSource("global"),
+      },
+      {
+        key: "following",
+        label: "Following",
+        active: eventSource === "following",
+        onClick: () => setEventSource("following"),
+        disabled: !user || !user.follows?.length,
+      },
+      {
+        key: "webOfTrust",
+        label: "Web of Trust",
+        active: eventSource === "webOfTrust",
+        onClick: () => setEventSource("webOfTrust"),
+        disabled: !user || !user.webOfTrust || !user.webOfTrust.size,
+      },
+    ]);
+    return () => clearItems();
+  }, [eventSource, user, setItems, clearItems]);
 
   const mergeEvents = (existing: Event[], incoming: Event[]): Event[] => {
     const map = new Map(existing.map((e) => [e.id, e]));
@@ -371,32 +384,6 @@ export const PollFeed = () => {
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <CenteredBox>
-        <StyledSelect
-          variant="standard"
-          onChange={(e) =>
-            setEventSource(
-              e.target.value as "global" | "following" | "webOfTrust"
-            )
-          }
-          value={eventSource}
-        >
-          <MenuItem value="global">global polls</MenuItem>
-          <MenuItem
-            value="following"
-            disabled={!user || !user.follows?.length}
-          >
-            polls from people you follow
-          </MenuItem>
-          <MenuItem
-            value="webOfTrust"
-            disabled={!user || !user.webOfTrust || !user.webOfTrust.size}
-          >
-            polls from your web of trust
-          </MenuItem>
-        </StyledSelect>
-      </CenteredBox>
-
       <Box sx={{ flex: 1, minHeight: 0 }}>
         <UnifiedFeed
           data={combinedEvents}

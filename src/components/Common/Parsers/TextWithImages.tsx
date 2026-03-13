@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { PrepareNote } from "../../Notes/PrepareNote";
 import { nip19 } from "nostr-tools";
 import { isImageUrl } from "../../../utils/common";
@@ -34,19 +35,60 @@ const isVideoUrl = (url: string) =>
 
 // ---- Parsers ----
 
+// Stateful lightbox wrapper — must be a proper component (not an inline call)
+// so that useState is always called at a stable component boundary.
+const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, index }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <img
+        src={src}
+        alt={`img-${index}`}
+        onClick={() => setOpen(true)}
+        style={{
+          display: "block",
+          width: "100%",
+          height: "220px",
+          objectFit: "cover",
+          marginBottom: "0.5rem",
+          cursor: "pointer",
+          borderRadius: "6px",
+        }}
+      />
+      {open && createPortal(
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1400,
+            background: "rgba(0,0,0,0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={src}
+            alt={`img-${index}-full`}
+            style={{
+              maxWidth: "92vw",
+              maxHeight: "88vh",
+              objectFit: "contain",
+              borderRadius: "8px",
+            }}
+          />
+        </div>,
+        document.body
+      )}
+    </>
+  );
+};
+
+// ImageParser itself has no hooks — safe to call as a plain function inside render loops.
 const ImageParser = ({ part, index }: { part: string; index: number }) => {
-  return isImageUrl(part) ? (
-    <img
-      key={index}
-      src={part}
-      alt={`img-${index}`}
-      style={{
-        maxWidth: "100%",
-        marginBottom: "0.5rem",
-        maxHeight: "400px",
-      }}
-    />
-  ) : null;
+  return isImageUrl(part) ? <ImageWithLightbox src={part} index={index} /> : null;
 };
 
 const URLParser = ({ part, index, color }: { part: string; index: number; color: string }) => {

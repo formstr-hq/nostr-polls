@@ -205,6 +205,8 @@ const TopicCard: React.FC<TopicCardProps> = ({ tag, metadataEvent }) => {
             flexDirection: "column",
             alignItems: "stretch",
             flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
             px: 2,
             py: 1.5,
             transition: "box-shadow 0.2s",

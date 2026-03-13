@@ -1,8 +1,7 @@
-import React, { useState, lazy, Suspense, useRef, useLayoutEffect } from "react";
+import React, { useState, lazy, Suspense, useEffect } from "react";
 import { Typography, CircularProgress, Chip, Box } from "@mui/material";
 import RateEventModal from "../../../Ratings/RateEventModal";
-import NotesFeedTabs from "./NotesFeedTabs";
-import { useFeedScroll } from "../../../../contexts/FeedScrollContext";
+import { useSubNav } from "../../../../contexts/SubNavContext";
 
 const FollowingFeed = lazy(() => import("./FollowingFeed"));
 const ReactedFeed = lazy(() => import("./ReactedFeed"));
@@ -27,59 +26,63 @@ const NotesFeed = () => {
   };
   const [modalOpen, setModalOpen] = useState(false);
   const [noteMode, setNoteMode] = useState<NoteMode>("notes");
-  const { headerProgress } = useFeedScroll();
+  const { setItems, clearItems } = useSubNav();
 
-  // Measure the actual rendered height of the sub-tabs section so the
-  // collapse animation has no dead zone (same pattern as App.tsx header).
-  const subTabsInnerRef = useRef<HTMLDivElement>(null);
-  const [subTabsH, setSubTabsH] = useState(126);
-  useLayoutEffect(() => {
-    if (subTabsInnerRef.current) {
-      setSubTabsH(subTabsInnerRef.current.offsetHeight);
-    }
-  }, [activeTab]); // re-measure if tab changes (filter chips appear/disappear)
+  useEffect(() => {
+    setItems([
+      {
+        key: "discover",
+        label: "Discover",
+        active: activeTab === "discover",
+        onClick: () => handleSetActiveTab("discover"),
+      },
+      {
+        key: "following",
+        label: "Following",
+        active: activeTab === "following",
+        onClick: () => handleSetActiveTab("following"),
+      },
+      {
+        key: "reacted",
+        label: "Reacted",
+        active: activeTab === "reacted",
+        onClick: () => handleSetActiveTab("reacted"),
+      },
+    ]);
+    return () => clearItems();
+  }, [activeTab, setItems, clearItems]);
 
   const showNoteFilter = activeTab === "following" || activeTab === "discover";
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <Box
-        sx={{
-          overflow: "hidden",
-          height: Math.max(0, subTabsH * (1 - headerProgress)),
-          opacity: 1 - headerProgress,
-        }}
-      >
-        <div ref={subTabsInnerRef}>
-          <NotesFeedTabs activeTab={activeTab} setActiveTab={handleSetActiveTab} />
+      <Box sx={{ flexShrink: 0 }}>
+        <Typography sx={{ mt: 2 }}>
+          {activeTab === "following"
+            ? "Notes from people you follow"
+            : activeTab === "reacted"
+            ? "Notes reacted to by contacts"
+            : "Discover new posts from friends of friends"}
+        </Typography>
 
-          <Typography sx={{ mt: 2 }}>
-            {activeTab === "following"
-              ? "Notes from people you follow"
-              : activeTab === "reacted"
-              ? "Notes reacted to by contacts"
-              : "Discover new posts from friends of friends"}
-          </Typography>
-
-          {showNoteFilter && (
-            <Box display="flex" gap={1} sx={{ mt: 1, mb: 1, ml: 1 }}>
-              <Chip
-                label="Notes"
-                size="small"
-                variant={noteMode === "notes" ? "filled" : "outlined"}
-                color={noteMode === "notes" ? "primary" : "default"}
-                onClick={() => setNoteMode("notes")}
-              />
-              <Chip
-                label="Conversations"
-                size="small"
-                variant={noteMode === "conversations" ? "filled" : "outlined"}
-                color={noteMode === "conversations" ? "primary" : "default"}
-                onClick={() => setNoteMode("conversations")}
-              />
-            </Box>
-          )}
-        </div>
+        {showNoteFilter && (
+          <Box display="flex" gap={1} sx={{ mt: 1, mb: 1, ml: 1 }}>
+            <Chip
+              label="Notes"
+              size="small"
+              variant={noteMode === "notes" ? "filled" : "outlined"}
+              color={noteMode === "notes" ? "primary" : "default"}
+              onClick={() => setNoteMode("notes")}
+            />
+            <Chip
+              label="Conversations"
+              size="small"
+              variant={noteMode === "conversations" ? "filled" : "outlined"}
+              color={noteMode === "conversations" ? "primary" : "default"}
+              onClick={() => setNoteMode("conversations")}
+            />
+          </Box>
+        )}
       </Box>
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>

@@ -7,6 +7,7 @@ export const NOTIFICATION_MESSAGES = {
   POLL_URL_COPY_FAILED: "Failed to copy poll URL.",
   EVENT_COPY_FAILED: "Failed to copy event.",
   COPY_FAILED: "Failed to copy to clipboard.",
+  RAW_EVENT_COPIED: "Raw event copied to clipboard!",
 
   // Authentication
   ANONYMOUS_LOGIN: "Login not found, submitting anonymously",

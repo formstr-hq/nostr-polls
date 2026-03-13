@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { useRelays } from "../../../hooks/useRelays";
 import { useNavigate, Outlet, useParams } from "react-router-dom";
@@ -13,10 +13,6 @@ import {
   TextField,
   DialogActions,
   Button,
-  Tabs,
-  Tab,
-  useTheme,
-  useMediaQuery,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import { nostrRuntime } from "../../../singletons";
@@ -25,20 +21,18 @@ import TopicCard from "./TopicsCard";
 import { useListContext } from "../../../hooks/useListContext";
 import MyTopicsFeed from "./MyTopicsFeed";
 import { useUserContext } from "../../../hooks/useUserContext";
-import { useFeedScroll } from "../../../contexts/FeedScrollContext";
+import { useSubNav } from "../../../contexts/SubNavContext";
 
 const TopicsFeed: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<
-    "discover" | "myTopics" | "interests"
-  >("interests");
-  const { headerProgress } = useFeedScroll();
+  const [activeTab, setActiveTab] = useState<"discover" | "myTopics" | "interests">(() => {
+    const saved = localStorage.getItem("pollerama:lastTopicsTab");
+    return (saved === "discover" || saved === "myTopics") ? saved : "interests";
+  });
   const [tagsMap, setTagsMap] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [metadataMap, setMetadataMap] = useState<Map<string, Event>>(new Map());
-
-  const theme = useTheme();
 
   const { relays } = useRelays();
   const { myTopics } = useListContext();
@@ -47,7 +41,36 @@ const TopicsFeed: React.FC = () => {
   const { user, requestLogin } = useUserContext();
   const subRef = useRef<ReturnType<typeof nostrRuntime.subscribe> | null>(null);
   const isMounted = useRef(true);
-  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
+  const { setItems, clearItems } = useSubNav();
+
+  const handleTabChange = useCallback((tab: "discover" | "myTopics" | "interests") => {
+    localStorage.setItem("pollerama:lastTopicsTab", tab);
+    setActiveTab(tab);
+  }, []);
+
+  useEffect(() => {
+    setItems([
+      {
+        key: "interests",
+        label: "My Interests",
+        active: activeTab === "interests",
+        onClick: () => handleTabChange("interests"),
+      },
+      {
+        key: "myTopics",
+        label: "Topics",
+        active: activeTab === "myTopics",
+        onClick: () => handleTabChange("myTopics"),
+      },
+      {
+        key: "discover",
+        label: "Discover",
+        active: activeTab === "discover",
+        onClick: () => handleTabChange("discover"),
+      },
+    ]);
+    return () => clearItems();
+  }, [activeTab, setItems, clearItems, handleTabChange]);
 
   function parseRatingDTag(dTagValue: string): { type: string; id: string } {
     const parts = dTagValue.split(":");
@@ -179,69 +202,23 @@ const TopicsFeed: React.FC = () => {
   return (
     <Box
       sx={{
-        px: 2,
+        px: { xs: 0, sm: 2 },
         height: "100%",
         display: "flex",
         flexDirection: "column",
       }}
     >
-      <Box
-        sx={{
-          overflow: "hidden",
-          height: Math.max(0, 64 * (1 - headerProgress)),
-          opacity: 1 - headerProgress,
-        }}
-      >
-        <Box
-          display="flex"
-          justifyContent="space-between"
-          alignItems="flex-start"
-        >
-          <Tabs
-            value={activeTab}
-            onChange={(_, newValue) => setActiveTab(newValue)}
-            variant="scrollable"
-            scrollButtons="auto"
-            allowScrollButtonsMobile
-            sx={{
-              mb: 2,
-              borderBottom: `1px solid ${theme.palette.divider}`,
-              "& .MuiTab-root": {
-                textTransform: "none",
-                minWidth: isMobile ? 80 : 120,
-                fontWeight: 500,
-              },
-            }}
-          >
-            <Tab
-              label="Notes from Interests"
-              value="interests"
-              sx={{ py: 0, textTransform: "none" }}
-            />
-            <Tab
-              label="My Interests"
-              value="myTopics"
-              sx={{ py: 0, textTransform: "none" }}
-            />
-            <Tab
-              label="Recently Rated"
-              value="discover"
-              sx={{ py: 0, textTransform: "none" }}
-            />
-          </Tabs>
-          <IconButton
-            onClick={() => setSearchOpen(true)}
-            aria-label="Search topics"
-            sx={{ mt: -1 }}
-          >
+      {activeTab !== "interests" && (
+        <Box sx={{ flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
+          <IconButton onClick={() => setSearchOpen(true)} aria-label="Search topics">
             <SearchIcon />
           </IconButton>
         </Box>
-      </Box>
+      )}
 
       <Box sx={{ flexGrow: 1, minHeight: 0 }}>
         {activeTab === "interests" ? (
-          <MyTopicsFeed onNavigateToDiscover={() => setActiveTab("discover")} />
+          <MyTopicsFeed onNavigateToDiscover={() => handleTabChange("discover")} onSearchClick={() => setSearchOpen(true)} />
         ) : loading && activeTab === "discover" ? (
           // Loading state for discover tab
           <Box display="flex" justifyContent="center" py={6}>

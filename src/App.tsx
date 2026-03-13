@@ -1,5 +1,5 @@
 // App.tsx
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect } from "react";
 import {
   BrowserRouter as Router,
   Route,
@@ -30,13 +30,16 @@ import { NostrNotificationsProvider } from "./contexts/nostr-notification-contex
 import { DMProvider } from "./contexts/dm-context";
 import { ReportsProvider } from "./contexts/reports-context";
 import { TranslationBatchProvider } from "./contexts/translation-batch-context";
-import { FeedScrollProvider, useFeedScroll } from "./contexts/FeedScrollContext";
+import { FeedScrollProvider } from "./contexts/FeedScrollContext";
+import { SubNavProvider } from "./contexts/SubNavContext";
+import NavSidebar from "./components/SidePane";
 import { VideoPlayerProvider } from "./contexts/VideoPlayerContext";
 import { FloatingVideoPlayer } from "./components/Common/FloatingVideoPlayer";
 import { useAndroidNotifications } from "./hooks/useAndroidNotifications";
 
 import CssBaseline from "@mui/material/CssBaseline";
-import { ThemeProvider, Box } from "@mui/material";
+import { ThemeProvider, Box, Fab } from "@mui/material";
+import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import { baseTheme } from "./styles/theme";
 
 import EventList from "./components/Feed/FeedsLayout";
@@ -65,37 +68,37 @@ function AndroidNotifications() {
   return null;
 }
 
-// Inner component: reads scroll state and renders layout
+// Inner component: static layout — header on top, sidebar + content below
 function AppContent() {
-  const { headerProgress } = useFeedScroll();
-  const innerRef = useRef<HTMLDivElement>(null);
-  const [headerH, setHeaderH] = useState(80);
-
-  // Measure actual header height once on mount so the animation has no dead zone
-  useLayoutEffect(() => {
-    if (innerRef.current) setHeaderH(innerRef.current.offsetHeight);
-  }, []);
+  const [sidebarOpen, setSidebarOpen] = React.useState(
+    () => localStorage.getItem("pollerama:sidebarOpen") !== "false"
+  );
+  const toggleSidebar = () =>
+    setSidebarOpen((prev) => {
+      localStorage.setItem("pollerama:sidebarOpen", String(!prev));
+      return !prev;
+    });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Header collapses in sync with scroll */}
-      <Box
-        sx={{
-          overflow: "hidden",
-          height: Math.max(0, headerH * (1 - headerProgress)),
-          opacity: 1 - headerProgress,
-        }}
-      >
-        <div ref={innerRef}>
-          <div className="header-safe-area">
-            <Header />
-          </div>
-        </div>
-      </Box>
+      <div className="header-safe-area">
+        <Header />
+      </div>
 
-      {/* Routes fill remaining space */}
-      <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        <Routes>
+      {/* Sidebar + routes side by side — both heights are constant */}
+      <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex" }}>
+        <NavSidebar open={sidebarOpen} onToggle={toggleSidebar} />
+        <Box sx={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+          {!sidebarOpen && (
+            <Fab
+              size="small"
+              onClick={toggleSidebar}
+              sx={{ position: "fixed", bottom: 20, left: 12, zIndex: 1200 }}
+            >
+              <MenuOpenIcon fontSize="small" />
+            </Fab>
+          )}
+          <Routes>
           <Route path="/create" element={<ScrollPage><EventCreator /></ScrollPage>} />
           <Route
             path="/respond/:eventId"
@@ -144,6 +147,7 @@ function AppContent() {
             element={<Navigate to={`/feeds/${localStorage.getItem("pollerama:lastFeed") || "polls"}`} replace />}
           />
         </Routes>
+        </Box>
       </Box>
     </div>
   );
@@ -207,7 +211,9 @@ const App: React.FC = () => {
                           <Router>
                             <AndroidNotifications />
                             <FeedScrollProvider>
-                              <AppContent />
+                              <SubNavProvider>
+                                <AppContent />
+                              </SubNavProvider>
                             </FeedScrollProvider>
                             <FloatingVideoPlayer />
                           </Router>

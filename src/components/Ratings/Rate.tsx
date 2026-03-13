@@ -61,7 +61,7 @@ const Rate: React.FC<Props> = ({ entityId, entityType = "event" }) => {
         e.stopPropagation();
       }}
     >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
         <MuiRating
           name={`rating-${entityId}`}
           value={

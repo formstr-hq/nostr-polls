@@ -11,7 +11,7 @@ const useStyles = makeStyles((theme) => ({
   root: {
     margin: "20px auto",
     width: "100%",
-    maxWidth: "600px",
+    maxWidth: "min(600px, 100%)",
   },
   repostText: {
     fontSize: "0.75rem",
