@@ -58,7 +58,7 @@ export function usePollResults(
       subRef.current?.unsubscribe();
       subRef.current = null;
     };
-  }, [enabled, pollEvent.id, difficulty, filterPubkeys, userRelays]);
+  }, [enabled, pollEvent.id, pollEvent.tags, difficulty, filterPubkeys, userRelays]);
 
   const options = useMemo(
     () => pollEvent.tags.filter((t) => t[0] === "option"),

@@ -72,7 +72,6 @@ export const PollFeed = () => {
   const [pollEvents, setPollEvents] = useState<Event[]>([]);
   const [repostEvents, setRepostEvents] = useState<Event[]>([]);
   const [userResponses, setUserResponses] = useState<Event[]>([]);
-  const POLL_SOURCE_KEY = "pollerama:pollSource";
   const [eventSource, setEventSource] = useState<"global" | "following" | "webOfTrust">(() => {
     const saved = localStorage.getItem("pollerama:pollSource");
     return (saved === "following" || saved === "webOfTrust") ? saved : "global";
