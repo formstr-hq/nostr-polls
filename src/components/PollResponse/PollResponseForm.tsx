@@ -60,6 +60,9 @@ import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import PollOptions from "./PollOptions";
 import { usePollResults } from "../../hooks/usePollResults";
 import { useBackClose } from "../../hooks/useBackClose";
+import InlineNuance, { NuanceResult } from "./InlineNuance";
+import { useNuanceOptions, NuanceOption } from "../../hooks/useNuanceOptions";
+import Collapse from "@mui/material/Collapse";
 
 interface PollResponseFormProps {
   pollEvent: Event;
@@ -101,6 +104,15 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
   const [reportAuthorDialogOpen, setReportAuthorDialogOpen] = useState(false);
   const [showReportedAnyway, setShowReportedAnyway] = useState(false);
 
+  // Inline nuance: expands on first Submit click, emits on second.
+  const [nuanceExpanded, setNuanceExpanded] = useState(false);
+  const [nuanceText, setNuanceText] = useState("");
+  const [cosignedOption, setCosignedOption] = useState<NuanceOption | null>(null);
+  const [nuanceSubmitted, setNuanceSubmitted] = useState(false);
+  const [confirmationNuance, setConfirmationNuance] = useState<NuanceResult | null>(null);
+  const [selectionTimestamp, setSelectionTimestamp] = useState<number | null>(null);
+  const [pendingResponseUser, setPendingResponseUser] = useState<import("../../contexts/user-context").User | null>(null);
+
   const navigate = useNavigate();
   const { showNotification } = useNotification();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
@@ -133,6 +145,42 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     filterPubkeys,
     showResults
   );
+
+  // Nuance options — only fetched when the inline nuance section is expanded.
+  const nuanceOptionId = nuanceExpanded && responses.length === 1 ? responses[0] : null;
+  const { options: nuanceOptions, loading: nuanceLoading } = useNuanceOptions(
+    pollEvent,
+    nuanceOptionId,
+    nuanceExpanded
+  );
+
+  // Reset nuance state when option selection changes while expanded.
+  const prevResponsesRef = useRef(responses);
+  useEffect(() => {
+    if (nuanceExpanded && prevResponsesRef.current !== responses) {
+      setNuanceText("");
+      setCosignedOption(null);
+    }
+    prevResponsesRef.current = responses;
+  }, [responses, nuanceExpanded]);
+
+  // Expiry safety: auto-submit if poll closes while nuance is open.
+  useEffect(() => {
+    if (!nuanceExpanded || !pollExpiration || nuanceSubmitted) return;
+    const expiresAt = Number(pollExpiration) * 1000;
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) {
+      // Already expired — submit immediately with whatever we have.
+      handleAutoSubmit();
+      return;
+    }
+    const timer = setTimeout(() => handleAutoSubmit(), remaining);
+    return () => clearTimeout(timer);
+  }, [nuanceExpanded, pollExpiration, nuanceSubmitted]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectedOptionLabel = responses.length === 1
+    ? options.find(([, id]) => id === responses[0])?.[2] ?? ""
+    : "";
 
   // Check whether the content area overflows its maxHeight cap
   const checkOverflow = () => {
@@ -212,37 +260,42 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     if (error) setError("");
     if (pollType === "singlechoice") {
       setResponses([optionValue]);
+      setSelectionTimestamp(Math.floor(Date.now() / 1000));
     } else {
-      setResponses((prev) =>
-        prev.includes(optionValue)
+      setResponses((prev) => {
+        const next = prev.includes(optionValue)
           ? prev.filter((v) => v !== optionValue)
-          : [...prev, optionValue]
-      );
+          : [...prev, optionValue];
+        if (next.length > 0) setSelectionTimestamp(Math.floor(Date.now() / 1000));
+        return next;
+      });
     }
   };
 
-  const handleSubmitResponse = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (responses.length === 0) {
-      setError("Please select at least one option before submitting.");
-      return;
+  /** Emits the signed kind:1018 vote event, optionally with a nuance tag. */
+  const emitVoteEvent = async (
+    responseUser: NonNullable<typeof user>,
+    createdAt: number,
+    nuance?: NuanceResult
+  ) => {
+    const nuanceTags: string[][] = [];
+    if (nuance?.type === "cosign") {
+      nuanceTags.push(["nuance", nuance.eventId]);
+    } else if (nuance?.type === "freeform") {
+      nuanceTags.push(["nuance", nuance.text]);
     }
-
-    let responseUser = user;
-    if (!user) {
-      showNotification(NOTIFICATION_MESSAGES.ANONYMOUS_LOGIN, "success");
-      const secret = generateSecretKey();
-      const pubkey = getPublicKey(secret);
-      responseUser = { pubkey, privateKey: bytesToHex(secret) };
-      setUser(responseUser);
-    }
+    // nuance.type === "skip" → no nuance tag
 
     const responseEvent = {
       kind: 1018,
       content: "",
-      tags: [["e", pollEvent.id], ...responses.map((r) => ["response", r])],
-      created_at: Math.floor(Date.now() / 1000),
-      pubkey: responseUser!.pubkey,
+      tags: [
+        ["e", pollEvent.id],
+        ...responses.map((r) => ["response", r]),
+        ...nuanceTags,
+      ],
+      created_at: createdAt,
+      pubkey: responseUser.pubkey,
     };
 
     let useEvent = responseEvent;
@@ -254,9 +307,9 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     }
 
     setShowPoWModal(false);
-    const signedResponse = await signEvent(useEvent, responseUser!.privateKey);
-    const eventRelays = pollEvent.tags.filter((t) => t[0] === "relay").map((t) => t[1]);
-    const publishRelays = eventRelays.length ? eventRelays : relays;
+    const signedResponse = await signEvent(useEvent, responseUser.privateKey);
+    const voteRelays = pollEvent.tags.filter((t) => t[0] === "relay").map((t) => t[1]);
+    const publishRelays = voteRelays.length ? voteRelays : relays;
     const result = await waitForPublish(publishRelays, signedResponse!);
     openDiagnostic(signedResponse!, result, "Vote publish results");
     if (result.ok) {
@@ -270,6 +323,56 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     }
     setHasSubmitted(true);
     setShowResults(true);
+  };
+
+  const buildNuanceResult = (): NuanceResult => {
+    if (cosignedOption) {
+      return { type: "cosign", eventId: cosignedOption.sourceEventId };
+    }
+    if (nuanceText.trim()) {
+      return { type: "freeform", text: nuanceText.trim() };
+    }
+    return { type: "skip" };
+  };
+
+  const handleAutoSubmit = async () => {
+    if (!pendingResponseUser || nuanceSubmitted) return;
+    const nuance = buildNuanceResult();
+    const createdAt = selectionTimestamp ?? Math.floor(Date.now() / 1000);
+    setConfirmationNuance(nuance);
+    await emitVoteEvent(pendingResponseUser, createdAt, nuance);
+    setNuanceSubmitted(true);
+  };
+
+  const handleSubmitResponse = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (responses.length === 0) {
+      setError("Please select at least one option before submitting.");
+      return;
+    }
+
+    // First click: expand nuance area
+    if (!nuanceExpanded) {
+      let responseUser = user;
+      if (!user) {
+        showNotification(NOTIFICATION_MESSAGES.ANONYMOUS_LOGIN, "success");
+        const secret = generateSecretKey();
+        const pubkey = getPublicKey(secret);
+        responseUser = { pubkey, privateKey: bytesToHex(secret) };
+        setUser(responseUser);
+      }
+      setPendingResponseUser(responseUser);
+      setNuanceExpanded(true);
+      return;
+    }
+
+    // Second click: emit vote with nuance
+    if (!pendingResponseUser) return;
+    const nuance = buildNuanceResult();
+    const createdAt = selectionTimestamp ?? Math.floor(Date.now() / 1000);
+    setConfirmationNuance(nuance);
+    await emitVoteEvent(pendingResponseUser, createdAt, nuance);
+    setNuanceSubmitted(true);
   };
 
   const handleCopyNevent = async () => {
@@ -516,6 +619,22 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                   tags={pollEvent.tags}
                 />
 
+                {/* Inline nuance area — expands between options and action buttons */}
+                <Collapse in={nuanceExpanded} timeout={250} unmountOnExit>
+                  <InlineNuance
+                    optionLabel={selectedOptionLabel}
+                    nuanceText={nuanceText}
+                    onNuanceTextChange={setNuanceText}
+                    cosignedOption={cosignedOption}
+                    onCosign={setCosignedOption}
+                    nuanceOptions={nuanceOptions}
+                    nuanceLoading={nuanceLoading}
+                    disabled={nuanceSubmitted}
+                    submitted={nuanceSubmitted}
+                    confirmationNuance={confirmationNuance}
+                  />
+                </Collapse>
+
                 {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
 
                 {/* See more overlay */}
@@ -554,8 +673,14 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                 }}
               >
                 {displaySubmit() ? (
-                  <Button type="submit" variant="contained" color="primary">
-                    {userResponse || hasSubmitted ? "Update Vote" : "Submit Response"}
+                  <Button type="submit" variant="contained" color="primary" disabled={nuanceSubmitted}>
+                    {nuanceSubmitted
+                      ? "Voted"
+                      : nuanceExpanded
+                        ? "Vote"
+                        : userResponse || hasSubmitted
+                          ? "Update Vote"
+                          : "Submit Response"}
                   </Button>
                 ) : (
                   <div />
@@ -592,6 +717,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
           relays={eventRelays}
         />
       </Card>
+
 
       <ProofofWorkModal
         show={showPoWModal}

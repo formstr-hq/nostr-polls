@@ -474,6 +474,7 @@ const PollTemplateForm: React.FC<{
           />
         </Box>
 
+
         <Box sx={{ pt: 2 }}>
           <Box display="flex" flexDirection="column" gap={2}>
             <Button type="submit" variant="contained" disabled={isSubmitting}>
