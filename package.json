@@ -47,6 +47,13 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
+  "jest": {
+    "moduleNameMapper": {
+      "^nostr-tools/nip46$": "<rootDir>/node_modules/nostr-tools/lib/cjs/nip46.js",
+      "^@mui/material/styles/useTheme$": "<rootDir>/node_modules/@mui/material/node/styles/useTheme.js",
+      "^react-router/dist$": "<rootDir>/node_modules/react-router/dist/main.js"
+    }
+  },
   "eslintConfig": {
     "extends": [
       "react-app",

@@ -1,9 +1,25 @@
-import React from 'react';
-import { render, screen } from '@testing-library/react';
-import App from './App';
+import React from "react";
+import { render, screen } from "@testing-library/react";
+import App from "./App";
 
-test('renders learn react link', () => {
+jest.mock("./hooks/useMiningWorker", () => ({
+  useMiningWorker: () => ({
+    minePow: jest.fn(),
+    isCompleted: false,
+    cancelMining: jest.fn(),
+    progress: { maxDifficultyAchieved: 0, numHashes: 0 },
+  }),
+}));
+
+jest.mock("nostr-signer-capacitor-plugin", () => ({
+  NostrSignerPlugin: {
+    getInstalledSignerApps: () => Promise.resolve({ apps: [] }),
+  },
+}));
+
+test("shows Pollerama header", async () => {
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: /pollerama/i }),
+  ).toBeInTheDocument();
 });
