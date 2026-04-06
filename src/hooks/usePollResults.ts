@@ -1,15 +1,12 @@
 import { useEffect, useRef, useMemo, useState } from "react";
 import { Event, Filter } from "nostr-tools";
-import { nip13 } from "nostr-tools";
 import { nostrRuntime } from "../singletons";
 import { SubscriptionHandle } from "../nostrRuntime/types";
 import { useRelays } from "./useRelays";
+import { dedupeVoteEvents, tallyPollResults } from "../utils/pollTally";
+import type { OptionResult } from "../utils/pollTally";
 
-export interface OptionResult {
-  count: number;
-  percentage: number;
-  responders: string[];
-}
+export type { OptionResult } from "../utils/pollTally";
 
 /**
  * Subscribes to vote events for a poll and returns per-option results.
@@ -60,50 +57,15 @@ export function usePollResults(
     };
   }, [enabled, pollEvent.id, pollEvent.tags, difficulty, filterPubkeys, userRelays]);
 
-  const options = useMemo(
-    () => pollEvent.tags.filter((t) => t[0] === "option"),
-    [pollEvent.tags]
+  const uniqueResponses = useMemo(
+    () => dedupeVoteEvents(responses, difficulty),
+    [responses, difficulty]
   );
 
-  // Deduplicate: keep only the latest valid response per pubkey
-  const uniqueResponses = useMemo(() => {
-    const map = new Map<string, Event>();
-    for (const event of responses) {
-      if (difficulty && nip13.getPow(event.id) < difficulty) continue;
-      const existing = map.get(event.pubkey);
-      if (!existing || event.created_at > existing.created_at) {
-        map.set(event.pubkey, event);
-      }
-    }
-    return Array.from(map.values());
-  }, [responses, difficulty]);
-
-  const results = useMemo(() => {
-    const counts = new Map<string, { count: number; responders: string[] }>();
-    for (const opt of options) counts.set(opt[1], { count: 0, responders: [] });
-
-    for (const event of uniqueResponses) {
-      for (const tag of event.tags) {
-        if (tag[0] === "response") {
-          const entry = counts.get(tag[1]);
-          if (entry && !entry.responders.includes(event.pubkey)) {
-            entry.count++;
-            entry.responders.push(event.pubkey);
-          }
-        }
-      }
-    }
-
-    const total = Array.from(counts.values()).reduce((s, v) => s + v.count, 0);
-    const out = new Map<string, OptionResult>();
-    Array.from(counts.entries()).forEach(([id, v]) => {
-      out.set(id, {
-        ...v,
-        percentage: total > 0 ? (v.count / total) * 100 : 0,
-      });
-    });
-    return out;
-  }, [uniqueResponses, options]);
+  const results = useMemo(
+    () => tallyPollResults(pollEvent.tags, uniqueResponses),
+    [uniqueResponses, pollEvent.tags]
+  );
 
   return { results, totalVotes: uniqueResponses.length };
 }

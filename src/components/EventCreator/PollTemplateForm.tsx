@@ -34,8 +34,8 @@ import { useNotification } from "../../contexts/notification-context";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useNavigate } from "react-router-dom";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
-import { NOSTR_EVENT_KINDS } from "../../constants/nostr";
 import { signEvent } from "../../nostr";
+import { buildUnsignedPollEvent } from "../../utils/pollEvent";
 import { useRelays } from "../../hooks/useRelays";
 import { PollPreview } from "./PollPreview";
 import { Event, nip19 } from "nostr-tools";
@@ -212,22 +212,17 @@ const PollTemplateForm: React.FC<{
       }
 
       const mentionTags = extractMentionTags(eventContent);
-      const pollEvent = {
-        kind: NOSTR_EVENT_KINDS.POLL,
+      const pollEvent = buildUnsignedPollEvent({
         content: finalContent,
-        tags: [
-          ...options.map((option: Option) => ["option", option[0], option[1]]),
-          ...relays.map((relay) => ["relay", relay]),
-          ...topics.map((tag) => ["t", tag]),
-          ...mentionTags,
-          ...quoteTags,
-        ],
-        created_at: Math.floor(Date.now() / 1000),
-      };
-
-      if (poW) pollEvent.tags.push(["PoW", poW.toString()]);
-      if (pollType) pollEvent.tags.push(["polltype", pollType]);
-      if (expiration) pollEvent.tags.push(["endsAt", expiration.toString()]);
+        options,
+        relays,
+        topics,
+        mentionTags,
+        quoteTags,
+        poW,
+        pollType,
+        expiration,
+      });
 
       setIsSubmitting(true);
       const signedEvent = await signEvent(pollEvent, user?.privateKey);
