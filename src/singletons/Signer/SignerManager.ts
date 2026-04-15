@@ -35,6 +35,17 @@ import {
 import { bytesToHex } from "@noble/hashes/utils";
 import { createNIP55Signer } from "./NIP55Signer";
 
+/** Safely parse a kind-0 profile event, falling back to defaults on invalid JSON. */
+function parseProfileContent(kind0: Event | null, pubkey: string): User {
+  if (!kind0) return { pubkey, name: ANONYMOUS_USER_NAME, picture: DEFAULT_IMAGE_URL };
+  try {
+    return { ...JSON.parse(kind0.content), pubkey };
+  } catch {
+    console.warn("Malformed kind-0 content for", pubkey);
+    return { pubkey, name: ANONYMOUS_USER_NAME, picture: DEFAULT_IMAGE_URL };
+  }
+}
+
 class SignerManager {
   private signer: NostrSigner | null = null;
   private user: User | null = null;
@@ -110,9 +121,7 @@ class SignerManager {
     const pubkey = await signer.getPublicKey();
 
     const kind0 = await fetchUserProfile(pubkey);
-    const userData: User = kind0
-      ? { ...JSON.parse(kind0.content), pubkey }
-      : { pubkey, name: ANONYMOUS_USER_NAME, picture: DEFAULT_IMAGE_URL };
+    const userData: User = parseProfileContent(kind0, pubkey);
 
     this.signer = signer;
     this.user = userData;
@@ -192,9 +201,7 @@ class SignerManager {
     const pubkey = await this.signer.getPublicKey();
 
     const kind0 = await fetchUserProfile(pubkey);
-    const userData: User = kind0
-      ? { ...JSON.parse(kind0.content), pubkey }
-      : { pubkey, name: ANONYMOUS_USER_NAME, picture: DEFAULT_IMAGE_URL };
+    const userData: User = parseProfileContent(kind0, pubkey);
 
     await saveNsecForAccount(pubkey, nsec);
 
@@ -250,9 +257,7 @@ class SignerManager {
     const pubkey = await window.nostr.getPublicKey();
 
     const kind0: Event | null = await fetchUserProfile(pubkey);
-    const userData: User = kind0
-      ? { ...JSON.parse(kind0.content), pubkey }
-      : { pubkey, name: ANONYMOUS_USER_NAME, picture: DEFAULT_IMAGE_URL };
+    const userData: User = parseProfileContent(kind0, pubkey);
 
     const account: StoredAccount = {
       pubkey,
@@ -272,9 +277,7 @@ class SignerManager {
     const pubkey = await remoteSigner.getPublicKey();
 
     const kind0: Event | null = await fetchUserProfile(pubkey);
-    const userData: User = kind0
-      ? { ...JSON.parse(kind0.content), pubkey }
-      : { pubkey, name: ANONYMOUS_USER_NAME, picture: DEFAULT_IMAGE_URL };
+    const userData: User = parseProfileContent(kind0, pubkey);
 
     const account: StoredAccount = {
       pubkey,
