@@ -70,25 +70,75 @@ interface DMContextInterface {
 
 export const DMContext = createContext<DMContextInterface | null>(null);
 
-const CACHE_PREFIX = "dm_cache_";
+// Giftwrap events (already NIP-44 encrypted) are safe to cache — no plaintext at rest.
+const GW_CACHE_PREFIX = "dm_gw_";
+// Legacy key used in earlier versions — purged on mount/logout.
+const LEGACY_CACHE_PREFIX = "dm_cache_";
 const LAST_SEEN_PREFIX = "dm_lastseen_";
 const REACTION_CACHE_PREFIX = "dm_reactions_";
+const GW_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-function getCachedRumor(wrapId: string): DMMessage | null {
+interface CachedGiftWrap {
+  event: Event;
+  cachedAt: number;
+}
+
+/** Persist the raw (still-encrypted) giftwrap so a reload avoids a relay re-fetch. */
+function cacheGiftWrap(wrapId: string, event: Event): void {
   try {
-    const cached = localStorage.getItem(CACHE_PREFIX + wrapId);
-    return cached ? JSON.parse(cached) : null;
+    const entry: CachedGiftWrap = { event, cachedAt: Date.now() };
+    localStorage.setItem(GW_CACHE_PREFIX + wrapId, JSON.stringify(entry));
+  } catch {
+    // localStorage full, ignore
+  }
+}
+
+/** Return the cached giftwrap Event if present and within TTL, otherwise null. */
+function getCachedGiftWrap(wrapId: string): Event | null {
+  try {
+    const raw = localStorage.getItem(GW_CACHE_PREFIX + wrapId);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedGiftWrap;
+    if (!parsed.cachedAt || Date.now() - parsed.cachedAt > GW_CACHE_TTL_MS) {
+      localStorage.removeItem(GW_CACHE_PREFIX + wrapId);
+      return null;
+    }
+    return parsed.event;
   } catch {
     return null;
   }
 }
 
-function setCachedRumor(wrapId: string, msg: DMMessage): void {
-  try {
-    localStorage.setItem(CACHE_PREFIX + wrapId, JSON.stringify(msg));
-  } catch {
-    // localStorage full, ignore
+/** Remove giftwrap cache entries older than TTL. Called on mount. */
+function pruneExpiredGiftWraps(): void {
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(GW_CACHE_PREFIX)) continue;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as CachedGiftWrap;
+      if (!parsed.cachedAt || Date.now() - parsed.cachedAt > GW_CACHE_TTL_MS) {
+        keysToRemove.push(key);
+      }
+    } catch {
+      keysToRemove.push(key);
+    }
   }
+  keysToRemove.forEach((key) => localStorage.removeItem(key));
+}
+
+/** Clear all giftwrap cache entries and any legacy plaintext entries on logout. */
+function clearGiftWrapCache(): void {
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(GW_CACHE_PREFIX) || key?.startsWith(LEGACY_CACHE_PREFIX)) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach((key) => localStorage.removeItem(key));
 }
 
 function getLastSeen(conversationId: string): number {
@@ -113,6 +163,11 @@ export function DMProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<Map<string, Conversation>>(
     new Map()
   );
+
+  // Prune stale giftwrap cache entries on mount
+  useEffect(() => {
+    pruneExpiredGiftWraps();
+  }, []);
   const [loading, setLoading] = useState(false);
   const seenRumorIds = useRef<Set<string>>(new Set());
   const subRef = useRef<{ unsubscribe: () => void } | null>(null);
@@ -207,9 +262,6 @@ export function DMProvider({ children }: { children: ReactNode }) {
         tags: rumor.tags,
       };
 
-      // Cache decrypted message
-      setCachedRumor(wrapId, msg);
-
       // Load cached reactions for this conversation
       let cachedReactions = new Map<string, DMReaction[]>();
       try {
@@ -268,6 +320,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
       decryptionRejected.current = false;
       subRef.current?.unsubscribe();
       subRef.current = null;
+      // Clear giftwrap cache (and any legacy plaintext entries) on logout
+      clearGiftWrapCache();
       return;
     }
 
@@ -286,24 +340,15 @@ export function DMProvider({ children }: { children: ReactNode }) {
         [{ kinds: [1059], "#p": [myPubkey] }],
         {
           onEvent: async (event: Event) => {
-            // Cached messages never need the signer — handle immediately
-            const cached = getCachedRumor(event.id);
-            if (cached) {
-              const fakeRumor: Rumor = {
-                id: cached.id,
-                pubkey: cached.pubkey,
-                content: cached.content,
-                created_at: cached.created_at,
-                tags: cached.tags,
-                kind: (cached as any).kind || 14,
-              };
-              addMessage(fakeRumor, event.id, myPubkey);
-              return;
-            }
+            // Persist the encrypted giftwrap so a reload can re-decrypt
+            // without waiting for the relay to re-deliver it.
+            // Only the encrypted blob is stored — no plaintext at rest.
+            const eventToDecrypt = getCachedGiftWrap(event.id) ?? event;
+            cacheGiftWrap(event.id, event);
 
             if (privateKey) {
               // Local key: decrypt instantly, no signer prompts
-              const rumor = await unwrapGiftWrap(event, privateKey);
+              const rumor = await unwrapGiftWrap(eventToDecrypt, privateKey);
               if (rumor) addMessage(rumor, event.id, myPubkey);
             } else {
               // External signer (Amber / NIP-07 / NIP-46): queue so only one
@@ -311,7 +356,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
               // user with simultaneous approval prompts on startup.
               decryptQueue.current = decryptQueue.current.then(async () => {
                 if (decryptionRejected.current) return;
-                const rumor = await unwrapGiftWrap(event, undefined);
+                const rumor = await unwrapGiftWrap(eventToDecrypt, undefined);
                 if (rumor) {
                   addMessage(rumor, event.id, myPubkey);
                 } else {
