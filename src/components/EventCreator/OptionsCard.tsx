@@ -81,6 +81,7 @@ const OptionsCard: React.FC<OptionsCardProps> = ({
               <IconButton
                 color="error"
                 onClick={() => onRemoveOption(index)}
+                disabled={options.length <= 2}
               >
                 <Delete />
               </IconButton>

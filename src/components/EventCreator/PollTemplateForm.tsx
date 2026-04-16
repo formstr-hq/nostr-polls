@@ -190,7 +190,7 @@ const PollTemplateForm: React.FC<{
         showNotification(NOTIFICATION_MESSAGES.EMPTY_POLL_QUESTION, "error");
         return;
       }
-      if (options.length < 1) {
+      if (options.length < 2) {
         showNotification(NOTIFICATION_MESSAGES.MIN_POLL_OPTIONS, "error");
         return;
       }
