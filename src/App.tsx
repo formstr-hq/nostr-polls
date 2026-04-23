@@ -51,6 +51,7 @@ import EventList from "./components/Feed/FeedsLayout";
 import NotesFeed from "./components/Feed/NotesFeed/components";
 import ProfilesFeed from "./components/Feed/ProfileFeed";
 import { PollFeed } from "./components/Feed/PollFeed";
+import MixedFeed from "./components/Feed/MixedFeed";
 import MoviesFeed from "./components/Feed/MoviesFeed";
 import FollowPacksFeed from "./components/Feed/FollowPacksFeed";
 import FollowPackDetail from "./components/FollowPacks/FollowPackDetail";
@@ -174,6 +175,7 @@ function AppContent() {
           <Route path="/ratings" element={<EventList />} />
 
           <Route path="/feeds" element={<FeedsLayout />}>
+            <Route path="all" element={<MixedFeed />} />
             <Route path="notes" element={<NotesFeed />} />
             <Route path="profiles" element={<ProfilesFeed />} />
             <Route path="topics" element={<TopicsFeed />}>

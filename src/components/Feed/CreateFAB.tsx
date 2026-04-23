@@ -3,6 +3,8 @@ import { SpeedDial, SpeedDialAction, SpeedDialIcon } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import EditNoteIcon from "@mui/icons-material/EditNote";
+import PollIcon from "@mui/icons-material/Poll";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 
@@ -11,6 +13,7 @@ const CreateFAB: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { isScrolledDown, scrollToTop, refresh } = useFeedActions();
+  const isAllFeed = location.pathname.startsWith("/feeds/all");
 
   const handleCreate = () => {
     setOpen(false);
@@ -24,6 +27,16 @@ const CreateFAB: React.FC = () => {
         navigate("/create");
       }
     }
+  };
+
+  const handleCreateNote = () => {
+    setOpen(false);
+    navigate("/create");
+  };
+
+  const handleCreatePoll = () => {
+    setOpen(false);
+    navigate("/create?type=poll");
   };
 
   const handleScrollToTop = () => {
@@ -72,12 +85,29 @@ const CreateFAB: React.FC = () => {
         onClick={handleRefresh}
         sx={actionSx}
       />
-      <SpeedDialAction
-        icon={<AddIcon />}
-        tooltipTitle="Create"
-        onClick={handleCreate}
-        sx={actionSx}
-      />
+      {isAllFeed ? (
+        <>
+          <SpeedDialAction
+            icon={<EditNoteIcon />}
+            tooltipTitle="Create note"
+            onClick={handleCreateNote}
+            sx={actionSx}
+          />
+          <SpeedDialAction
+            icon={<PollIcon />}
+            tooltipTitle="Create poll"
+            onClick={handleCreatePoll}
+            sx={actionSx}
+          />
+        </>
+      ) : (
+        <SpeedDialAction
+          icon={<AddIcon />}
+          tooltipTitle="Create"
+          onClick={handleCreate}
+          sx={actionSx}
+        />
+      )}
     </SpeedDial>
   );
 };

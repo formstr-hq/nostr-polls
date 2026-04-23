@@ -11,6 +11,7 @@ import {
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import HowToVoteIcon from "@mui/icons-material/HowToVote";
+import DynamicFeedIcon from "@mui/icons-material/DynamicFeed";
 import TagIcon from "@mui/icons-material/Tag";
 import ArticleIcon from "@mui/icons-material/Article";
 import BookIcon from "@mui/icons-material/MenuBook";
@@ -25,6 +26,11 @@ import { useSubNav } from "../../contexts/SubNavContext";
 // feed is currently mounted. Active state is read from localStorage so we can
 // show the correct selection even for feeds that aren't mounted yet.
 const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
+  all: [
+    { key: "global", label: "Global" },
+    { key: "following", label: "Following" },
+    { key: "webOfTrust", label: "Web of Trust" },
+  ],
   polls: [
     { key: "global", label: "Global" },
     { key: "following", label: "Following" },
@@ -52,6 +58,7 @@ const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
 };
 
 const FEED_STORAGE_KEYS: Record<string, string> = {
+  all: "pollerama:mixedSource",
   polls: "pollerama:pollSource",
   notes: "pollerama:lastNotesTab",
   topics: "pollerama:lastTopicsTab",
@@ -60,6 +67,7 @@ const FEED_STORAGE_KEYS: Record<string, string> = {
 };
 
 const FEED_DEFAULT_SUB: Record<string, string> = {
+  all: "global",
   polls: "global",
   notes: "discover",
   topics: "interests",
@@ -68,6 +76,7 @@ const FEED_DEFAULT_SUB: Record<string, string> = {
 };
 
 const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = [
+  { value: "all",          label: "All",          Icon: DynamicFeedIcon },
   { value: "polls",        label: "Polls",        Icon: HowToVoteIcon },
   { value: "topics",       label: "Topics",       Icon: TagIcon },
   { value: "notes",        label: "Notes",        Icon: ArticleIcon },

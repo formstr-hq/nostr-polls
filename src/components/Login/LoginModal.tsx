@@ -53,6 +53,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   useBackClose(open, onClose);
 
   useEffect(() => {
+    if (!isAndroidNative()) return;
     const initialize = async () => {
       const result = await NostrSignerPlugin.getInstalledSignerApps();
       setInstalledSigners(result.apps);
