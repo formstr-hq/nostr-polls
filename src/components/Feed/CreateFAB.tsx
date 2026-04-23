@@ -13,11 +13,11 @@ const CreateFAB: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { isScrolledDown, scrollToTop, refresh } = useFeedActions();
-  const isAllFeed = location.pathname.startsWith("/feeds/all");
+  const isAllFeed = /\/feeds\/all(?:\/|$)/.test(location.pathname);
 
   const handleCreate = () => {
     setOpen(false);
-    if (location.pathname.startsWith("/feeds/polls")) {
+    if (/\/feeds\/polls(?:\/|$)/.test(location.pathname)) {
       navigate("/create?type=poll");
     } else {
       const match = location.pathname.match(/\/feeds\/topics\/(.+)/);
@@ -85,22 +85,23 @@ const CreateFAB: React.FC = () => {
         onClick={handleRefresh}
         sx={actionSx}
       />
-      {isAllFeed ? (
-        <>
-          <SpeedDialAction
-            icon={<EditNoteIcon />}
-            tooltipTitle="Create note"
-            onClick={handleCreateNote}
-            sx={actionSx}
-          />
-          <SpeedDialAction
-            icon={<PollIcon />}
-            tooltipTitle="Create poll"
-            onClick={handleCreatePoll}
-            sx={actionSx}
-          />
-        </>
-      ) : (
+      {isAllFeed && (
+        <SpeedDialAction
+          icon={<EditNoteIcon />}
+          tooltipTitle="Create note"
+          onClick={handleCreateNote}
+          sx={actionSx}
+        />
+      )}
+      {isAllFeed && (
+        <SpeedDialAction
+          icon={<PollIcon />}
+          tooltipTitle="Create poll"
+          onClick={handleCreatePoll}
+          sx={actionSx}
+        />
+      )}
+      {!isAllFeed && (
         <SpeedDialAction
           icon={<AddIcon />}
           tooltipTitle="Create"
