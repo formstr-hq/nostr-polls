@@ -30,21 +30,22 @@ export function buildTheme(
           mode: "dark",
           primary: { main: darkPrimary },
           secondary: { main: "#bdbdbc" },
-          background: { default: darkBg },
+          background: { default: darkBg, paper: darkBg },
         },
       },
       light: {
         palette: {
           primary: { main: lightPrimary },
           secondary: { main: "#bdbdbc" },
-          background: { default: lightBg },
+          background: { default: lightBg, paper: lightBg },
         },
       }
     },
     palette: {
+      mode: "light",
       primary: { main: lightPrimary },
       secondary: { main: "#bdbdbc" },
-      background: { default: "#000000" },
+      background: { default: lightBg, paper: lightBg },
     },
     components: {
       MuiCssBaseline: {
