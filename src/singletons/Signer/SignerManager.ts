@@ -19,7 +19,7 @@ import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { ANONYMOUS_USER_NAME, User } from "../../contexts/user-context";
 import { pool } from "..";
 import { createLocalSigner } from "./LocalSigner";
-import { isNative } from "../../utils/platform";
+import { isAndroidNative, isNative } from "../../utils/platform";
 import {
   getLegacyNsec,
   removeLegacyNsec,
@@ -119,6 +119,8 @@ class SignerManager {
   }
 
   async loginWithNip55(packageName: string, cachedPubkey?: string) {
+    if (!isAndroidNative()) throw new Error("NIP-55 login only allowed on Android");
+
     const signer = createNIP55Signer(packageName, cachedPubkey);
     const pubkey = await signer.getPublicKey();
 
@@ -174,20 +176,35 @@ class SignerManager {
     }
 
     const activePubkey = getActiveAccountPubkey();
-    const accountToActivate =
+    const preferredAccount =
       (activePubkey ? this.accounts.find((a) => a.pubkey === activePubkey) : null) ??
       this.accounts[0];
 
-    // Pre-populate user from cache for instant display while signer initialises
-    if (accountToActivate.userData) {
-      this.user = buildUser(accountToActivate);
+    const accountsToTry = [
+      preferredAccount,
+      ...this.accounts.filter((a) => a.pubkey !== preferredAccount.pubkey),
+    ];
+
+    let restored = false;
+    for (const account of accountsToTry) {
+      // Pre-populate user from cache for instant display while signer initialises
+      if (account.userData) {
+        this.user = buildUser(account);
+      }
+      try {
+        await this.activateAccount(account);
+        setActiveAccountPubkey(account.pubkey);
+        restored = true;
+        break;
+      } catch (e) {
+        console.error(`Signer restore failed for ${account.loginMethod}:`, e);
+      }
     }
 
-    try {
-      await this.activateAccount(accountToActivate);
-      setActiveAccountPubkey(accountToActivate.pubkey);
-    } catch (e) {
-      console.error("Signer restore failed:", e);
+    if (!restored) {
+      this.signer = null;
+      this.user = null;
+      removeActiveAccountPubkey();
     }
 
     this.notify();
@@ -362,6 +379,7 @@ class SignerManager {
         break;
       }
       case "nip55": {
+        if (!isAndroidNative()) throw new Error("NIP-55 is only supported on Android");
         const pkgName =
           account.nip55PackageName ??
           (isNative ? await getNip55PkgForAccount(account.pubkey) : null);
