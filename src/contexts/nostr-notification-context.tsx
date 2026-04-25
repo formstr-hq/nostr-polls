@@ -51,6 +51,10 @@ export function NostrNotificationsProvider({
   const latestNotifTsRef = useRef<number>(0);
 
   const pollMap = useRef<Map<string, Event>>(new Map());
+  // Toggled to true after fetchPollIds resolves. Because pollMap is a ref,
+  // mutating it doesn't trigger a re-render on its own. Flipping this state
+  // forces a provider re-render so consumers see the populated map.
+  const [pollsLoaded, setPollsLoaded] = useState(false);
 
   //
   // ────────────────────────────────────────────────────────────
@@ -187,6 +191,8 @@ export function NostrNotificationsProvider({
 
       // 2. fetch pollIds
       await fetchPollIds(user.pubkey);
+      // Signal that pollMap is now populated so consumers re-render.
+      setPollsLoaded(true);
 
       // 3. subscribe only after pollIds exist
       const filters = buildFilters(user.pubkey, since);

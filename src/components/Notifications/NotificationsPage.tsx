@@ -35,7 +35,10 @@ const NotificationsPage: React.FC = () => {
 
   const [postSnippets, setPostSnippets] = useState<Map<string, string>>(new Map());
   const [rawJsonEvent, setRawJsonEvent] = useState<Event | null>(null);
+  // fetchingRef: in-progress fetches; resolvedRef: already-fetched ids.
+  // Both are stable refs so resolvePostContent never needs to close over state.
   const fetchingRef = useRef<Set<string>>(new Set());
+  const resolvedRef = useRef<Set<string>>(new Set());
 
   // Catch up on missed events and mark all as read when the page mounts
   useEffect(() => {
@@ -45,11 +48,14 @@ const NotificationsPage: React.FC = () => {
 
   const resolvePostContent = useCallback(
     (postId: string, relayHint?: string) => {
-      if (postSnippets.has(postId) || fetchingRef.current.has(postId)) return;
+      // Both checks use stable refs so this callback never needs to close over
+      // postSnippets state — avoiding the circular recreation cascade.
+      if (resolvedRef.current.has(postId) || fetchingRef.current.has(postId)) return;
       fetchingRef.current.add(postId);
 
       const cached = nostrRuntime.get(postId);
       if (cached) {
+        resolvedRef.current.add(postId);
         setPostSnippets((prev) => {
           const next = new Map(prev);
           next.set(postId, cached.content?.slice(0, 80) || "");
@@ -64,6 +70,7 @@ const NotificationsPage: React.FC = () => {
         : relays;
       nostrRuntime.fetchBatched(fetchRelays, postId).then((event) => {
         if (event) {
+          resolvedRef.current.add(postId);
           setPostSnippets((prev) => {
             const next = new Map(prev);
             next.set(postId, event.content?.slice(0, 80) || "");
@@ -73,7 +80,7 @@ const NotificationsPage: React.FC = () => {
         fetchingRef.current.delete(postId);
       });
     },
-    [relays, postSnippets]
+    [relays] // postSnippets intentionally removed — guard now uses stable resolvedRef
   );
 
   useEffect(() => {
