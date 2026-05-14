@@ -13,10 +13,40 @@ import { useRelays } from './useRelays';
 import { initLocalNotifications, fireNotification, NotifExtra } from '../services/localNotificationService';
 
 const NOTIF_ID_DMS = 1002;
+const PENDING_IDS_KEY = 'notif_pending_ids';
+const EVENT_KEY_PREFIX = 'notif_event_';
 
 /** Derive a stable integer notification ID from an event ID (hex string). */
 function eventIdToNotifId(eventId: string): number {
   return (parseInt(eventId.slice(0, 8), 16) & 0x7fffffff) || 1;
+}
+
+/** Read events the WorkManager Worker persisted to SharedPreferences,
+ *  parse them into Event[], and clear the pending index. */
+async function drainPendingPayloads(): Promise<Event[]> {
+  if (!Capacitor.isNativePlatform()) return [];
+  try {
+    const { value } = await Preferences.get({ key: PENDING_IDS_KEY });
+    if (!value) return [];
+    let ids: string[];
+    try { ids = JSON.parse(value) as string[]; } catch { return []; }
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+
+    const events: Event[] = [];
+    for (const id of ids) {
+      const key = `${EVENT_KEY_PREFIX}${id}`;
+      const { value: json } = await Preferences.get({ key });
+      if (json) {
+        try { events.push(JSON.parse(json) as Event); } catch { /* skip */ }
+      }
+      await Preferences.remove({ key });
+    }
+    await Preferences.remove({ key: PENDING_IDS_KEY });
+    return events;
+  } catch (e) {
+    console.warn('[useAndroidNotifications] drainPendingPayloads error:', e);
+    return [];
+  }
 }
 
 function buildEventNotification(
@@ -93,15 +123,27 @@ function getSingleDMNpub(conversations: Map<string, Conversation>, userPubkey: s
   try { return nip19.npubEncode(otherPubkey); } catch { return undefined; }
 }
 
+function encodeHexToNevent(hex: string): string | undefined {
+  try { return nip19.neventEncode({ id: hex }); } catch { return undefined; }
+}
+
 function handleDeepLink(url: string, navigate: ReturnType<typeof useNavigate>) {
   if (url.includes('/messages/')) {
     const npub = url.split('/messages/')[1];
     navigate(`/messages/${npub}`);
   } else if (url.includes('/messages')) {
     navigate('/messages');
+  } else if (url.includes('/respond-hex/')) {
+    const hex = url.split('/respond-hex/')[1];
+    const nevent = encodeHexToNevent(hex);
+    navigate(nevent ? `/respond/${nevent}` : '/notifications');
   } else if (url.includes('/respond/')) {
     const nevent = url.split('/respond/')[1];
     navigate(`/respond/${nevent}`);
+  } else if (url.includes('/note-hex/')) {
+    const hex = url.split('/note-hex/')[1];
+    const nevent = encodeHexToNevent(hex);
+    navigate(nevent ? `/note/${nevent}` : '/notifications');
   } else if (url.includes('/note/')) {
     const nevent = url.split('/note/')[1];
     navigate(`/note/${nevent}`);
@@ -112,7 +154,7 @@ function handleDeepLink(url: string, navigate: ReturnType<typeof useNavigate>) {
 
 export function useAndroidNotifications() {
   const navigate = useNavigate();
-  const { unreadCount, notifications, lastSeen, pollMap } = useNostrNotifications();
+  const { unreadCount, notifications, lastSeen, pollMap, seedFromCache } = useNostrNotifications();
   const { unreadTotal: dmUnread, conversations } = useDMContext();
   const { user } = useUserContext();
   const { relays } = useRelays();
@@ -120,7 +162,12 @@ export function useAndroidNotifications() {
   const prevDMs    = useRef(0);
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
-  // Track which event IDs we've already fired a notification for (per session)
+  // Stable ref to seedFromCache so the mount effect can call it without re-running.
+  const seedFromCacheRef = useRef(seedFromCache);
+  seedFromCacheRef.current = seedFromCache;
+  // Track which event IDs we've already fired a notification for (per session).
+  // Pre-populating with payloads hydrated from the WorkManager Worker prevents
+  // us from re-firing OS notifications for events the user already saw.
   const firedEventIds = useRef(new Set<string>());
 
   // Request permission + register listeners once
@@ -144,11 +191,30 @@ export function useAndroidNotifications() {
       }
     });
 
-    // Handle WorkManager deep links (app was killed, custom URL scheme)
-    App.getLaunchUrl().then(result => {
-      if (result?.url) handleDeepLink(result.url, navigateRef.current);
-    });
-    const urlSub = App.addListener('appUrlOpen', ({ url }) => {
+    // Hydrate the notification context from any payloads the WorkManager Worker
+    // wrote to SharedPreferences while the app was closed. We seed *before*
+    // dispatching the launch URL so the destination screen has its data ready.
+    const drainAndDeepLink = async () => {
+      const events = await drainPendingPayloads();
+      if (events.length) {
+        seedFromCacheRef.current(events);
+        // Suppress duplicate JS-side OS notifications for events already shown
+        // by the Worker.
+        for (const ev of events) firedEventIds.current.add(ev.id);
+      }
+      const launch = await App.getLaunchUrl();
+      if (launch?.url) handleDeepLink(launch.url, navigateRef.current);
+    };
+    drainAndDeepLink();
+
+    const urlSub = App.addListener('appUrlOpen', async ({ url }) => {
+      // Re-drain in case new events landed after launch (e.g. cold-start race
+      // where the user tapped a second notification).
+      const events = await drainPendingPayloads();
+      if (events.length) {
+        seedFromCacheRef.current(events);
+        for (const ev of events) firedEventIds.current.add(ev.id);
+      }
       handleDeepLink(url, navigateRef.current);
     });
 

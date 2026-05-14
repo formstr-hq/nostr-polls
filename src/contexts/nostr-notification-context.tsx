@@ -18,10 +18,12 @@ const DEFAULT_LOOKBACK_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
 interface NotificationsContextInterface {
   notifications: Map<string, Event>;
   unreadCount: number;
+  isLoading: boolean;
 
   markAllAsRead: () => void;
   markAsRead: (id: string) => void;
   refresh: () => void;
+  seedFromCache: (events: Event[]) => void;
 
   lastSeen: number | null;
   pollMap: Map<string, Event>;
@@ -45,6 +47,8 @@ export function NostrNotificationsProvider({
   );
   const [unreadCount, setUnreadCount] = useState(0);
   const [lastSeen, setLastSeen] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref so pushNotification always reads the current value without stale closure issues
   const lastSeenRef = useRef<number | null>(null);
   // Track the highest created_at we've seen so refresh knows where to start from
@@ -60,6 +64,7 @@ export function NostrNotificationsProvider({
     if (prev !== undefined && prev !== next) {
       setNotifications(new Map());
       setUnreadCount(0);
+      setIsLoading(true);
       pollMap.current.clear();
       latestNotifTsRef.current = 0;
       lastSeenRef.current = null;
@@ -97,6 +102,30 @@ export function NostrNotificationsProvider({
   // Add notification
   // ────────────────────────────────────────────────────────────
   //
+  // Bulk-seed from Android Worker payloads so the UI renders before relays return.
+  const seedFromCache = useCallback((events: Event[]) => {
+    if (!events.length) return;
+    setNotifications((prev) => {
+      const next = new Map(prev);
+      let bumpedUnread = 0;
+      for (const ev of events) {
+        if (ev.pubkey === user?.pubkey) continue;
+        if (next.has(ev.id)) continue;
+        next.set(ev.id, ev);
+        if (ev.created_at > latestNotifTsRef.current) {
+          latestNotifTsRef.current = ev.created_at;
+        }
+        if (!lastSeenRef.current || ev.created_at > lastSeenRef.current) {
+          bumpedUnread++;
+        }
+      }
+      if (bumpedUnread > 0) setUnreadCount((c) => c + bumpedUnread);
+      return next;
+    });
+    // Seeded data means the user has something to look at — drop the spinner.
+    setIsLoading(false);
+  }, [user?.pubkey]);
+
   const pushNotification = useCallback((event: Event) => {
     // Don't notify about your own activity
     if (event.pubkey === user?.pubkey) return;
@@ -212,7 +241,18 @@ export function NostrNotificationsProvider({
         onEvent: (event: Event) => {
           pushNotification(event);
         },
+        onEose: () => {
+          setIsLoading(false);
+          if (loadingTimerRef.current) {
+            clearTimeout(loadingTimerRef.current);
+            loadingTimerRef.current = null;
+          }
+        },
       });
+
+      // Safety: relays that never send EOSE shouldn't leave the page in a
+      // forever-loading state.
+      loadingTimerRef.current = setTimeout(() => setIsLoading(false), 6000);
     })();
 
     return () => {
@@ -220,6 +260,10 @@ export function NostrNotificationsProvider({
       subHandleRef.current?.unsubscribe();
       subHandleRef.current = null;
       hasStarted.current = false;
+      if (loadingTimerRef.current) {
+        clearTimeout(loadingTimerRef.current);
+        loadingTimerRef.current = null;
+      }
       // State (notifications, counts, pollMap) is intentionally NOT cleared here.
       // Relay changes trigger this cleanup and re-subscribe — clearing here causes
       // the visible flash. The user-change effect above handles clearing on logout/switch.
@@ -300,9 +344,11 @@ export function NostrNotificationsProvider({
       value={{
         notifications,
         unreadCount,
+        isLoading,
         markAllAsRead,
         markAsRead,
         refresh,
+        seedFromCache,
         lastSeen,
         pollMap: pollMap.current,
       }}

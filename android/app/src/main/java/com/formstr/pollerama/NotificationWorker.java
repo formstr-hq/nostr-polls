@@ -15,9 +15,12 @@ import androidx.work.WorkerParameters;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -32,9 +35,11 @@ public class NotificationWorker extends Worker {
     private static final String KEY_PUBKEY    = "worker_pubkey";
     private static final String KEY_RELAY     = "worker_relay";
     private static final String KEY_LAST      = "worker_last_check";
-    private static final int    NOTIF_EVENTS  = 1001;
+    private static final String KEY_PENDING   = "notif_pending_ids";
+    private static final String EVENT_KEY_PREFIX = "notif_event_";
     private static final int    NOTIF_DMS     = 1002;
     private static final long   TIMEOUT_SEC   = 15;
+    private static final int    MAX_PER_RUN   = 20;
 
     public NotificationWorker(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
@@ -53,19 +58,17 @@ public class NotificationWorker extends Worker {
         long lastCheck = prefs.getLong(KEY_LAST, System.currentTimeMillis() / 1000 - 3600);
         long nowSec    = System.currentTimeMillis() / 1000;
 
-        AtomicInteger dmCount    = new AtomicInteger(0);
-        AtomicInteger eventCount = new AtomicInteger(0);
-        CountDownLatch latch     = new CountDownLatch(1);
+        final List<JSONObject> events = new ArrayList<>();
+        final List<JSONObject> dms    = new ArrayList<>();
+        CountDownLatch latch          = new CountDownLatch(1);
 
         OkHttpClient client = new OkHttpClient.Builder()
                 .readTimeout(TIMEOUT_SEC + 2, TimeUnit.SECONDS)
                 .build();
 
-        // Build REQ message
         // Kinds: 1 (notes tagging me), 7 (reactions), 9735 (zaps), 1018 (poll responses), 1059 (DM gift wraps)
         String reqMsg;
         try {
-            JSONArray filterArr = new JSONArray();
             JSONObject filter = new JSONObject();
             JSONArray kinds = new JSONArray();
             kinds.put(1); kinds.put(7); kinds.put(9735); kinds.put(1018); kinds.put(1059);
@@ -74,7 +77,6 @@ public class NotificationWorker extends Worker {
             pArr.put(pubkey);
             filter.put("#p", pArr);
             filter.put("since", lastCheck);
-            filterArr.put(filter);
 
             JSONArray req = new JSONArray();
             req.put("REQ");
@@ -102,13 +104,14 @@ public class NotificationWorker extends Worker {
                     if ("EVENT".equals(type) && msg.length() >= 3) {
                         JSONObject event = msg.getJSONObject(2);
                         int kind = event.getInt("kind");
+                        // Skip events authored by the user (won't notify yourself)
+                        if (pubkey.equals(event.optString("pubkey"))) return;
                         if (kind == 1059) {
-                            dmCount.incrementAndGet();
+                            dms.add(event);
                         } else {
-                            eventCount.incrementAndGet();
+                            events.add(event);
                         }
                     } else if ("EOSE".equals(type)) {
-                        // Send CLOSE then release latch
                         JSONArray close = new JSONArray();
                         close.put("CLOSE");
                         close.put("notif-check");
@@ -139,59 +142,149 @@ public class NotificationWorker extends Worker {
         client.dispatcher().executorService().shutdown();
 
         // Save last check timestamp
-        prefs.edit().putLong(KEY_LAST, nowSec).apply();
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.putLong(KEY_LAST, nowSec);
+
+        NotificationManager nm = (NotificationManager)
+                getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
+
+        // Merge with any still-pending IDs (in case the user hasn't opened the app yet)
+        JSONArray pending = parseJsonArray(prefs.getString(KEY_PENDING, "[]"));
+        Set<String> pendingSet = new HashSet<>();
+        for (int i = 0; i < pending.length(); i++) {
+            String id = pending.optString(i, null);
+            if (id != null) pendingSet.add(id);
+        }
 
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT |
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
 
-        // Post notifications
-        NotificationManager nm = (NotificationManager)
-                getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
+        int posted = 0;
+        for (JSONObject ev : events) {
+            if (posted >= MAX_PER_RUN) break;
+            String eventId = ev.optString("id", null);
+            if (eventId == null || eventId.isEmpty()) continue;
 
-        if (nm != null) {
-            int dms = dmCount.get();
-            if (dms > 0) {
-                // Deep link → /messages screen
-                Intent dmIntent = new Intent(Intent.ACTION_VIEW,
-                        Uri.parse("nostr-polls://app/messages"));
-                dmIntent.setClass(getApplicationContext(), MainActivity.class);
-                dmIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                PendingIntent dmPi = PendingIntent.getActivity(
-                        getApplicationContext(), 1, dmIntent, piFlags);
+            // Persist the full event so JS can hydrate the notification context on launch.
+            editor.putString(EVENT_KEY_PREFIX + eventId, ev.toString());
+            pendingSet.add(eventId);
 
-                String body = dms == 1 ? "You have a new message" : "You have " + dms + " new messages";
-                nm.notify(NOTIF_DMS, new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
+            if (nm != null) {
+                int kind = ev.optInt("kind", 0);
+                String pub = ev.optString("pubkey", "");
+                String content = ev.optString("content", "");
+                String shortAuthor = pub.length() >= 8 ? pub.substring(0, 8) + "…" : "Someone";
+
+                String title;
+                String body = "";
+                String deepLink = "nostr-polls://app/notifications";
+
+                if (kind == 1) {
+                    title = shortAuthor + " mentioned you";
+                    body = truncate(content, 80);
+                    deepLink = "nostr-polls://app/note-hex/" + eventId;
+                } else if (kind == 7) {
+                    String reaction = content.isEmpty() ? "❤" : content;
+                    title = shortAuthor + " reacted " + reaction;
+                    String postId = findFirstTagValue(ev, "e");
+                    if (postId != null) deepLink = "nostr-polls://app/note-hex/" + postId;
+                } else if (kind == 1018) {
+                    title = shortAuthor + " responded to your poll";
+                    String pollId = findFirstTagValue(ev, "e");
+                    if (pollId != null) deepLink = "nostr-polls://app/respond-hex/" + pollId;
+                } else if (kind == 9735) {
+                    title = shortAuthor + " zapped you ⚡";
+                } else if (kind == 6 || kind == 16) {
+                    title = shortAuthor + " reposted you";
+                    String postId = findFirstTagValue(ev, "e");
+                    if (postId != null) deepLink = "nostr-polls://app/note-hex/" + postId;
+                } else {
+                    title = "New notification";
+                }
+
+                int notifId = eventIdToNotifId(eventId);
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(deepLink));
+                intent.setClass(getApplicationContext(), MainActivity.class);
+                intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                PendingIntent pi = PendingIntent.getActivity(
+                        getApplicationContext(), notifId, intent, piFlags);
+
+                NotificationCompat.Builder builder = new NotificationCompat.Builder(
+                        getApplicationContext(), CHANNEL_ID)
                         .setSmallIcon(R.drawable.ic_notification)
-                        .setContentTitle("Pollerama")
-                        .setContentText(body)
+                        .setContentTitle(title)
                         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                        .setContentIntent(dmPi)
-                        .setAutoCancel(true)
-                        .build());
-            }
-
-            int events = eventCount.get();
-            if (events > 0) {
-                // Deep link → /notifications screen
-                Intent eventsIntent = new Intent(Intent.ACTION_VIEW,
-                        Uri.parse("nostr-polls://app/notifications"));
-                eventsIntent.setClass(getApplicationContext(), MainActivity.class);
-                eventsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                PendingIntent eventsPi = PendingIntent.getActivity(
-                        getApplicationContext(), 2, eventsIntent, piFlags);
-
-                String body = events == 1 ? "You have a new notification" : "You have " + events + " new notifications";
-                nm.notify(NOTIF_EVENTS, new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
-                        .setSmallIcon(R.drawable.ic_notification)
-                        .setContentTitle("Pollerama")
-                        .setContentText(body)
-                        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                        .setContentIntent(eventsPi)
-                        .setAutoCancel(true)
-                        .build());
+                        .setContentIntent(pi)
+                        .setAutoCancel(true);
+                if (!body.isEmpty()) {
+                    builder.setContentText(body)
+                           .setStyle(new NotificationCompat.BigTextStyle().bigText(body));
+                }
+                nm.notify(notifId, builder.build());
+                posted++;
             }
         }
 
+        // DM gift wraps stay as a summary — we can't decrypt them in the worker.
+        if (!dms.isEmpty() && nm != null) {
+            int count = dms.size();
+            Intent dmIntent = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("nostr-polls://app/messages"));
+            dmIntent.setClass(getApplicationContext(), MainActivity.class);
+            dmIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            PendingIntent dmPi = PendingIntent.getActivity(
+                    getApplicationContext(), 1, dmIntent, piFlags);
+            String body = count == 1 ? "You have a new message" : "You have " + count + " new messages";
+            nm.notify(NOTIF_DMS, new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle("Pollerama")
+                    .setContentText(body)
+                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                    .setContentIntent(dmPi)
+                    .setAutoCancel(true)
+                    .build());
+        }
+
+        // Persist the pending-ID index so the JS layer knows which keys to read.
+        JSONArray pendingOut = new JSONArray();
+        for (String id : pendingSet) pendingOut.put(id);
+        editor.putString(KEY_PENDING, pendingOut.toString());
+        editor.apply();
+
         return Result.success();
+    }
+
+    /** Derive a stable positive int notification ID from a hex event ID. */
+    private static int eventIdToNotifId(String eventId) {
+        try {
+            int v = (int) (Long.parseLong(eventId.substring(0, 8), 16) & 0x7fffffffL);
+            return v == 0 ? 1 : v;
+        } catch (Exception e) {
+            return Math.abs(eventId.hashCode()) | 1;
+        }
+    }
+
+    private static String findFirstTagValue(JSONObject event, String tagName) {
+        try {
+            JSONArray tags = event.optJSONArray("tags");
+            if (tags == null) return null;
+            for (int i = 0; i < tags.length(); i++) {
+                JSONArray tag = tags.optJSONArray(i);
+                if (tag != null && tag.length() >= 2 && tagName.equals(tag.optString(0))) {
+                    String val = tag.optString(1, null);
+                    if (val != null && !val.isEmpty()) return val;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    private static JSONArray parseJsonArray(String s) {
+        try { return new JSONArray(s); } catch (Exception e) { return new JSONArray(); }
     }
 }

@@ -12,6 +12,7 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
+  Skeleton,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { useNavigate } from "react-router-dom";
@@ -28,7 +29,7 @@ import relativeTime from "dayjs/plugin/relativeTime";
 dayjs.extend(relativeTime);
 
 const NotificationsPage: React.FC = () => {
-  const { notifications, markAllAsRead, refresh, pollMap } = useNostrNotifications();
+  const { notifications, markAllAsRead, refresh, pollMap, isLoading } = useNostrNotifications();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { relays } = useRelays();
   const navigate = useNavigate();
@@ -258,7 +259,29 @@ const NotificationsPage: React.FC = () => {
 
       {/* List */}
       <Box sx={{ flex: 1, overflowY: "auto" }}>
-        {sorted.length === 0 ? (
+        {sorted.length === 0 && isLoading ? (
+          <List disablePadding>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <React.Fragment key={i}>
+                <ListItem alignItems="flex-start">
+                  <ListItemAvatar>
+                    <Skeleton variant="circular" width={40} height={40} />
+                  </ListItemAvatar>
+                  <ListItemText
+                    primary={<Skeleton variant="text" width="60%" />}
+                    secondary={
+                      <>
+                        <Skeleton variant="text" width="85%" />
+                        <Skeleton variant="text" width="30%" />
+                      </>
+                    }
+                  />
+                </ListItem>
+                <Divider component="li" />
+              </React.Fragment>
+            ))}
+          </List>
+        ) : sorted.length === 0 ? (
           <Box sx={{ display: "flex", justifyContent: "center", mt: 8 }}>
             <Typography variant="body2" color="text.secondary">
               No notifications yet
