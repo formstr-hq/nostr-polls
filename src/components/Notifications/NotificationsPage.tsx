@@ -7,6 +7,7 @@ import {
   ListItemAvatar,
   ListItemText,
   Avatar,
+  AvatarGroup,
   Divider,
   IconButton,
   Dialog,
@@ -90,9 +91,53 @@ const NotificationsPage: React.FC = () => {
     });
   }, [notifications, resolvePostContent]);
 
-  const sorted = Array.from(notifications.values()).sort(
-    (a, b) => b.created_at - a.created_at
-  );
+  type NotifRow =
+    | { kind: "single"; event: Event; ts: number }
+    | { kind: "group"; groupType: "poll" | "reaction"; targetId: string; events: Event[]; ts: number };
+
+  const rows: NotifRow[] = React.useMemo(() => {
+    const events = Array.from(notifications.values()).sort(
+      (a, b) => b.created_at - a.created_at
+    );
+    const polls = new Map<string, Event[]>();
+    const reactions = new Map<string, Event[]>();
+    const singles: Event[] = [];
+
+    for (const ev of events) {
+      if (ev.kind === 1018) {
+        const pollId = ev.tags.find((t) => t[0] === "e")?.[1];
+        if (pollId) {
+          const list = polls.get(pollId);
+          if (list) list.push(ev);
+          else polls.set(pollId, [ev]);
+          continue;
+        }
+      }
+      if (ev.kind === 7) {
+        const postId = parseNotification(ev).postId;
+        if (postId) {
+          const list = reactions.get(postId);
+          if (list) list.push(ev);
+          else reactions.set(postId, [ev]);
+          continue;
+        }
+      }
+      singles.push(ev);
+    }
+
+    const all: NotifRow[] = [];
+    for (const ev of singles) all.push({ kind: "single", event: ev, ts: ev.created_at });
+    Array.from(polls.entries()).forEach(([pollId, evs]) => {
+      if (evs.length === 1) all.push({ kind: "single", event: evs[0], ts: evs[0].created_at });
+      else all.push({ kind: "group", groupType: "poll", targetId: pollId, events: evs, ts: evs[0].created_at });
+    });
+    Array.from(reactions.entries()).forEach(([postId, evs]) => {
+      if (evs.length === 1) all.push({ kind: "single", event: evs[0], ts: evs[0].created_at });
+      else all.push({ kind: "group", groupType: "reaction", targetId: postId, events: evs, ts: evs[0].created_at });
+    });
+    all.sort((a, b) => b.ts - a.ts);
+    return all;
+  }, [notifications]);
 
   const getName = (pubkey: string | null) => {
     if (!pubkey) return "Someone";
@@ -202,6 +247,22 @@ const NotificationsPage: React.FC = () => {
     navigate(`/profile/${nip19.npubEncode(pubkey)}`);
   };
 
+  const handleGroupClick = (groupType: "poll" | "reaction", targetId: string, events: Event[]) => {
+    if (groupType === "poll") {
+      navigate(`/respond/${nip19.neventEncode({ id: targetId })}`);
+      return;
+    }
+    // Reaction group → navigate to the post, including a relay hint if any of the
+    // reaction events carried one.
+    const relayHint = events
+      .map((ev) => ev.tags.find((t) => t[0] === "e" && t[1] === targetId)?.[2])
+      .find((hint): hint is string => !!hint);
+    navigate(`/note/${nip19.neventEncode({
+      id: targetId,
+      ...(relayHint ? { relays: [relayHint] } : {}),
+    })}`);
+  };
+
   const handleItemClick = (ev: Event) => {
     const parsed = parseNotification(ev);
 
@@ -259,7 +320,7 @@ const NotificationsPage: React.FC = () => {
 
       {/* List */}
       <Box sx={{ flex: 1, overflowY: "auto" }}>
-        {sorted.length === 0 && isLoading ? (
+        {rows.length === 0 && isLoading ? (
           <List disablePadding>
             {Array.from({ length: 6 }).map((_, i) => (
               <React.Fragment key={i}>
@@ -281,7 +342,7 @@ const NotificationsPage: React.FC = () => {
               </React.Fragment>
             ))}
           </List>
-        ) : sorted.length === 0 ? (
+        ) : rows.length === 0 ? (
           <Box sx={{ display: "flex", justifyContent: "center", mt: 8 }}>
             <Typography variant="body2" color="text.secondary">
               No notifications yet
@@ -289,7 +350,74 @@ const NotificationsPage: React.FC = () => {
           </Box>
         ) : (
           <List disablePadding>
-            {sorted.map((ev) => {
+            {rows.map((row) => {
+              if (row.kind === "group") {
+                const ts = dayjs.unix(row.ts).fromNow();
+                const count = row.events.length;
+                // Distinct pubkeys, latest first (events are sorted desc).
+                const uniquePubkeys: string[] = [];
+                for (const ev of row.events) {
+                  if (!uniquePubkeys.includes(ev.pubkey)) uniquePubkeys.push(ev.pubkey);
+                  if (uniquePubkeys.length >= 5) break;
+                }
+                const title = row.groupType === "poll"
+                  ? `${count} new poll responses`
+                  : `${count} new reactions to your post`;
+                const bodyText = row.groupType === "poll"
+                  ? (pollMap.get(row.targetId)?.content
+                      ? `"${pollMap.get(row.targetId)!.content.slice(0, 80)}"`
+                      : "")
+                  : getPostSnippet(row.targetId);
+
+                return (
+                  <React.Fragment key={`${row.groupType}:${row.targetId}`}>
+                    <ListItem
+                      alignItems="flex-start"
+                      onClick={() => handleGroupClick(row.groupType, row.targetId, row.events)}
+                      sx={{ cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                    >
+                      <ListItemAvatar>
+                        <AvatarGroup
+                          max={3}
+                          spacing="small"
+                          sx={{ "& .MuiAvatar-root": { width: 32, height: 32, fontSize: "0.75rem" } }}
+                        >
+                          {uniquePubkeys.map((pk) => (
+                            <Avatar key={pk} src={getAvatar(pk)} alt={getName(pk)} />
+                          ))}
+                        </AvatarGroup>
+                      </ListItemAvatar>
+                      <ListItemText
+                        primary={<Typography variant="subtitle2">{title}</Typography>}
+                        secondary={
+                          <>
+                            {bodyText && (
+                              <Typography
+                                component="span"
+                                variant="body2"
+                                color="text.secondary"
+                                display="block"
+                              >
+                                {bodyText}
+                              </Typography>
+                            )}
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              color="text.disabled"
+                            >
+                              {ts}
+                            </Typography>
+                          </>
+                        }
+                      />
+                    </ListItem>
+                    <Divider component="li" />
+                  </React.Fragment>
+                );
+              }
+
+              const ev = row.event;
               const { title, body } = getNotifText(ev);
               const parsed = parseNotification(ev);
               const ts = dayjs.unix(ev.created_at).fromNow();

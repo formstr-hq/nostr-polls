@@ -53,17 +53,6 @@ function buildEventNotification(
   ev: Event,
   pollMap: Map<string, Event>
 ): { title: string; body: string; extra: NotifExtra } {
-  if (ev.kind === 1018) {
-    const pollId = ev.tags.find((t) => t[0] === 'e')?.[1];
-    const pollContent = pollId ? pollMap.get(pollId)?.content : undefined;
-    const nevent = pollId ? (() => { try { return nip19.neventEncode({ id: pollId }); } catch { return undefined; } })() : undefined;
-    return {
-      title: 'New poll response',
-      body: pollContent ? `"${pollContent.slice(0, 80)}"` : 'Someone responded to your poll',
-      extra: nevent ? { target: 'respond', nevent } : { target: 'notifications' },
-    };
-  }
-
   if (ev.kind === 1) {
     const nevent = (() => { try { return nip19.neventEncode({ id: ev.id }); } catch { return undefined; } })();
     return {
@@ -169,6 +158,10 @@ export function useAndroidNotifications() {
   // Pre-populating with payloads hydrated from the WorkManager Worker prevents
   // us from re-firing OS notifications for events the user already saw.
   const firedEventIds = useRef(new Set<string>());
+  // Per-session running tallies used to keep a single grouped OS notification
+  // per target rather than one per fan-out event.
+  const pollResponseCounts = useRef(new Map<string, number>());
+  const reactionCounts = useRef(new Map<string, number>());
 
   // Request permission + register listeners once
   useEffect(() => {
@@ -252,6 +245,41 @@ export function useAndroidNotifications() {
 
       // Only push the OS notification when the app is in the background
       if (!document.hidden) continue;
+
+      // Fan-out kinds (poll responses, reactions): collapse into one notification
+      // per target, re-firing the same notification ID with an incrementing count.
+      if (ev.kind === 1018) {
+        const pollId = ev.tags.find((t) => t[0] === 'e')?.[1];
+        if (!pollId) continue;
+        const next = (pollResponseCounts.current.get(pollId) ?? 0) + 1;
+        pollResponseCounts.current.set(pollId, next);
+        const pollContent = pollMap.get(pollId)?.content;
+        const title = next === 1 ? 'New poll response' : `${next} new poll responses`;
+        const body = pollContent ? `"${pollContent.slice(0, 80)}"` : '';
+        const nevent = encodeHexToNevent(pollId);
+        fireNotification(
+          eventIdToNotifId(pollId),
+          title,
+          body,
+          nevent ? { target: 'respond', nevent } : { target: 'notifications' }
+        );
+        continue;
+      }
+      if (ev.kind === 7) {
+        const postId = ev.tags.find((t) => t[0] === 'e')?.[1];
+        if (!postId) continue;
+        const next = (reactionCounts.current.get(postId) ?? 0) + 1;
+        reactionCounts.current.set(postId, next);
+        const title = next === 1 ? 'New reaction to your post' : `${next} new reactions to your post`;
+        const nevent = encodeHexToNevent(postId);
+        fireNotification(
+          eventIdToNotifId(postId),
+          title,
+          '',
+          nevent ? { target: 'note', nevent } : { target: 'notifications' }
+        );
+        continue;
+      }
 
       const notifId = eventIdToNotifId(ev.id);
       const { title, body, extra } = buildEventNotification(ev, pollMap);

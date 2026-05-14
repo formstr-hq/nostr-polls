@@ -16,8 +16,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -159,69 +161,109 @@ public class NotificationWorker extends Worker {
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT |
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
 
+        // Group high-volume kinds so one popular target = one notification.
+        Map<String, Integer> pollResponseCounts = new HashMap<>();
+        Map<String, Integer> reactionCounts = new HashMap<>();
+
         int posted = 0;
         for (JSONObject ev : events) {
-            if (posted >= MAX_PER_RUN) break;
             String eventId = ev.optString("id", null);
             if (eventId == null || eventId.isEmpty()) continue;
 
-            // Persist the full event so JS can hydrate the notification context on launch.
+            // Always persist — the in-app /notifications list shows every event
+            // even when we collapse OS notifications.
             editor.putString(EVENT_KEY_PREFIX + eventId, ev.toString());
             pendingSet.add(eventId);
 
-            if (nm != null) {
-                int kind = ev.optInt("kind", 0);
-                String pub = ev.optString("pubkey", "");
-                String content = ev.optString("content", "");
-                String shortAuthor = pub.length() >= 8 ? pub.substring(0, 8) + "…" : "Someone";
+            int kind = ev.optInt("kind", 0);
 
-                String title;
-                String body = "";
-                String deepLink = "nostr-polls://app/notifications";
-
-                if (kind == 1) {
-                    title = shortAuthor + " mentioned you";
-                    body = truncate(content, 80);
-                    deepLink = "nostr-polls://app/note-hex/" + eventId;
-                } else if (kind == 7) {
-                    String reaction = content.isEmpty() ? "❤" : content;
-                    title = shortAuthor + " reacted " + reaction;
-                    String postId = findFirstTagValue(ev, "e");
-                    if (postId != null) deepLink = "nostr-polls://app/note-hex/" + postId;
-                } else if (kind == 1018) {
-                    title = shortAuthor + " responded to your poll";
-                    String pollId = findFirstTagValue(ev, "e");
-                    if (pollId != null) deepLink = "nostr-polls://app/respond-hex/" + pollId;
-                } else if (kind == 9735) {
-                    title = shortAuthor + " zapped you ⚡";
-                } else if (kind == 6 || kind == 16) {
-                    title = shortAuthor + " reposted you";
-                    String postId = findFirstTagValue(ev, "e");
-                    if (postId != null) deepLink = "nostr-polls://app/note-hex/" + postId;
-                } else {
-                    title = "New notification";
+            // Poll responses + reactions: tally now, post one grouped notification per target later.
+            if (kind == 1018) {
+                String pollId = findFirstTagValue(ev, "e");
+                if (pollId != null) {
+                    Integer prev = pollResponseCounts.get(pollId);
+                    pollResponseCounts.put(pollId, prev == null ? 1 : prev + 1);
                 }
-
-                int notifId = eventIdToNotifId(eventId);
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(deepLink));
-                intent.setClass(getApplicationContext(), MainActivity.class);
-                intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                PendingIntent pi = PendingIntent.getActivity(
-                        getApplicationContext(), notifId, intent, piFlags);
-
-                NotificationCompat.Builder builder = new NotificationCompat.Builder(
-                        getApplicationContext(), CHANNEL_ID)
-                        .setSmallIcon(R.drawable.ic_notification)
-                        .setContentTitle(title)
-                        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                        .setContentIntent(pi)
-                        .setAutoCancel(true);
-                if (!body.isEmpty()) {
-                    builder.setContentText(body)
-                           .setStyle(new NotificationCompat.BigTextStyle().bigText(body));
+                continue;
+            }
+            if (kind == 7) {
+                String postId = findFirstTagValue(ev, "e");
+                if (postId != null) {
+                    Integer prev = reactionCounts.get(postId);
+                    reactionCounts.put(postId, prev == null ? 1 : prev + 1);
                 }
-                nm.notify(notifId, builder.build());
-                posted++;
+                continue;
+            }
+
+            if (nm == null || posted >= MAX_PER_RUN) continue;
+
+            String pub = ev.optString("pubkey", "");
+            String content = ev.optString("content", "");
+            String shortAuthor = pub.length() >= 8 ? pub.substring(0, 8) + "…" : "Someone";
+
+            String title;
+            String body = "";
+            String deepLink = "nostr-polls://app/notifications";
+
+            if (kind == 1) {
+                title = shortAuthor + " mentioned you";
+                body = truncate(content, 80);
+                deepLink = "nostr-polls://app/note-hex/" + eventId;
+            } else if (kind == 9735) {
+                title = shortAuthor + " zapped you ⚡";
+            } else if (kind == 6 || kind == 16) {
+                title = shortAuthor + " reposted you";
+                String postId = findFirstTagValue(ev, "e");
+                if (postId != null) deepLink = "nostr-polls://app/note-hex/" + postId;
+            } else {
+                title = "New notification";
+            }
+
+            int notifId = eventIdToNotifId(eventId);
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(deepLink));
+            intent.setClass(getApplicationContext(), MainActivity.class);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            PendingIntent pi = PendingIntent.getActivity(
+                    getApplicationContext(), notifId, intent, piFlags);
+
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(
+                    getApplicationContext(), CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(title)
+                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                    .setContentIntent(pi)
+                    .setAutoCancel(true);
+            if (!body.isEmpty()) {
+                builder.setContentText(body)
+                       .setStyle(new NotificationCompat.BigTextStyle().bigText(body));
+            }
+            nm.notify(notifId, builder.build());
+            posted++;
+        }
+
+        // One notification per poll / reacted-to post, regardless of count.
+        // Re-using the target-derived notif ID means subsequent runs replace the
+        // previous summary instead of stacking.
+        if (nm != null) {
+            for (Map.Entry<String, Integer> entry : pollResponseCounts.entrySet()) {
+                postGroupedNotification(
+                        entry.getKey(),
+                        entry.getValue(),
+                        " new poll response",
+                        " new poll responses",
+                        "respond-hex",
+                        piFlags,
+                        nm);
+            }
+            for (Map.Entry<String, Integer> entry : reactionCounts.entrySet()) {
+                postGroupedNotification(
+                        entry.getKey(),
+                        entry.getValue(),
+                        " new reaction to your post",
+                        " new reactions to your post",
+                        "note-hex",
+                        piFlags,
+                        nm);
             }
         }
 
@@ -252,6 +294,31 @@ public class NotificationWorker extends Worker {
         editor.apply();
 
         return Result.success();
+    }
+
+    private void postGroupedNotification(String targetHex, int count,
+                                         String singularSuffix, String pluralSuffix,
+                                         String deepLinkType, int piFlags,
+                                         NotificationManager nm) {
+        String title = count == 1
+                ? "1" + singularSuffix
+                : count + pluralSuffix;
+        String deepLink = "nostr-polls://app/" + deepLinkType + "/" + targetHex;
+        int notifId = eventIdToNotifId(targetHex);
+
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(deepLink));
+        intent.setClass(getApplicationContext(), MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        PendingIntent pi = PendingIntent.getActivity(
+                getApplicationContext(), notifId, intent, piFlags);
+
+        nm.notify(notifId, new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .build());
     }
 
     /** Derive a stable positive int notification ID from a hex event ID. */
