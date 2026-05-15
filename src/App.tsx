@@ -41,6 +41,7 @@ import NavSidebar from "./components/SidePane";
 import { VideoPlayerProvider } from "./contexts/VideoPlayerContext";
 import { FloatingVideoPlayer } from "./components/Common/FloatingVideoPlayer";
 import { useAndroidNotifications } from "./hooks/useAndroidNotifications";
+import { UpdateBanner } from "./components/UpdateBanner";
 
 import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider, Box, Fab } from "@mui/material";
@@ -136,6 +137,7 @@ function AppContent() {
       <div className="header-safe-area">
         <Header />
       </div>
+      <UpdateBanner />
 
       {/* Sidebar + routes side by side — both heights are constant */}
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex" }}>
