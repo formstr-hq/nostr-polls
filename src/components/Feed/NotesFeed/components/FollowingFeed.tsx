@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Button } from "@mui/material";
 import FeedError from "../../FeedError";
 import { useUserContext } from "../../../../hooks/useUserContext";
+import { useListContext } from "../../../../hooks/useListContext";
 import RepostsCard from "./RepostedNoteCard";
 import { useFollowingNotes } from "../hooks/useFollowingNotes";
 import type { NoteMode } from "./index";
@@ -19,8 +20,16 @@ const FollowingFeed = ({
   onRegisterRefresh?: (fn: () => void) => void;
 }) => {
   const { user, requestLogin } = useUserContext();
+  const { refetchContacts } = useListContext();
   const { notes, reposts, fetchNotes, refreshNotes, checkForNewer, loadingMore, refreshing, loadFailed, pendingCount, mergeNewNotes, initialLoadDone } =
     useFollowingNotes();
+
+  // Feed retry: if follows are missing/empty, the underlying problem is the
+  // contact-list fetch, not the notes fetch — re-trigger it before refetching notes.
+  const handleRetry = useCallback(() => {
+    if (!user?.follows?.length) refetchContacts();
+    refreshNotes();
+  }, [refetchContacts, refreshNotes, user?.follows]);
 
   // Register refresh with parent header button
   useEffect(() => {
@@ -101,7 +110,7 @@ const FollowingFeed = ({
         newItemLabel="notes"
         emptyState={
           (loadFailed || (initialLoadDone && mergedNotes.length === 0))
-            ? <FeedError message="Couldn't load notes" onRetry={refreshNotes} />
+            ? <FeedError message="Couldn't load notes" onRetry={handleRetry} />
             : undefined
         }
         itemContent={(index, item) => (

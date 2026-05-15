@@ -16,6 +16,7 @@ interface ListContextInterface {
   selectedList: string | undefined;
   handleListSelected: (id: string | null) => void;
   fetchLatestContactList(): Promise<Event | null>;
+  refetchContacts: () => void;
   unfollowContact(pubkeyToRemove: string): Promise<void>;
   myTopics: Set<string> | undefined;
   addTopicToMyTopics: (topic: string) => Promise<void>;
@@ -43,6 +44,12 @@ export function ListProvider({ children }: { children: ReactNode }) {
   const [isFetchingWoT, setIsFetchingWoT] = useState(false);
   const prevPubkeyRef = useRef<string | undefined>(undefined);
 
+  // Contact-list fetch state — retry-with-backoff so kind-3 always resolves
+  // to either "populated" or "definitively empty" instead of "still undefined".
+  const contactsHandleRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const contactsAttemptRef = useRef(0);
+  const contactsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const prev = prevPubkeyRef.current;
     const next = user?.pubkey;
@@ -53,8 +60,11 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setBookmarkedPackKeys(new Set());
       setBookmarks10003(null);
       setIsFetchingWoT(false);
+      cleanupContactsFetch();
+      contactsAttemptRef.current = 0;
     }
     prevPubkeyRef.current = next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.pubkey]);
 
   const fetchLatestContactList = (): Promise<Event | null> => {
@@ -111,37 +121,84 @@ export function ListProvider({ children }: { children: ReactNode }) {
     setLists((prevMap) => {
       const pastEvent = prevMap?.get(a_tag);
 
-      // Only update if this event is newer than what we have
-      if (event.created_at > (pastEvent?.created_at || 0)) {
-        setUser((prevUser) => {
-          if (!prevUser) return null;
-          return {
-            ...prevUser,
-            follows: Array.from(follows),
-          } as User;
-        });
-        const newMap = new Map(prevMap);
-        newMap.set(a_tag, event);
-        return newMap;
-      }
+      // Only apply if this event is strictly newer than what we currently hold.
+      // Guards against late/duplicate arrivals from multiple relays overwriting
+      // a more recent contact list with a stale one.
+      if (event.created_at <= (pastEvent?.created_at || 0)) return prevMap;
 
-      // Return unchanged map if this event is older
-      return prevMap;
+      setUser((prevUser) => {
+        if (!prevUser) return null;
+        return {
+          ...prevUser,
+          follows: Array.from(follows),
+        } as User;
+      });
+      const newMap = new Map(prevMap);
+      newMap.set(a_tag, event);
+      return newMap;
     });
   };
 
-  const fetchContacts = () => {
+  // Tears down any in-flight contacts subscription + retry timer.
+  const cleanupContactsFetch = () => {
+    contactsHandleRef.current?.unsubscribe();
+    contactsHandleRef.current = null;
+    if (contactsTimerRef.current) clearTimeout(contactsTimerRef.current);
+    contactsTimerRef.current = null;
+  };
+
+  // Runs one fetch attempt. If EOSE arrives with no event, retries once with
+  // fresh:true. After the second EOSE-without-event we treat it as authoritative
+  // "this pubkey has no kind-3" and set follows = [] so feeds can render an
+  // empty state instead of spinning forever.
+  const runContactsFetchAttempt = (useFresh: boolean) => {
     if (!user || !user.pubkey) return;
-    let contactListFilter = {
-      kinds: [3],
-      authors: [user.pubkey],
-    };
-    const contactHandle = nostrRuntime.subscribe(relays, [contactListFilter], {
-      onEvent: (event: Event) => {
-        handleContactListEvent(event);
-      },
-      onEose: () => contactHandle.unsubscribe(),
-    });
+    cleanupContactsFetch();
+
+    const pubkeyAtAttempt = user.pubkey;
+    let receivedEvent = false;
+
+    contactsHandleRef.current = nostrRuntime.subscribe(
+      relays,
+      [{ kinds: [3], authors: [pubkeyAtAttempt] }],
+      {
+        onEvent: (event: Event) => {
+          receivedEvent = true;
+          handleContactListEvent(event);
+        },
+        onEose: () => {
+          // Buffer briefly so late-arriving events from slow relays still land.
+          contactsTimerRef.current = setTimeout(() => {
+            contactsHandleRef.current?.unsubscribe();
+            contactsHandleRef.current = null;
+            contactsTimerRef.current = null;
+            if (receivedEvent) return;
+            if (contactsAttemptRef.current < 2) {
+              contactsAttemptRef.current += 1;
+              runContactsFetchAttempt(true);
+            } else {
+              // Definitively no kind-3 — mark as checked-empty so feeds can
+              // render an empty state and we don't retry on every effect run.
+              setUser((prev) => {
+                if (!prev || prev.pubkey !== pubkeyAtAttempt) return prev;
+                return { ...prev, follows: [] } as User;
+              });
+            }
+          }, 1500);
+        },
+        fresh: useFresh,
+      }
+    );
+  };
+
+  const fetchContacts = () => {
+    contactsAttemptRef.current = 1;
+    runContactsFetchAttempt(false);
+  };
+
+  const refetchContacts = () => {
+    contactsAttemptRef.current = 1;
+    runContactsFetchAttempt(true);
   };
 
   const fetchLists = () => {
@@ -408,7 +465,10 @@ export function ListProvider({ children }: { children: ReactNode }) {
     if (!nostrRuntime) return;
     if (user) {
       if (!lists) fetchLists();
-      if (!user.follows || user.follows.length === 0) fetchContacts();
+      // Only kick off the fetch when we have no signal yet (follows === undefined).
+      // After the retry loop resolves, follows is either populated or [] — both
+      // are terminal states we shouldn't refetch from on every render.
+      if (user.follows === undefined && !contactsHandleRef.current) fetchContacts();
       if (!user.webOfTrust || user.webOfTrust.size === 0) subscribeToContacts();
       if (!myTopics) fetchMyTopics();
       if (bookmarkedPackKeys.size === 0 && !bookmarks10003) fetchBookmarks();
@@ -607,6 +667,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
           selectedList,
           handleListSelected,
           fetchLatestContactList,
+          refetchContacts,
           unfollowContact,
           myTopics,
           addTopicToMyTopics,

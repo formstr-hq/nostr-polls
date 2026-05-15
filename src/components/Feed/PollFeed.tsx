@@ -3,6 +3,7 @@ import { Event, Filter } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useRelays } from "../../hooks/useRelays";
+import { useListContext } from "../../hooks/useListContext";
 import { useReports } from "../../hooks/useReports";
 import { Box, Typography } from "@mui/material";
 import FeedError from "./FeedError";
@@ -93,6 +94,7 @@ export const PollFeed = () => {
 
   const { user } = useUserContext();
   const { relays } = useRelays();
+  const { refetchContacts } = useListContext();
   const { requestReportCheck, requestUserReportCheck } = useReports();
   const { setItems, clearItems } = useSubNav();
   const { registerRefresh } = useFeedActions();
@@ -280,6 +282,9 @@ export const PollFeed = () => {
   }, [eventSource, user, relays, subscribeWithAuthors]);
 
   const refreshFeed = useCallback(() => {
+    // If the active source depends on the contact list and we have none,
+    // re-trigger the contacts fetch first — the empty feed is a symptom, not the cause.
+    if (eventSource === "following" && !user?.follows?.length) refetchContacts();
     if (feedSubscription) feedSubscription.unsubscribe();
     // Don't clear existing events — keep showing old data while refreshing.
     // New events will merge in as they arrive from the network.
@@ -290,7 +295,7 @@ export const PollFeed = () => {
     loadingInitialRef.current = true;
     const closer = fetchInitialPolls(true);
     setFeedSubscription(closer);
-  }, [feedSubscription, fetchInitialPolls]);
+  }, [feedSubscription, fetchInitialPolls, eventSource, user?.follows, refetchContacts]);
 
   useEffect(() => {
     registerRefresh(refreshFeed);

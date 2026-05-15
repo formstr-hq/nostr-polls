@@ -112,8 +112,14 @@ export const useFollowingNotes = () => {
 
   // Load older notes (pagination down) or initial load
   const fetchNotes = useCallback(async (fresh?: boolean) => {
-    if (!user?.follows?.length) {
-      // User has no follows yet — nothing to fetch, mark as done so the spinner clears
+    if (user?.follows === undefined) {
+      // Contact list is still being fetched (retrying). Leave the spinner
+      // up — fetchNotes will be re-invoked when follows resolves (either
+      // to a populated array or to []).
+      return;
+    }
+    if (!user.follows.length) {
+      // Contact list fetched but user follows nobody — clear spinner so empty state renders.
       setInitialLoadDone(true);
       return;
     }

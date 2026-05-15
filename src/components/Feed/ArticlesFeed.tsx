@@ -4,6 +4,7 @@ import { Box, Typography } from "@mui/material";
 import { useRelays } from "../../hooks/useRelays";
 import { nostrRuntime } from "../../singletons";
 import { useUserContext } from "../../hooks/useUserContext";
+import { useListContext } from "../../hooks/useListContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { ArticleCard } from "../Articles/ArticleCard";
@@ -17,6 +18,7 @@ type Source = "global" | "following";
 const ArticlesFeed: React.FC = () => {
   const { relays } = useRelays();
   const { user } = useUserContext();
+  const { refetchContacts } = useListContext();
   const { fetchUserProfileThrottled, profiles } = useAppContext();
   const { setItems, clearItems } = useSubNav();
 
@@ -99,6 +101,9 @@ const ArticlesFeed: React.FC = () => {
   }, [source, relays, exhausted]);
 
   useEffect(() => {
+    // If we're trying to render a follow-dependent feed but follows is missing
+    // (truly empty or unresolved), re-trigger the contacts fetch.
+    if (source === "following" && !user?.follows?.length) refetchContacts();
     fetchBatch(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
