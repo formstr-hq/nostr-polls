@@ -9,7 +9,7 @@ import { useRelays } from "../../../hooks/useRelays";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { useNotification } from "../../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../../constants/notifications";
-import { pool } from "../../../singletons";
+import { waitForPublish } from "../../../utils/publish";
 
 interface LikesProps {
   pollEvent: Event;
@@ -56,17 +56,25 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
       return;
     }
 
-    const event: EventTemplate = {
-      content: emoji,
-      kind: 7,
-      tags: [["e", pollEvent.id, relays[0]]],
-      created_at: Math.floor(Date.now() / 1000),
-    };
+    try {
+      const event: EventTemplate = {
+        content: emoji,
+        kind: 7,
+        tags: [["e", pollEvent.id, relays[0]]],
+        created_at: Math.floor(Date.now() / 1000),
+      };
 
-    const finalEvent = await signEvent(event, user.privateKey);
-    pool.publish(relays, finalEvent!);
-    addEventToMap(finalEvent!);
-    setShowPicker(false);
+      const finalEvent = await signEvent(event, user.privateKey);
+      const publishResult = await waitForPublish(relays, finalEvent);
+      if (!publishResult.ok) {
+        throw new Error("No relay accepted reaction");
+      }
+      addEventToMap(finalEvent);
+      setShowPicker(false);
+    } catch (error) {
+      console.error("Failed to publish reaction", error);
+      showNotification(NOTIFICATION_MESSAGES.REACTION_PUBLISH_FAILED, "error");
+    }
   };
 
   useEffect(() => {
