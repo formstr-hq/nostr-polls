@@ -24,7 +24,7 @@ interface RepostButtonProps {
 const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
   const { user } = useUserContext();
   const { showNotification } = useNotification();
-  const { relays } = useRelays();
+  const { relays, writeRelays } = useRelays();
   const { repostsMap, fetchRepostsThrottled, addEventToMap } = useAppContext();
 
   const [reposted, setReposted] = useState(false);
@@ -81,7 +81,7 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
 
     try {
       const signedEvent = await signEvent(repostTemplate, user!.privateKey);
-      pool.publish(relays, signedEvent);
+      pool.publish(writeRelays, signedEvent);
       addEventToMap(signedEvent);
       setReposted(true);
     } catch (error) {

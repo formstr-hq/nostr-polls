@@ -52,7 +52,7 @@ export const ReportsContext = createContext<ReportsContextInterface | null>(
 
 export function ReportsProvider({ children }: { children: ReactNode }) {
   const { user } = useUserContext();
-  const { relays } = useRelays();
+  const { relays, writeRelays } = useRelays();
 
   // IDs (event ids or pubkeys) the current user has reported
   const [myReportedIds, setMyReportedIds] = useState<Set<string>>(new Set());
@@ -246,11 +246,11 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
         content,
       };
       const signed = await signEvent(eventTemplate);
-      pool.publish(relays, signed);
+      pool.publish(writeRelays, signed);
       // Optimistic: mark as reported immediately
       setMyReportedIds((prev) => new Set(Array.from(prev).concat([eventId, eventPubkey])));
     },
-    [relays]
+    [writeRelays]
   );
 
   const reportUser = useCallback(
@@ -262,10 +262,10 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
         content,
       };
       const signed = await signEvent(eventTemplate);
-      pool.publish(relays, signed);
+      pool.publish(writeRelays, signed);
       setMyReportedIds((prev) => new Set(Array.from(prev).concat([pubkey])));
     },
-    [relays]
+    [writeRelays]
   );
 
   return (

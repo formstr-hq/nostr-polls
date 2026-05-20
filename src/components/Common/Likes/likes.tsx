@@ -41,7 +41,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const { likesMap, fetchLikesThrottled, addEventToMap } = useAppContext();
   const { showNotification } = useNotification();
   const { user } = useUserContext();
-  const { relays } = useRelays();
+  const { relays, writeRelays } = useRelays();
   const [showPicker, setShowPicker] = useState(false);
   const theme = useTheme();
 
@@ -64,7 +64,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     };
 
     const finalEvent = await signEvent(event, user.privateKey);
-    pool.publish(relays, finalEvent!);
+    pool.publish(writeRelays, finalEvent!);
     addEventToMap(finalEvent!);
     setShowPicker(false);
   };
