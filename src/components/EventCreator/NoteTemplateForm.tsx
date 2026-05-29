@@ -28,8 +28,9 @@ import { Event, nip19 } from "nostr-tools";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { NotePreview } from "./NotePreview";
-import { publishWithGossip } from "../../utils/publish";
+import { publishWithGossip, PublishResult } from "../../utils/publish";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import MentionTextArea, { extractMentionTags } from "./MentionTextArea";
@@ -37,7 +38,21 @@ import { PostEnhancementDialog } from "./PostEnhancementDialog";
 import { aiService } from "../../services/ai-service";
 import { useAppContext } from "../../hooks/useAppContext";
 import { uploadToBlossom, getBlossomServer } from "../../services/blossomService";
-import { extractHashtags } from "../../utils/common";
+import { copyToClipboard, extractHashtags } from "../../utils/common";
+import { getAppBaseUrl } from "../../utils/platform";
+import { AudienceMenu, Audience } from "./AudienceMenu";
+import {
+  generateViewKey,
+  viewKeyToHex,
+  encryptPrivateNote,
+} from "../../nostr/privateNote";
+import {
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  TextField,
+} from "@mui/material";
 
 const UPLOAD_PLACEHOLDER = "[uploading…]";
 
@@ -50,6 +65,11 @@ const NoteTemplateForm: React.FC<{
   onPublishResult?: (event: Event, result: import("../../utils/publish").PublishResult) => void;
 }> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [audience, setAudience] = useState<Audience>({ kind: "public" });
+  const [shareLinkState, setShareLinkState] = useState<{
+    url: string;
+    result: PublishResult;
+  } | null>(null);
   const { result: publishResult, open: diagnosticOpen, setOpen: setDiagnosticOpen, title: diagnosticTitle, openModal, retry } = usePublishDiagnostic();
   const [showPreview, setShowPreview] = useState(false);
   const [topics, setTopics] = useState<string[]>([]);
@@ -162,16 +182,36 @@ const NoteTemplateForm: React.FC<{
         : expiresInSeconds
         ? now + expiresInSeconds
         : null;
-      const noteEvent = {
-        kind: NOSTR_EVENT_KINDS.TEXT_NOTE,
-        content: finalContent,
-        tags: [
+
+      // Private notes strip all content-revealing tags (topics, mentions, quote refs,
+      // relay hints) — those would let relays/scrapers learn what the encrypted note
+      // is about or who it references. Quotes/mentions remain inline in the encrypted
+      // content, so readers with the ViewKey still see them.
+      const isPrivate = audience.kind === "private";
+      let viewKey: Uint8Array | null = null;
+      let eventContentToPublish = finalContent;
+      let eventKind: number = NOSTR_EVENT_KINDS.TEXT_NOTE;
+      let eventTags: string[][];
+
+      if (isPrivate) {
+        viewKey = generateViewKey();
+        eventContentToPublish = encryptPrivateNote(finalContent, viewKey);
+        eventKind = NOSTR_EVENT_KINDS.PRIVATE_NOTE;
+        eventTags = expirationTs ? [["expiration", String(expirationTs)]] : [];
+      } else {
+        eventTags = [
           ...relays.map((relay) => ["relay", relay]),
           ...topics.map((tag) => ["t", tag]),
           ...mentionTags,
           ...quoteTags,
           ...(expirationTs ? [["expiration", String(expirationTs)]] : []),
-        ],
+        ];
+      }
+
+      const noteEvent = {
+        kind: eventKind,
+        content: eventContentToPublish,
+        tags: eventTags,
         created_at: now,
       };
       setIsSubmitting(true);
@@ -183,6 +223,22 @@ const NoteTemplateForm: React.FC<{
       }
       const result = await publishWithGossip(writeRelays, signedEvent);
       setIsSubmitting(false);
+
+      if (isPrivate && viewKey) {
+        const nevent = nip19.neventEncode({
+          id: signedEvent.id,
+          relays: writeRelays.slice(0, 2),
+          kind: signedEvent.kind,
+          author: signedEvent.pubkey,
+        });
+        const url = `${getAppBaseUrl()}/p/${nevent}#k=${viewKeyToHex(viewKey)}`;
+        setShareLinkState({ url, result });
+        if (!result.ok) {
+          showNotification(NOTIFICATION_MESSAGES.NOTE_PUBLISH_NO_RELAY, "error");
+        }
+        return;
+      }
+
       if (onPublishResult) {
         onPublishResult(signedEvent, result);
       } else {
@@ -402,9 +458,15 @@ const NoteTemplateForm: React.FC<{
                   label={`#${topic}`}
                   color="secondary"
                   variant="outlined"
+                  sx={{ opacity: audience.kind === "private" ? 0.4 : 1 }}
                 />
               ))}
             </Stack>
+            {audience.kind === "private" && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                Hashtags stay in your post but aren't published as topic tags.
+              </Typography>
+            )}
           </Box>
         )}
 
@@ -439,8 +501,27 @@ const NoteTemplateForm: React.FC<{
               </Button>
             )}
 
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+              <AudienceMenu
+                value={audience}
+                onChange={setAudience}
+                disabled={isSubmitting}
+              />
+              {audience.kind === "private" && (
+                <Typography variant="caption" color="text.secondary">
+                  You'll get a share link. Save it — we don't store the key, so losing the link means losing access.
+                </Typography>
+              )}
+            </Box>
+
             <Button type="submit" variant="contained" disabled={isSubmitting}>
-              {isSubmitting ? "Creating Note..." : "Create Note"}
+              {isSubmitting
+                ? audience.kind === "private"
+                  ? "Encrypting & publishing..."
+                  : "Creating Note..."
+                : audience.kind === "private"
+                ? "Create Private Note"
+                : "Create Note"}
             </Button>
 
             <Button
@@ -488,6 +569,59 @@ const NoteTemplateForm: React.FC<{
           onRetry={retry}
         />
       )}
+
+      <Dialog
+        open={!!shareLinkState}
+        onClose={() => {}}
+        maxWidth="sm"
+        fullWidth
+        disableEscapeKeyDown
+      >
+        <DialogTitle>Your private note is ready</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Anyone with this link can read the note. We don't store the key — save the link somewhere safe.
+          </Typography>
+          <TextField
+            fullWidth
+            multiline
+            value={shareLinkState?.url ?? ""}
+            InputProps={{ readOnly: true, sx: { fontFamily: "monospace", fontSize: "0.8rem" } }}
+            onFocus={(e) => e.target.select()}
+          />
+          {shareLinkState && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+              Published to {shareLinkState.result.accepted} / {shareLinkState.result.total} relays
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            startIcon={<ContentCopyIcon />}
+            onClick={async () => {
+              if (!shareLinkState) return;
+              try {
+                await copyToClipboard(shareLinkState.url);
+                showNotification("Link copied", "success");
+              } catch {
+                showNotification("Copy failed — select and copy manually", "error");
+              }
+            }}
+          >
+            Copy link
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              setShareLinkState(null);
+              setEventContent("");
+              if (onPublished) onPublished();
+            }}
+          >
+            Done
+          </Button>
+        </DialogActions>
+      </Dialog>
     </form>
   );
 };

@@ -19,6 +19,7 @@ import { PollResponse } from "./components/PollResponse";
 import { PollResults } from "./components/PollResults";
 import Header from "./components/Header";
 import { PrepareNote } from "./components/Notes/PrepareNote";
+import { PrivateNote } from "./components/Notes/PrivateNote";
 
 import { AppContextProvider } from "./contexts/app-context";
 import { ListProvider } from "./contexts/lists-context";
@@ -161,6 +162,10 @@ function AppContent() {
           <Route
             path="note/:eventId"
             element={<PrepareNoteWrapper />}
+          />
+          <Route
+            path="p/:nevent"
+            element={<PrivateNoteWrapper />}
           />
           <Route
             path="/profile/:npubOrNprofile"
@@ -334,6 +339,18 @@ function PrepareNoteWrapper() {
   return (
     <Box sx={{ height: "100%", overflowY: "auto" }}>
       <PrepareNote neventId={eventId} />
+    </Box>
+  );
+}
+
+// Wrapper for the private-note reader. ViewKey lives in the URL fragment so
+// it never leaves the browser.
+function PrivateNoteWrapper() {
+  const { nevent } = useParams();
+  if (!nevent) return null;
+  return (
+    <Box sx={{ height: "100%", overflowY: "auto" }}>
+      <PrivateNote neventId={nevent} />
     </Box>
   );
 }
