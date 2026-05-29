@@ -43,6 +43,8 @@ interface PublishDiagnosticModalProps {
   entries: DiagnosticEntry[];
   /** Called with a relay URL to retry just that relay, or undefined to retry all failed. */
   onRetry?: (relay?: string) => Promise<DiagnosticEntry[]>;
+  /** Optional content rendered above the relay table (e.g. a private-note share link). */
+  headerContent?: React.ReactNode;
 }
 
 function hostname(url: string): string {
@@ -103,6 +105,7 @@ export const PublishDiagnosticModal: React.FC<PublishDiagnosticModalProps> = ({
   title = "Relay publish results",
   entries,
   onRetry,
+  headerContent,
 }) => {
   useBackClose(open, onClose);
   const isMobile = useMediaQuery("(max-width:600px)");
@@ -166,6 +169,7 @@ export const PublishDiagnosticModal: React.FC<PublishDiagnosticModalProps> = ({
         </Box>
       </DialogTitle>
       <DialogContent sx={{ px: isMobile ? 1 : 2 }}>
+        {headerContent && <Box sx={{ mb: 2 }}>{headerContent}</Box>}
         <Table size="small">
           <TableHead>
             <TableRow>

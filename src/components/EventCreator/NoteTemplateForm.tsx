@@ -30,7 +30,7 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { NotePreview } from "./NotePreview";
-import { publishWithGossip, PublishResult } from "../../utils/publish";
+import { publishWithGossip } from "../../utils/publish";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import MentionTextArea, { extractMentionTags } from "./MentionTextArea";
@@ -46,13 +46,7 @@ import {
   viewKeyToHex,
   encryptPrivateNote,
 } from "../../nostr/privateNote";
-import {
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  TextField,
-} from "@mui/material";
+import { TextField } from "@mui/material";
 
 const UPLOAD_PLACEHOLDER = "[uploading…]";
 
@@ -66,10 +60,9 @@ const NoteTemplateForm: React.FC<{
 }> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [audience, setAudience] = useState<Audience>({ kind: "public" });
-  const [shareLinkState, setShareLinkState] = useState<{
-    url: string;
-    result: PublishResult;
-  } | null>(null);
+  // Set for private notes only — the decryptable share link shown inside the
+  // publish diagnostic modal. Non-null means the open modal is a private note.
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
   const { result: publishResult, open: diagnosticOpen, setOpen: setDiagnosticOpen, title: diagnosticTitle, openModal, retry } = usePublishDiagnostic();
   const [showPreview, setShowPreview] = useState(false);
   const [topics, setTopics] = useState<string[]>([]);
@@ -232,7 +225,11 @@ const NoteTemplateForm: React.FC<{
           author: signedEvent.pubkey,
         });
         const url = `${getAppBaseUrl()}/p/${nevent}#k=${viewKeyToHex(viewKey)}`;
-        setShareLinkState({ url, result });
+        // Reuse the publish diagnostic modal so private notes get the same
+        // per-relay retry / "retry all failed" affordance as public notes. The
+        // share link rides along as the modal's header content.
+        setShareUrl(url);
+        openModal(signedEvent, result, "Private note published");
         if (!result.ok) {
           showNotification(NOTIFICATION_MESSAGES.NOTE_PUBLISH_NO_RELAY, "error");
         }
@@ -559,7 +556,13 @@ const NoteTemplateForm: React.FC<{
           open={diagnosticOpen}
           onClose={() => {
             setDiagnosticOpen(false);
-            if (publishResult.ok) {
+            if (shareUrl) {
+              // Private note: clear the editor + link and let the parent decide
+              // where to go. (The user has already been shown the link to save.)
+              setShareUrl(null);
+              setEventContent("");
+              if (onPublished) onPublished();
+            } else if (publishResult.ok) {
               if (onPublished) onPublished();
               else navigate("/feeds/notes");
             }
@@ -567,61 +570,43 @@ const NoteTemplateForm: React.FC<{
           title={diagnosticTitle}
           entries={publishResult.relayResults}
           onRetry={retry}
+          headerContent={
+            shareUrl ? (
+              <Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  Anyone with this link can read the note. We don't store the key —
+                  save the link somewhere safe.
+                </Typography>
+                <TextField
+                  fullWidth
+                  multiline
+                  value={shareUrl}
+                  InputProps={{
+                    readOnly: true,
+                    sx: { fontFamily: "monospace", fontSize: "0.8rem" },
+                  }}
+                  onFocus={(e) => e.target.select()}
+                />
+                <Button
+                  size="small"
+                  startIcon={<ContentCopyIcon />}
+                  sx={{ mt: 1 }}
+                  onClick={async () => {
+                    try {
+                      await copyToClipboard(shareUrl);
+                      showNotification("Link copied", "success");
+                    } catch {
+                      showNotification("Copy failed — select and copy manually", "error");
+                    }
+                  }}
+                >
+                  Copy link
+                </Button>
+              </Box>
+            ) : undefined
+          }
         />
       )}
-
-      <Dialog
-        open={!!shareLinkState}
-        onClose={() => {}}
-        maxWidth="sm"
-        fullWidth
-        disableEscapeKeyDown
-      >
-        <DialogTitle>Your private note is ready</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Anyone with this link can read the note. We don't store the key — save the link somewhere safe.
-          </Typography>
-          <TextField
-            fullWidth
-            multiline
-            value={shareLinkState?.url ?? ""}
-            InputProps={{ readOnly: true, sx: { fontFamily: "monospace", fontSize: "0.8rem" } }}
-            onFocus={(e) => e.target.select()}
-          />
-          {shareLinkState && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-              Published to {shareLinkState.result.accepted} / {shareLinkState.result.total} relays
-            </Typography>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            startIcon={<ContentCopyIcon />}
-            onClick={async () => {
-              if (!shareLinkState) return;
-              try {
-                await copyToClipboard(shareLinkState.url);
-                showNotification("Link copied", "success");
-              } catch {
-                showNotification("Copy failed — select and copy manually", "error");
-              }
-            }}
-          >
-            Copy link
-          </Button>
-          <Button
-            variant="contained"
-            onClick={() => {
-              setShareLinkState(null);
-              setEventContent("");
-              if (onPublished) onPublished();
-            }}
-          >
-            Done
-          </Button>
-        </DialogActions>
-      </Dialog>
     </form>
   );
 };
