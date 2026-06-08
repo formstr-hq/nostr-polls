@@ -47,7 +47,7 @@ jobs:
 
   build:
     needs: resolve-pr
-    uses: formstr-hq/common-packages/.github/workflows/reusable-build-debug-apk.yml@master
+    uses: formstr-hq/common-packages/.github/workflows/reusable-build-debug-apk.yml@main
     with:
       pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
       pr_sha: ${{ needs.resolve-pr.outputs.pr_sha }}
