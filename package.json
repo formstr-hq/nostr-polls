@@ -17,6 +17,7 @@
     "@fontsource-variable/comfortaa": "^5.2.8",
     "@fontsource-variable/fredoka": "^5.2.10",
     "@fontsource-variable/raleway": "^5.2.8",
+    "@formstr/signer": "^0.1.0",
     "@mui/icons-material": "^6.1.2",
     "@mui/material": "^6.1.2",
     "@mui/styles": "^6.1.2",
@@ -75,5 +76,8 @@
     "@testing-library/jest-dom": "^5.17.0",
     "@testing-library/react": "^13.4.0",
     "@types/jest": "^27.5.2"
+  },
+  "resolutions": {
+    "@noble/hashes": "1.8.0"
   }
 }

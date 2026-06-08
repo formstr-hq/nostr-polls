@@ -13,11 +13,12 @@ import {
   Typography,
   Alert,
   Box,
+  InputAdornment,
+  IconButton,
 } from "@mui/material";
+import { Visibility, VisibilityOff } from "@mui/icons-material";
 import { signerManager } from "../../singletons/Signer/SignerManager";
 import { useUserContext } from "../../hooks/useUserContext";
-import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
-import { hexToBytes, bytesToHex } from "@noble/hashes/utils";
 import { useNotification } from "../../contexts/notification-context";
 import { useBackClose } from "../../hooks/useBackClose";
 
@@ -30,127 +31,144 @@ export const CreateAccountModal: React.FC<Props> = ({ open, onClose }) => {
   const [name, setName] = useState("");
   const [picture, setPicture] = useState("");
   const [about, setAbout] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [showPassphrase, setShowPassphrase] = useState(false);
   const [keysVisible, setKeysVisible] = useState(false);
-  const [pubkey, setPubkey] = useState("");
-  const [privkey, setPrivkey] = useState("");
+  const [npub, setNpub] = useState("");
+  const [ncryptsec, setNcryptsec] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const { setUser } = useUserContext();
   useBackClose(open, onClose);
 
   const handleCreateAccount = async () => {
+    if (!passphrase) {
+      setError("Choose a passphrase to encrypt your account");
+      return;
+    }
+    setError(null);
+    setLoading(true);
     try {
-      let secret = generateSecretKey();
-      const keys = { secret: bytesToHex(secret), pubkey: getPublicKey(secret) };
-      await signerManager.createGuestAccount(keys?.secret, {
+      const result = await signerManager.createGuestAccount(passphrase, {
         name,
         picture,
         about,
       });
-      setPubkey(keys?.pubkey || "");
-      setPrivkey(keys?.secret || "");
+      setNpub(result.npub);
+      setNcryptsec(result.ncryptsec);
       setUser(signerManager.getUser());
       setKeysVisible(true);
     } catch (e) {
-      console.error("Failed to create guest account", e);
-      alert("Something went wrong.");
+      console.error("Failed to create account", e);
+      setError("Something went wrong creating your account.");
+    } finally {
+      setLoading(false);
     }
-  };
-
-  const handleSkip = async () => {
-    let secret = generateSecretKey();
-    const keys = { secret: bytesToHex(secret), pubkey: getPublicKey(secret) };
-    await signerManager.createGuestAccount(keys.secret, {
-      name,
-      picture,
-      about,
-    });
-    setPubkey(keys?.pubkey || "");
-    setPrivkey(keys?.secret || "");
-    setUser(signerManager.getUser());
-    setKeysVisible(true);
   };
 
   const handleClose = () => {
     setName("");
     setPicture("");
     setAbout("");
+    setPassphrase("");
+    setShowPassphrase(false);
     setKeysVisible(false);
-    setPubkey("");
-    setPrivkey("");
+    setNpub("");
+    setNcryptsec("");
+    setError(null);
     onClose();
   };
 
   return (
     <Dialog open={open} onClose={handleClose} fullWidth maxWidth="sm">
-      <DialogTitle>Create Guest Account</DialogTitle>
+      <DialogTitle>Create Account</DialogTitle>
       <DialogContent>
         {keysVisible ? (
           <Box mt={2}>
             <Alert severity="warning" sx={{ mb: 2 }}>
-              These keys are stored <strong>insecurely</strong> in your browser.
-              Back them up or import them into a NIP-07 extension or remote
-              signer. If you lose them, your account is gone forever.
+              <strong>Back this up now.</strong> Your encrypted key
+              (ncryptsec) and passphrase are the <em>only</em> way to recover
+              this account. If you lose them, your account is gone forever.
             </Alert>
 
             <Stack spacing={2}>
-              {/* Public Key */}
               <Box>
                 <Typography variant="subtitle2">Public Key (npub)</Typography>
-                <MonospaceDisplay value={nip19.npubEncode(pubkey)} />
+                <MonospaceDisplay value={npub} />
               </Box>
 
-              {/* Private Key */}
               <Box>
-                <Typography variant="subtitle2">Private Key (nsec)</Typography>
-                <MonospaceDisplay
-                  value={nip19.nsecEncode(hexToBytes(privkey))}
-                />
+                <Typography variant="subtitle2">
+                  Encrypted Private Key (ncryptsec)
+                </Typography>
+                <MonospaceDisplay value={ncryptsec} />
               </Box>
             </Stack>
           </Box>
         ) : (
-          <>
-            <Stack spacing={2} mt={1}>
-              <TextField
-                label="Display Name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                fullWidth
-              />
-              <TextField
-                label="Image URL"
-                value={picture}
-                onChange={(e) => setPicture(e.target.value)}
-                fullWidth
-              />
-              <TextField
-                label="About (optional description)"
-                value={about}
-                onChange={(e) => setAbout(e.target.value)}
-                fullWidth
-                multiline
-                rows={2}
-              />
-              <Box>
-                <Typography variant="subtitle2" gutterBottom>
-                  Preview
-                </Typography>
-                <Stack direction="row" spacing={2} alignItems="center">
-                  <Avatar src={picture} sx={{ width: 56, height: 56 }}>
-                    {!picture && name ? name[0] : "?"}
-                  </Avatar>
-                  <Box>
-                    <Typography variant="subtitle1">
-                      {name || "Anonymous"}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {about || "No description provided."}
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Box>
-            </Stack>
-          </>
+          <Stack spacing={2} mt={1}>
+            {error && <Alert severity="error">{error}</Alert>}
+            <TextField
+              label="Display Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Image URL"
+              value={picture}
+              onChange={(e) => setPicture(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="About (optional description)"
+              value={about}
+              onChange={(e) => setAbout(e.target.value)}
+              fullWidth
+              multiline
+              rows={2}
+            />
+            <TextField
+              label="Passphrase"
+              type={showPassphrase ? "text" : "password"}
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              fullWidth
+              required
+              helperText="Encrypts your private key on this device. You'll need it to sign on next launch."
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      onClick={() => setShowPassphrase((v) => !v)}
+                      edge="end"
+                    >
+                      {showPassphrase ? <VisibilityOff /> : <Visibility />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
+            <Box>
+              <Typography variant="subtitle2" gutterBottom>
+                Preview
+              </Typography>
+              <Stack direction="row" spacing={2} alignItems="center">
+                <Avatar src={picture} sx={{ width: 56, height: 56 }}>
+                  {!picture && name ? name[0] : "?"}
+                </Avatar>
+                <Box>
+                  <Typography variant="subtitle1">
+                    {name || "Anonymous"}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {about || "No description provided."}
+                  </Typography>
+                </Box>
+              </Stack>
+            </Box>
+          </Stack>
         )}
       </DialogContent>
       <DialogActions>
@@ -160,9 +178,15 @@ export const CreateAccountModal: React.FC<Props> = ({ open, onClose }) => {
           </Button>
         ) : (
           <>
-            <Button onClick={handleSkip}>Skip</Button>
-            <Button onClick={handleCreateAccount} variant="contained">
-              Continue
+            <Button onClick={handleClose} disabled={loading}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateAccount}
+              variant="contained"
+              disabled={loading || !passphrase}
+            >
+              {loading ? "Creating…" : "Create Account"}
             </Button>
           </>
         )}

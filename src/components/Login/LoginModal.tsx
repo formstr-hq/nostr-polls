@@ -11,18 +11,14 @@ import {
   Alert,
   ButtonBase,
   Divider,
-  InputAdornment,
-  IconButton,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import VpnKeyOutlinedIcon from "@mui/icons-material/VpnKeyOutlined";
-import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import PhonelinkLockOutlinedIcon from "@mui/icons-material/PhonelinkLockOutlined";
 import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
 import PersonOutlinedIcon from "@mui/icons-material/PersonOutlined";
 import HowToVoteOutlinedIcon from "@mui/icons-material/HowToVoteOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import { Visibility, VisibilityOff } from "@mui/icons-material";
 import { signerManager } from "../../singletons/Signer/SignerManager";
 import { useUserContext } from "../../hooks/useUserContext";
 import { CreateAccountModal } from "./CreateAccountModal";
@@ -30,7 +26,6 @@ import { isAndroidNative, isNative } from "../../utils/platform";
 import { NostrSignerPlugin } from "nostr-signer-capacitor-plugin";
 import { SignerAppInfo } from "nostr-signer-capacitor-plugin/dist/esm/definitions";
 import { useBackClose } from "../../hooks/useBackClose";
-import { nip19 } from "nostr-tools";
 
 interface Props {
   open: boolean;
@@ -41,12 +36,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const { setUser } = useUserContext();
   const theme = useTheme();
   const [showCreateAccount, setShowCreateAccount] = useState(false);
-  const [showNsec, setShowNsec] = useState(false);
   const [showNip46, setShowNip46] = useState(false);
-  const [nsec, setNsec] = useState("");
-  const [showNsecText, setShowNsecText] = useState(false);
-  const [nsecError, setNsecError] = useState<string | null>(null);
-  const [nsecLoading, setNsecLoading] = useState(false);
   const [bunkerUri, setBunkerUri] = useState("");
   const [error, setError] = useState("");
   const [installedSigners, setInstalledSigners] = useState<SignerAppInfo[]>([]);
@@ -91,27 +81,6 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     } catch (err) {
       setError("Failed to connect to remote signer.");
       console.error(err);
-    }
-  };
-
-  const handleNsecLogin = async () => {
-    setNsecError(null);
-    const trimmed = nsec.trim();
-    try {
-      const decoded = nip19.decode(trimmed);
-      if (decoded.type !== "nsec") throw new Error();
-    } catch {
-      setNsecError("Invalid nsec. It should start with nsec1…");
-      return;
-    }
-    try {
-      setNsecLoading(true);
-      await signerManager.loginWithNsec(trimmed);
-      onClose();
-    } catch (e) {
-      setNsecError("Failed to log in with nsec");
-    } finally {
-      setNsecLoading(false);
     }
   };
 
@@ -210,72 +179,6 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
             accentAlpha={accentAlpha}
             onClick={handleLoginWithNip07}
           />
-        )}
-
-        {/* nsec — native only, inline collapse */}
-        {isNative && (
-          <Box>
-            <OptionButton
-              icon={<LockOutlinedIcon />}
-              title="Private Key (nsec)"
-              description="Stored securely on this device"
-              accentColor={theme.palette.primary.main}
-              accentAlpha={accentAlpha}
-              onClick={() => {
-                setShowNsec((p) => !p);
-                setNsecError(null);
-              }}
-              chevronRotated={showNsec}
-            />
-            <Collapse in={showNsec}>
-              <Box
-                sx={{
-                  px: 2,
-                  pb: 2,
-                  bgcolor: `${theme.palette.primary.main}${accentAlpha}`,
-                }}
-              >
-                <TextField
-                  fullWidth
-                  size="small"
-                  label="nsec1..."
-                  type={showNsecText ? "text" : "password"}
-                  value={nsec}
-                  onChange={(e) => setNsec(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleNsecLogin()}
-                  error={!!nsecError}
-                  helperText={nsecError}
-                  sx={{ mt: 1 }}
-                  InputProps={{
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        <IconButton
-                          size="small"
-                          onClick={() => setShowNsecText((v) => !v)}
-                          edge="end"
-                        >
-                          {showNsecText ? (
-                            <VisibilityOff fontSize="small" />
-                          ) : (
-                            <Visibility fontSize="small" />
-                          )}
-                        </IconButton>
-                      </InputAdornment>
-                    ),
-                  }}
-                />
-                <Button
-                  variant="contained"
-                  fullWidth
-                  onClick={handleNsecLogin}
-                  disabled={!nsec || nsecLoading}
-                  sx={{ mt: 1 }}
-                >
-                  {nsecLoading ? "Signing in…" : "Sign in"}
-                </Button>
-              </Box>
-            </Collapse>
-          </Box>
         )}
 
         {/* NIP-46 Bunker, inline collapse */}

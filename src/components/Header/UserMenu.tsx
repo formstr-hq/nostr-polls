@@ -203,7 +203,7 @@ export const UserMenu: React.FC = () => {
                     secondary={
                       <Typography
                         variant="caption"
-                        color={account.loginMethod === "guest" ? "warning.main" : "text.secondary"}
+                        color={account.loginMethod === "ncryptsec" ? "warning.main" : "text.secondary"}
                         sx={{ fontFamily: "monospace", fontSize: "0.65rem" }}
                       >
                         {shortNpub(account.pubkey)}
