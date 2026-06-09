@@ -116,9 +116,20 @@ class SignerManager {
   private onChangeCallbacks: Set<() => void> = new Set();
   private loginModalCallback: (() => Promise<void>) | null = null;
   private passphraseCallback: PassphraseCallback | null = null;
-  private initPromise: Promise<void> | null = null;
   /** Legacy nsec/guest accounts awaiting interactive passphrase migration. */
   private pendingMigrations: PendingMigration[] = [];
+  /**
+   * Serializes all operations that mutate the active account / active signer:
+   * `hydrate`, `createGuestAccount`, `switchAccount`, `removeAccount`,
+   * `loginWith*`, `afterLogin`, and the interactive unlock path inside
+   * `getSigner`. Without this, a slow boot-time silent unlock can land after
+   * a user-driven login and snap the active signer back to the previous
+   * account — at which point a kind-0 publish signs with the wrong key.
+   *
+   * NOT reentrant. Code already running inside `withSignerLock` must not call
+   * `withSignerLock` again (use the package signer directly).
+   */
+  private signerLock: Promise<unknown> = Promise.resolve();
 
   constructor() {
     // Migrate legacy storage BEFORE the package's Signer constructor reads
@@ -133,9 +144,23 @@ class SignerManager {
     });
     this.signer.onChange((event) => this.handleSignerEvent(event));
 
-    this.initPromise = this.hydrate().finally(() => {
-      this.initPromise = null;
+    // Hydrate runs under the lock so any user-initiated login that fires
+    // before silent-unlock completes will queue behind it.
+    this.withSignerLock(() => this.hydrate());
+  }
+
+  private async withSignerLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.signerLock;
+    let release: () => void = () => {};
+    this.signerLock = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    try {
+      await previous;
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -162,6 +187,16 @@ class SignerManager {
     return this.user;
   }
 
+  /**
+   * Resolves once any in-flight signer-mutating operation (initial hydrate,
+   * an ongoing login, a switch, ...) finishes. UI handlers can await this
+   * before kicking off a new operation if they want to avoid contending for
+   * the lock and surfacing a confusing intermediate state.
+   */
+  async awaitReady(): Promise<void> {
+    await this.signerLock;
+  }
+
   registerLoginModal(callback: () => Promise<void>): void {
     this.loginModalCallback = callback;
   }
@@ -178,28 +213,32 @@ class SignerManager {
   }
 
   async switchAccount(pubkey: string): Promise<void> {
-    await this.signer.switchAccount(pubkey);
-    // After switch the package clears the in-memory signer (locked state).
-    const account = this.signer.getActiveAccount();
-    if (account) {
-      await this.silentUnlock(account);
-    }
+    await this.withSignerLock(async () => {
+      await this.signer.switchAccount(pubkey);
+      // After switch the package clears the in-memory signer (locked state).
+      const account = this.signer.getActiveAccount();
+      if (account) {
+        await this.silentUnlock(account);
+      }
+    });
   }
 
   async removeAccount(pubkey: string): Promise<void> {
-    await this.signer.logout(pubkey);
-    removeCachedUserData(pubkey);
-    // If the user removes a pending-migration account, drop it too.
-    this.pendingMigrations = this.pendingMigrations.filter(
-      (p) => p.pubkey !== pubkey,
-    );
-    // Best-effort: clear legacy secure storage for nsec accounts.
-    try {
-      await removeNsecForAccount(pubkey);
-      await removeLegacyNsecForAccount(pubkey);
-    } catch {
-      // Non-native environment will throw — ignored.
-    }
+    await this.withSignerLock(async () => {
+      await this.signer.logout(pubkey);
+      removeCachedUserData(pubkey);
+      // If the user removes a pending-migration account, drop it too.
+      this.pendingMigrations = this.pendingMigrations.filter(
+        (p) => p.pubkey !== pubkey,
+      );
+      // Best-effort: clear legacy secure storage for nsec accounts.
+      try {
+        await removeNsecForAccount(pubkey);
+        await removeLegacyNsecForAccount(pubkey);
+      } catch {
+        // Non-native environment will throw — ignored.
+      }
+    });
   }
 
   async logout(): Promise<void> {
@@ -213,48 +252,83 @@ class SignerManager {
   }
 
   async getSigner(): Promise<ActiveSigner> {
-    // Wait for initial hydrate so a sign request fired during boot doesn't
-    // race the silent-unlock.
-    if (this.initPromise) await this.initPromise;
+    // Wait for any in-flight signer mutation (initial hydrate, ongoing
+    // login/switch) so a sign request fired during boot doesn't race.
+    await this.signerLock;
 
     const active = this.signer.getActiveSigner();
     if (active) return active;
 
-    // No active signer — figure out why and recover.
-    const account = this.signer.getActiveAccount();
+    // No active signer — the recovery paths below all mutate active state,
+    // so acquire the lock before they touch the package signer.
+    return this.withSignerLock(async () => {
+      // Re-check inside the lock: another caller may have unlocked already
+      // while we were waiting.
+      const alreadyActive = this.signer.getActiveSigner();
+      if (alreadyActive) return alreadyActive;
 
-    // Case 1: an active account is hydrated but locked. Try silent unlock
-    // again (e.g. NIP-46 may have reconnected by now) before prompting.
-    if (account) {
-      const unlocked = await this.silentUnlock(account).catch(() => null);
-      if (unlocked) return unlocked;
+      const account = this.signer.getActiveAccount();
 
-      // ncryptsec is the only locked state that needs interactive input.
-      if (account.method === "ncryptsec" && account.ncryptsec) {
-        const signer = await this.promptUnlock(account.pubkey, account.ncryptsec);
-        if (signer) return signer;
+      // Case 1: an active account is hydrated but locked. Try silent unlock
+      // again (e.g. NIP-46 may have reconnected by now) before prompting.
+      if (account) {
+        const unlocked = await this.silentUnlock(account).catch(() => null);
+        if (unlocked) return unlocked;
+
+        // ncryptsec is the only locked state that needs interactive input.
+        if (account.method === "ncryptsec" && account.ncryptsec) {
+          const signer = await this.promptUnlock(
+            account.pubkey,
+            account.ncryptsec,
+          );
+          if (signer) return signer;
+        }
       }
-    }
 
-    // Case 2: there's a pending legacy nsec/guest migration. Prompt for a
-    // passphrase to convert it to ncryptsec, then log in.
-    if (this.pendingMigrations.length > 0) {
-      const migrated = await this.runPendingMigration(this.pendingMigrations[0]);
-      if (migrated) return migrated;
-    }
+      // Case 2: there's a pending legacy nsec/guest migration. Prompt for a
+      // passphrase to convert it to ncryptsec, then log in.
+      if (this.pendingMigrations.length > 0) {
+        const migrated = await this.runPendingMigration(
+          this.pendingMigrations[0],
+        );
+        if (migrated) return migrated;
+      }
 
-    // Case 3: no account at all — open the login modal.
-    if (this.loginModalCallback) {
-      await this.loginModalCallback();
-      const after = this.signer.getActiveSigner();
-      if (after) return after;
-    }
+      // Case 3: no account at all — open the login modal.
+      if (this.loginModalCallback) {
+        await this.loginModalCallback();
+        const after = this.signer.getActiveSigner();
+        if (after) return after;
+      }
 
-    throw new Error("No signer available and no login flow registered.");
+      throw new Error("No signer available and no login flow registered.");
+    });
   }
 
   async publishKind0(user: User): Promise<void> {
     const signer = await this.getSigner();
+    await this.publishKind0WithSigner(user, signer);
+  }
+
+  /**
+   * Sign+publish a kind-0 using a specific signer reference. Used inside
+   * `withSignerLock`-guarded operations (createGuestAccount, afterLogin) so
+   * they can publish without re-entering the lock via getSigner.
+   *
+   * Verifies the signer's pubkey matches the user's pubkey first — a hard
+   * guard against publishing one account's metadata under another account's
+   * signature (which would silently overwrite the second account's kind-0).
+   */
+  private async publishKind0WithSigner(
+    user: User,
+    signer: ActiveSigner,
+  ): Promise<void> {
+    const signerPubkey = await signer.getPublicKey();
+    if (signerPubkey !== user.pubkey) {
+      throw new Error(
+        `publishKind0: active signer pubkey ${signerPubkey} does not match target ${user.pubkey}`,
+      );
+    }
     const kind0Event: EventTemplate = {
       kind: 0,
       created_at: Math.floor(Date.now() / 1000),
@@ -284,50 +358,65 @@ class SignerManager {
   }
 
   /**
-   * Post-login bootstrap for accounts created/unlocked via the package's
-   * built-in login UI. Refreshes the kind-0 cache; if the relays have no
-   * kind-0 for this pubkey, treats it as a brand-new account and publishes
-   * default profile + inbox relays.
+   * Post-login bootstrap. Refreshes the kind-0 cache from relays so the
+   * header shows the right name/avatar.
+   *
+   * Deliberately does NOT auto-publish anything. A login via NIP-07 / NIP-46
+   * / NIP-55 always points at an existing account — if the kind-0 fetch
+   * comes back null we cannot distinguish "user has no kind-0 yet" from
+   * "relays timed out and the kind-0 we wanted is sitting somewhere else",
+   * and publishing a default `Anon...` kind-0 on top of a real profile
+   * silently rugs it. New accounts created via `createGuestAccount` get
+   * their initial kind-0 there, where we *know* the pubkey is brand new.
    */
   async afterLogin(pubkey: string): Promise<void> {
-    const kind0 = await fetchUserProfile(pubkey).catch(() => null);
-    if (kind0) {
-      await this.afterLoginRefreshProfile(pubkey);
-      return;
-    }
-    const user: User = {
-      pubkey,
-      name: ANONYMOUS_USER_NAME,
-      picture: DEFAULT_IMAGE_URL,
-    };
-    setCachedUserData(pubkey, { name: user.name, picture: user.picture });
-    this.user = user;
-    try {
-      await this.publishKind0(user);
-    } catch (e) {
-      console.warn("Failed to publish default kind-0:", e);
-    }
-    try {
-      await publishInboxRelays(defaultRelays);
-    } catch (e) {
-      console.warn("publishInboxRelays failed:", e);
-    }
-    this.notify();
+    await this.withSignerLock(() => this.afterLoginInternal(pubkey));
+  }
+
+  /** Lock-free body of `afterLogin`. Callers must already hold the lock. */
+  private async afterLoginInternal(pubkey: string): Promise<void> {
+    await this.afterLoginRefreshProfile(pubkey);
+  }
+
+  /**
+   * Run a login operation (whatever method — extension, bunker URI,
+   * nostrconnect, ncryptsec) atomically with the post-login kind-0 bootstrap.
+   * The whole flow runs under the signer lock so a slow silent-unlock can't
+   * land between the login and the kind-0 publish.
+   *
+   * UI handlers should prefer this over calling `getPackageSigner().loginWith*`
+   * directly — that pattern leaves a TOCTOU window between login and
+   * afterLogin where the active signer can be reset.
+   */
+  async runLogin(
+    operation: (packageSigner: Signer) => Promise<{ pubkey: string }>,
+  ): Promise<{ pubkey: string }> {
+    return this.withSignerLock(async () => {
+      const result = await operation(this.signer);
+      await this.afterLoginInternal(result.pubkey);
+      return result;
+    });
   }
 
   async loginWithNip07(): Promise<void> {
-    const account = await this.signer.loginWithExtension();
-    await this.afterLoginRefreshProfile(account.pubkey);
+    await this.withSignerLock(async () => {
+      const account = await this.signer.loginWithExtension();
+      await this.afterLoginRefreshProfile(account.pubkey);
+    });
   }
 
   async loginWithNip46(bunkerUri: string): Promise<void> {
-    const account = await this.signer.loginWithBunkerUri(bunkerUri, { pool });
-    await this.afterLoginRefreshProfile(account.pubkey);
+    await this.withSignerLock(async () => {
+      const account = await this.signer.loginWithBunkerUri(bunkerUri, { pool });
+      await this.afterLoginRefreshProfile(account.pubkey);
+    });
   }
 
   async loginWithNip55(packageName: string, _cachedPubkey?: string): Promise<void> {
-    const account = await this.signer.loginWithAndroidSigner({ packageName });
-    await this.afterLoginRefreshProfile(account.pubkey);
+    await this.withSignerLock(async () => {
+      const account = await this.signer.loginWithAndroidSigner({ packageName });
+      await this.afterLoginRefreshProfile(account.pubkey);
+    });
   }
 
   /**
@@ -339,28 +428,33 @@ class SignerManager {
     passphrase: string,
     metadata: { name?: string; picture?: string; about?: string },
   ): Promise<{ npub: string; ncryptsec: string }> {
-    const result = await this.signer.createAccount(passphrase);
-    const account = this.signer.getActiveAccount();
-    if (!account) throw new Error("createAccount succeeded but no active account");
+    return this.withSignerLock(async () => {
+      const result = await this.signer.createAccount(passphrase);
+      const account = this.signer.getActiveAccount();
+      const signer = this.signer.getActiveSigner();
+      if (!account || !signer) {
+        throw new Error("createAccount succeeded but no active signer");
+      }
 
-    setCachedUserData(account.pubkey, {
-      name: metadata.name,
-      picture: metadata.picture,
-      about: metadata.about,
+      setCachedUserData(account.pubkey, {
+        name: metadata.name,
+        picture: metadata.picture,
+        about: metadata.about,
+      });
+      this.user = {
+        pubkey: account.pubkey,
+        name: metadata.name || ANONYMOUS_USER_NAME,
+        picture: metadata.picture || DEFAULT_IMAGE_URL,
+        about: metadata.about,
+      };
+
+      await this.publishKind0WithSigner(this.user, signer);
+      await publishInboxRelays(defaultRelays).catch((e) =>
+        console.warn("publishInboxRelays failed:", e),
+      );
+      this.notify();
+      return result;
     });
-    this.user = {
-      pubkey: account.pubkey,
-      name: metadata.name || ANONYMOUS_USER_NAME,
-      picture: metadata.picture || DEFAULT_IMAGE_URL,
-      about: metadata.about,
-    };
-
-    await this.publishKind0(this.user);
-    await publishInboxRelays(defaultRelays).catch((e) =>
-      console.warn("publishInboxRelays failed:", e),
-    );
-    this.notify();
-    return result;
   }
 
   // -------------------------------------------------------------------------

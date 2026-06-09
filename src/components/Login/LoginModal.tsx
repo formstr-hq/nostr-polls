@@ -38,6 +38,27 @@ interface Props {
 
 type ExpandedSection = "bunker" | "ncryptsec" | "qr" | null;
 
+// Default permissions requested when pairing with a NIP-46 remote signer.
+// Amber expects `sign_event:<kind>` entries (a bare `sign_event` without a
+// kind makes recent builds fail-closed before showing the approve screen).
+// `get_public_key` is required for the initial handshake.
+const NOSTRCONNECT_PERMS = [
+  "get_public_key",
+  "sign_event:0",
+  "sign_event:1",
+  "sign_event:3",
+  "sign_event:5",
+  "sign_event:6",
+  "sign_event:7",
+  "sign_event:1059",
+  "sign_event:9735",
+  "sign_event:10050",
+  "nip04_encrypt",
+  "nip04_decrypt",
+  "nip44_encrypt",
+  "nip44_decrypt",
+];
+
 export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const { setUser } = useUserContext();
   const theme = useTheme();
@@ -87,12 +108,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     setExpanded((prev) => (prev === section ? null : section));
   };
 
-  const finishLogin = async (pubkey: string) => {
-    try {
-      await signerManager.afterLogin(pubkey);
-    } catch (e) {
-      console.warn("afterLogin failed:", e);
-    }
+  const finishLogin = () => {
     setUser(signerManager.getUser());
     onClose();
   };
@@ -100,8 +116,8 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const handleLoginWithNip07 = async () => {
     setError("");
     try {
-      const account = await signerManager.getPackageSigner().loginWithExtension();
-      await finishLogin(account.pubkey);
+      await signerManager.runLogin((s) => s.loginWithExtension());
+      finishLogin();
     } catch (err) {
       setError("NIP-07 login failed");
       console.error(err);
@@ -112,10 +128,8 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     if (!bunkerUri) return;
     setError("");
     try {
-      const account = await signerManager
-        .getPackageSigner()
-        .loginWithBunkerUri(bunkerUri, { pool });
-      await finishLogin(account.pubkey);
+      await signerManager.runLogin((s) => s.loginWithBunkerUri(bunkerUri, { pool }));
+      finishLogin();
     } catch (err) {
       setError("Failed to connect to remote signer.");
       console.error(err);
@@ -126,10 +140,10 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     if (!ncryptsec || !ncryptsecPass) return;
     setError("");
     try {
-      const account = await signerManager
-        .getPackageSigner()
-        .loginWithNcryptsec(ncryptsec.trim(), ncryptsecPass);
-      await finishLogin(account.pubkey);
+      await signerManager.runLogin((s) =>
+        s.loginWithNcryptsec(ncryptsec.trim(), ncryptsecPass),
+      );
+      finishLogin();
     } catch (err) {
       setError("Invalid ncryptsec or passphrase.");
       console.error(err);
@@ -150,13 +164,19 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     qrAbortRef.current = abort;
     setQrUri(null);
     try {
-      const account = await signerManager.getPackageSigner().loginWithNostrConnect({
-        relays,
-        pool,
-        signal: abort.signal,
-        onUri: (uri) => setQrUri(uri),
-      });
-      await finishLogin(account.pubkey);
+      await signerManager.runLogin((s) =>
+        s.loginWithNostrConnect({
+          relays,
+          pool,
+          signal: abort.signal,
+          // Amber (and most NIP-46 signers) need explicit perms to surface
+          // the approve prompt; without these the request can silently no-op.
+          perms: NOSTRCONNECT_PERMS,
+          metadata: { name: "Pollerama" },
+          onUri: (uri) => setQrUri(uri),
+        }),
+      );
+      finishLogin();
     } catch (err: any) {
       if (err?.name !== "AbortError") {
         setError(err?.message ?? "Remote signer pairing failed.");
@@ -165,6 +185,15 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
       setQrUri(null);
     } finally {
       qrAbortRef.current = null;
+    }
+  };
+
+  const handleCopyQrUri = async () => {
+    if (!qrUri) return;
+    try {
+      await navigator.clipboard.writeText(qrUri);
+    } catch (e) {
+      console.warn("Failed to copy nostrconnect URI:", e);
     }
   };
 
@@ -354,10 +383,13 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
                     flexDirection: "column",
                     alignItems: "center",
                     gap: 1.5,
+                    width: "100%",
                   }}
                 >
                   <Box sx={{ p: 1.5, bgcolor: "#fff", borderRadius: 2 }}>
-                    <QRCodeSVG value={qrUri} size={200} />
+                    {/* Higher error-correction level keeps the QR scannable
+                        even with a longer URI (perms + name + relays). */}
+                    <QRCodeSVG value={qrUri} size={256} level="M" />
                   </Box>
                   <Typography
                     variant="caption"
@@ -366,6 +398,37 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
                   >
                     Scan with your remote signer. Waiting for pairing&hellip;
                   </Typography>
+                  <Box sx={{ width: "100%" }}>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ display: "block", mb: 0.5 }}
+                    >
+                      Or paste this into your signer:
+                    </Typography>
+                    <Box sx={{ display: "flex", gap: 1, alignItems: "stretch" }}>
+                      <TextField
+                        value={qrUri}
+                        size="small"
+                        fullWidth
+                        InputProps={{
+                          readOnly: true,
+                          sx: {
+                            fontFamily: "monospace",
+                            fontSize: "0.7rem",
+                          },
+                        }}
+                        onFocus={(e) => e.target.select()}
+                      />
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={handleCopyQrUri}
+                      >
+                        Copy
+                      </Button>
+                    </Box>
+                  </Box>
                   <Button
                     size="small"
                     variant="text"
