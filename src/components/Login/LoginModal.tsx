@@ -1,5 +1,5 @@
 // components/LoginModal.tsx
-import React, { useEffect, useState, type ReactNode } from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Dialog,
   Stack,
@@ -16,9 +16,12 @@ import { useTheme } from "@mui/material/styles";
 import VpnKeyOutlinedIcon from "@mui/icons-material/VpnKeyOutlined";
 import PhonelinkLockOutlinedIcon from "@mui/icons-material/PhonelinkLockOutlined";
 import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
-import PersonOutlinedIcon from "@mui/icons-material/PersonOutlined";
+import PersonAddOutlinedIcon from "@mui/icons-material/PersonAddOutlined";
+import QrCodeScannerOutlinedIcon from "@mui/icons-material/QrCodeScannerOutlined";
+import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import HowToVoteOutlinedIcon from "@mui/icons-material/HowToVoteOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import { QRCodeSVG } from "qrcode.react";
 import { signerManager } from "../../singletons/Signer/SignerManager";
 import { useUserContext } from "../../hooks/useUserContext";
 import { CreateAccountModal } from "./CreateAccountModal";
@@ -26,20 +29,28 @@ import { isAndroidNative, isNative } from "../../utils/platform";
 import { NostrSignerPlugin } from "nostr-signer-capacitor-plugin";
 import { SignerAppInfo } from "nostr-signer-capacitor-plugin/dist/esm/definitions";
 import { useBackClose } from "../../hooks/useBackClose";
+import { pool } from "../../singletons";
 
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
+type ExpandedSection = "bunker" | "ncryptsec" | "qr" | null;
+
 export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const { setUser } = useUserContext();
   const theme = useTheme();
   const [showCreateAccount, setShowCreateAccount] = useState(false);
-  const [showNip46, setShowNip46] = useState(false);
+  const [expanded, setExpanded] = useState<ExpandedSection>(null);
   const [bunkerUri, setBunkerUri] = useState("");
+  const [ncryptsec, setNcryptsec] = useState("");
+  const [ncryptsecPass, setNcryptsecPass] = useState("");
+  const [qrRelays, setQrRelays] = useState("wss://relay.nsec.app");
+  const [qrUri, setQrUri] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [installedSigners, setInstalledSigners] = useState<SignerAppInfo[]>([]);
+  const qrAbortRef = useRef<AbortController | null>(null);
   useBackClose(open, onClose);
 
   useEffect(() => {
@@ -50,18 +61,47 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     initialize();
   }, []);
 
+  useEffect(() => {
+    if (!open) {
+      qrAbortRef.current?.abort();
+      qrAbortRef.current = null;
+      setExpanded(null);
+      setBunkerUri("");
+      setNcryptsec("");
+      setNcryptsecPass("");
+      setQrUri(null);
+      setError("");
+    }
+  }, [open]);
+
   const isDark = theme.palette.mode === "dark";
   const accentAlpha = isDark ? "22" : "18";
 
+  const toggleSection = (section: Exclude<ExpandedSection, null>) => {
+    setError("");
+    if (section !== "qr") {
+      qrAbortRef.current?.abort();
+      qrAbortRef.current = null;
+      setQrUri(null);
+    }
+    setExpanded((prev) => (prev === section ? null : section));
+  };
+
+  const finishLogin = async (pubkey: string) => {
+    try {
+      await signerManager.afterLogin(pubkey);
+    } catch (e) {
+      console.warn("afterLogin failed:", e);
+    }
+    setUser(signerManager.getUser());
+    onClose();
+  };
+
   const handleLoginWithNip07 = async () => {
     setError("");
-    const unsubscribe = signerManager.onChange(async () => {
-      setUser(signerManager.getUser());
-      unsubscribe();
-    });
     try {
-      await signerManager.loginWithNip07();
-      onClose();
+      const account = await signerManager.getPackageSigner().loginWithExtension();
+      await finishLogin(account.pubkey);
     } catch (err) {
       setError("NIP-07 login failed");
       console.error(err);
@@ -71,17 +111,67 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const handleLoginWithNip46 = async () => {
     if (!bunkerUri) return;
     setError("");
-    const unsubscribe = signerManager.onChange(async () => {
-      setUser(signerManager.getUser());
-      unsubscribe();
-    });
     try {
-      await signerManager.loginWithNip46(bunkerUri);
-      onClose();
+      const account = await signerManager
+        .getPackageSigner()
+        .loginWithBunkerUri(bunkerUri, { pool });
+      await finishLogin(account.pubkey);
     } catch (err) {
       setError("Failed to connect to remote signer.");
       console.error(err);
     }
+  };
+
+  const handleLoginWithNcryptsec = async () => {
+    if (!ncryptsec || !ncryptsecPass) return;
+    setError("");
+    try {
+      const account = await signerManager
+        .getPackageSigner()
+        .loginWithNcryptsec(ncryptsec.trim(), ncryptsecPass);
+      await finishLogin(account.pubkey);
+    } catch (err) {
+      setError("Invalid ncryptsec or passphrase.");
+      console.error(err);
+    }
+  };
+
+  const handleStartQr = async () => {
+    const relays = qrRelays
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (relays.length === 0) {
+      setError("At least one relay is required.");
+      return;
+    }
+    setError("");
+    const abort = new AbortController();
+    qrAbortRef.current = abort;
+    setQrUri(null);
+    try {
+      const account = await signerManager.getPackageSigner().loginWithNostrConnect({
+        relays,
+        pool,
+        signal: abort.signal,
+        onUri: (uri) => setQrUri(uri),
+      });
+      await finishLogin(account.pubkey);
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        setError(err?.message ?? "Remote signer pairing failed.");
+        console.error(err);
+      }
+      setQrUri(null);
+    } finally {
+      qrAbortRef.current = null;
+    }
+  };
+
+  const handleCancelQr = () => {
+    qrAbortRef.current?.abort();
+    qrAbortRef.current = null;
+    setQrUri(null);
   };
 
   return (
@@ -94,7 +184,6 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
         sx: { borderRadius: 3, overflow: "hidden", bgcolor: "background.paper" },
       }}
     >
-      {/* Header */}
       <Box
         sx={{
           px: 3,
@@ -136,9 +225,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
         )}
       </Box>
 
-      {/* Options */}
       <Stack divider={<Divider />}>
-        {/* NIP-55 Android signers */}
         {isAndroidNative() &&
           installedSigners.map((app) => (
             <OptionButton
@@ -169,7 +256,6 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
             />
           ))}
 
-        {/* NIP-07 — web only */}
         {!isNative && (
           <OptionButton
             icon={<VpnKeyOutlinedIcon />}
@@ -181,18 +267,17 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           />
         )}
 
-        {/* NIP-46 Bunker, inline collapse */}
         <Box>
           <OptionButton
             icon={<HubOutlinedIcon />}
             title="Nostr Bunker"
-            description="Connect via NIP-46"
+            description="Connect via NIP-46 bunker URI"
             accentColor={theme.palette.secondary.main}
             accentAlpha={accentAlpha}
-            onClick={() => setShowNip46((p) => !p)}
-            chevronRotated={showNip46}
+            onClick={() => toggleSection("bunker")}
+            chevronRotated={expanded === "bunker"}
           />
-          <Collapse in={showNip46}>
+          <Collapse in={expanded === "bunker"}>
             <Box
               sx={{
                 px: 2,
@@ -223,18 +308,141 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           </Collapse>
         </Box>
 
-        {/* Guest account */}
+        <Box>
+          <OptionButton
+            icon={<QrCodeScannerOutlinedIcon />}
+            title="Remote Signer (QR)"
+            description="Pair via nostrconnect QR"
+            accentColor={theme.palette.secondary.main}
+            accentAlpha={accentAlpha}
+            onClick={() => toggleSection("qr")}
+            chevronRotated={expanded === "qr"}
+          />
+          <Collapse in={expanded === "qr"}>
+            <Box
+              sx={{
+                px: 2,
+                pb: 2,
+                pt: 1,
+                display: "flex",
+                flexDirection: "column",
+                gap: 1,
+                bgcolor: `${theme.palette.secondary.main}${accentAlpha}`,
+              }}
+            >
+              {!qrUri ? (
+                <>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="Relays (comma-separated)"
+                    value={qrRelays}
+                    onChange={(e) => setQrRelays(e.target.value)}
+                  />
+                  <Button
+                    variant="contained"
+                    onClick={handleStartQr}
+                    disabled={!qrRelays.trim()}
+                  >
+                    Generate QR
+                  </Button>
+                </>
+              ) : (
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 1.5,
+                  }}
+                >
+                  <Box sx={{ p: 1.5, bgcolor: "#fff", borderRadius: 2 }}>
+                    <QRCodeSVG value={qrUri} size={200} />
+                  </Box>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    textAlign="center"
+                  >
+                    Scan with your remote signer. Waiting for pairing&hellip;
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="text"
+                    color="inherit"
+                    onClick={handleCancelQr}
+                  >
+                    Cancel
+                  </Button>
+                </Box>
+              )}
+            </Box>
+          </Collapse>
+        </Box>
+
+        <Box>
+          <OptionButton
+            icon={<LockOutlinedIcon />}
+            title="Existing Key"
+            description="Sign in with an ncryptsec"
+            accentColor={theme.palette.secondary.main}
+            accentAlpha={accentAlpha}
+            onClick={() => toggleSection("ncryptsec")}
+            chevronRotated={expanded === "ncryptsec"}
+          />
+          <Collapse in={expanded === "ncryptsec"}>
+            <Box
+              sx={{
+                px: 2,
+                pb: 2,
+                pt: 1,
+                display: "flex",
+                flexDirection: "column",
+                gap: 1,
+                bgcolor: `${theme.palette.secondary.main}${accentAlpha}`,
+              }}
+            >
+              <TextField
+                fullWidth
+                size="small"
+                label="ncryptsec1..."
+                multiline
+                minRows={2}
+                value={ncryptsec}
+                onChange={(e) => setNcryptsec(e.target.value)}
+              />
+              <TextField
+                fullWidth
+                size="small"
+                type="password"
+                label="Passphrase"
+                value={ncryptsecPass}
+                onChange={(e) => setNcryptsecPass(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && handleLoginWithNcryptsec()
+                }
+              />
+              <Button
+                variant="contained"
+                onClick={handleLoginWithNcryptsec}
+                disabled={!ncryptsec || !ncryptsecPass}
+              >
+                Sign in
+              </Button>
+            </Box>
+          </Collapse>
+        </Box>
+
         <OptionButton
-          icon={<PersonOutlinedIcon />}
-          title="Guest Account"
-          description="Quick access, no keys needed"
+          icon={<PersonAddOutlinedIcon />}
+          title="Create Account"
+          description="Generate a new key, encrypted at rest"
           accentColor={theme.palette.text.secondary}
           accentAlpha={accentAlpha}
           onClick={() => setShowCreateAccount(true)}
         />
       </Stack>
 
-      {/* Footer */}
       <Box
         sx={{
           px: 3,

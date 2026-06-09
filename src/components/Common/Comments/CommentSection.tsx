@@ -28,7 +28,6 @@ import CommentInput from "./CommentInput";
 import { extractMentionTags } from '../../EventCreator/MentionTextArea';
 import { getColorsWithTheme } from "../../../styles/theme";
 import { useNotification } from "../../../contexts/notification-context";
-import { NOTIFICATION_MESSAGES } from "../../../constants/notifications";
 import { nostrRuntime } from "../../../singletons";
 import { SubscriptionHandle } from "../../../nostrRuntime/types";
 import { publishWithGossip } from "../../../utils/publish";
@@ -264,7 +263,7 @@ const CommentSection: React.FC<CommentSectionProps> = ({
   );
   const { result: publishResult, open: diagnosticOpen, setOpen: setDiagnosticOpen, title: diagnosticTitle, openModal, retry } = usePublishDiagnostic();
 
-  const { user } = useUserContext();
+  const { user, requestLogin } = useUserContext();
   const { relays, writeRelays } = useRelays();
 
   const fetchComments = () => {
@@ -301,7 +300,7 @@ const CommentSection: React.FC<CommentSectionProps> = ({
 
   const handleSubmitComment = async (content: string, parentId?: string, notifyPubkeys: string[] = []) => {
     if (!user) {
-      showNotification(NOTIFICATION_MESSAGES.LOGIN_TO_COMMENT, "warning");
+      requestLogin();
       return;
     }
 

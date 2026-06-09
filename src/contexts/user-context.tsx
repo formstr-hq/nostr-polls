@@ -32,6 +32,8 @@ export const UserContext = createContext<UserContextInterface | null>(null);
 type PassphraseRequest = {
   mode: PassphraseModalMode;
   pubkey: string;
+  error?: string;
+  attempt: number;
   resolve: (passphrase: string | null) => void;
 };
 
@@ -43,9 +45,17 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const [passphraseRequest, setPassphraseRequest] =
     useState<PassphraseRequest | null>(null);
+  const [passphraseSubmitting, setPassphraseSubmitting] = useState(false);
   // Pending login-modal resolver so SignerManager.getSigner() can await the
   // user finishing the login flow.
   const loginResolverRef = useRef<(() => void) | null>(null);
+  // Cancel pressed while a submitted attempt was still pending. The next
+  // passphrase prompt that comes in will be auto-cancelled.
+  const autoCancelRef = useRef(false);
+  // True between submit and the next prompt/onChange. Used to decide whether
+  // a Cancel click aborts the in-flight attempt or just closes the prompt.
+  const submittingRef = useRef(false);
+  const attemptCounterRef = useRef(0);
 
   useEffect(() => {
     signerManager.registerLoginModal(() => {
@@ -56,10 +66,23 @@ export function UserProvider({ children }: { children: ReactNode }) {
     });
 
     signerManager.registerPassphraseCallback((req) => {
+      if (autoCancelRef.current) {
+        autoCancelRef.current = false;
+        submittingRef.current = false;
+        setPassphraseSubmitting(false);
+        setPassphraseRequest(null);
+        return Promise.resolve(null);
+      }
+      attemptCounterRef.current += 1;
+      const attempt = attemptCounterRef.current;
+      submittingRef.current = false;
+      setPassphraseSubmitting(false);
       return new Promise<string | null>((resolve) => {
         setPassphraseRequest({
           mode: req.kind === "unlock" ? "unlock" : "migrate",
           pubkey: req.pubkey,
+          error: req.error,
+          attempt,
           resolve,
         });
       });
@@ -72,6 +95,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
         return next;
       });
       setAccounts([...signerManager.getAccounts()]);
+      // A successful unlock fires the package signer's login event, which lands
+      // here. If a passphrase prompt was awaiting that unlock, close it.
+      if (signerManager.getUser()) {
+        submittingRef.current = false;
+        setPassphraseSubmitting(false);
+        setPassphraseRequest(null);
+      }
     });
   }, []);
 
@@ -95,12 +125,22 @@ export function UserProvider({ children }: { children: ReactNode }) {
   };
 
   const handlePassphraseSubmit = (passphrase: string) => {
-    const req = passphraseRequest;
-    setPassphraseRequest(null);
-    if (req) req.resolve(passphrase);
+    if (!passphraseRequest || submittingRef.current) return;
+    submittingRef.current = true;
+    setPassphraseSubmitting(true);
+    passphraseRequest.resolve(passphrase);
   };
 
   const handlePassphraseCancel = () => {
+    if (submittingRef.current) {
+      // Outstanding attempt — close now; auto-cancel the next prompt
+      // (in case the in-flight decrypt fails and SignerManager retries).
+      autoCancelRef.current = true;
+      submittingRef.current = false;
+      setPassphraseSubmitting(false);
+      setPassphraseRequest(null);
+      return;
+    }
     const req = passphraseRequest;
     setPassphraseRequest(null);
     if (req) req.resolve(null);
@@ -123,6 +163,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
         open={passphraseRequest !== null}
         mode={passphraseRequest?.mode ?? "unlock"}
         pubkey={passphraseRequest?.pubkey ?? ""}
+        error={passphraseRequest?.error}
+        attempt={passphraseRequest?.attempt ?? 0}
+        submitting={passphraseSubmitting}
         onSubmit={handlePassphraseSubmit}
         onCancel={handlePassphraseCancel}
       />

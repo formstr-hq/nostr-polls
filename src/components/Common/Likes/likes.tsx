@@ -7,8 +7,6 @@ import { Event, EventTemplate } from "nostr-tools/lib/types/core";
 import { signEvent } from "../../../nostr";
 import { useRelays } from "../../../hooks/useRelays";
 import { useUserContext } from "../../../hooks/useUserContext";
-import { useNotification } from "../../../contexts/notification-context";
-import { NOTIFICATION_MESSAGES } from "../../../constants/notifications";
 import { pool } from "../../../singletons";
 
 interface LikesProps {
@@ -39,8 +37,7 @@ const RenderEmoji: React.FC<{ content: string; tags?: string[][] }> = ({ content
 
 const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const { likesMap, fetchLikesThrottled, addEventToMap } = useAppContext();
-  const { showNotification } = useNotification();
-  const { user } = useUserContext();
+  const { user, requestLogin } = useUserContext();
   const { relays } = useRelays();
   const [showPicker, setShowPicker] = useState(false);
   const theme = useTheme();
@@ -52,7 +49,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
 
   const addReaction = async (emoji: string) => {
     if (!user) {
-      showNotification(NOTIFICATION_MESSAGES.LOGIN_TO_LIKE, "warning");
+      requestLogin();
       return;
     }
 

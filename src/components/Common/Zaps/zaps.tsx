@@ -31,7 +31,7 @@ const LONG_PRESS_MS = 500;
 const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   const { profiles, addEventToMap } = useAppContext();
   const { registerEventId, getZapInfos, getTotalSats, addZapEvent } = useZaps();
-  const { user } = useUserContext();
+  const { user, requestLogin } = useUserContext();
   const [zapModalOpen, setZapModalOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [zapConfirmed, setZapConfirmed] = useState(false);
@@ -70,7 +70,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   const handleClick = () => {
     if (didLongPress.current) return; // long press already handled
     if (!user) {
-      showNotification(NOTIFICATION_MESSAGES.LOGIN_TO_ZAP, "warning");
+      requestLogin();
       return;
     }
     if (!recipient) {

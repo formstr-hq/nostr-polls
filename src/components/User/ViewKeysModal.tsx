@@ -13,7 +13,7 @@ import {
 } from "@mui/material";
 import { nip19 } from "nostr-tools";
 import { MonospaceDisplay } from "../Login/CreateAccountModal";
-import { hexToBytes } from "@noble/hashes/utils";
+import { hexToBytes } from "@noble/hashes/utils.js";
 import { useBackClose } from "../../hooks/useBackClose";
 
 interface Props {

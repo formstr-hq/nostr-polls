@@ -21,6 +21,9 @@ interface Props {
   open: boolean;
   mode: PassphraseModalMode;
   pubkey: string;
+  error?: string;
+  attempt: number;
+  submitting: boolean;
   onSubmit: (passphrase: string) => void;
   onCancel: () => void;
 }
@@ -38,22 +41,23 @@ export const PassphraseModal: React.FC<Props> = ({
   open,
   mode,
   pubkey,
+  error,
+  attempt,
+  submitting,
   onSubmit,
   onCancel,
 }) => {
   const [passphrase, setPassphrase] = useState("");
   const [show, setShow] = useState(false);
 
-  // Reset when modal opens for a new request
+  // Reset on each new prompt (initial open OR retry from a wrong passphrase).
   useEffect(() => {
-    if (open) {
-      setPassphrase("");
-      setShow(false);
-    }
-  }, [open]);
+    setPassphrase("");
+    setShow(false);
+  }, [attempt]);
 
   const handleSubmit = () => {
-    if (!passphrase) return;
+    if (!passphrase || submitting) return;
     onSubmit(passphrase);
   };
 
@@ -85,6 +89,12 @@ export const PassphraseModal: React.FC<Props> = ({
             </Typography>
           </Alert>
 
+          {error && (
+            <Alert severity="error" sx={{ py: 0.5 }}>
+              {error}
+            </Alert>
+          )}
+
           <TextField
             label="Passphrase"
             type={show ? "text" : "password"}
@@ -93,6 +103,7 @@ export const PassphraseModal: React.FC<Props> = ({
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             autoFocus
             fullWidth
+            disabled={submitting}
             InputProps={{
               endAdornment: (
                 <InputAdornment position="end">
@@ -110,9 +121,13 @@ export const PassphraseModal: React.FC<Props> = ({
         <Button
           variant="contained"
           onClick={handleSubmit}
-          disabled={!passphrase}
+          disabled={!passphrase || submitting}
         >
-          {mode === "unlock" ? "Unlock" : "Encrypt"}
+          {submitting
+            ? "Checking…"
+            : mode === "unlock"
+              ? "Unlock"
+              : "Encrypt"}
         </Button>
       </DialogActions>
     </Dialog>

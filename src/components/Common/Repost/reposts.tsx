@@ -10,7 +10,6 @@ import FormatQuoteIcon from "@mui/icons-material/FormatQuote";
 import { Event, EventTemplate } from "nostr-tools";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { useNotification } from "../../../contexts/notification-context";
-import { NOTIFICATION_MESSAGES } from "../../../constants/notifications";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useRelays } from "../../../hooks/useRelays";
 import { pool } from "../../../singletons";
@@ -22,7 +21,7 @@ interface RepostButtonProps {
 }
 
 const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
-  const { user } = useUserContext();
+  const { user, requestLogin } = useUserContext();
   const { showNotification } = useNotification();
   const { relays } = useRelays();
   const { repostsMap, fetchRepostsThrottled, addEventToMap } = useAppContext();
@@ -48,7 +47,7 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
 
   const handleIconClick = (e: React.MouseEvent<HTMLElement>) => {
     if (!user) {
-      showNotification(NOTIFICATION_MESSAGES.LOGIN_TO_REPOST, "warning");
+      requestLogin();
       return;
     }
     setMenuAnchor(e.currentTarget);

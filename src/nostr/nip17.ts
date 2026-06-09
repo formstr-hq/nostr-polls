@@ -7,8 +7,8 @@ import {
   getPublicKey,
   finalizeEvent,
 } from "nostr-tools";
-import { hexToBytes, bytesToHex } from "@noble/hashes/utils";
-import { sha256 } from "@noble/hashes/sha256";
+import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { defaultRelays } from "./index";
 import { nostrRuntime } from "../singletons";
 import { signerManager } from "../singletons/Signer/SignerManager";

@@ -1,4 +1,4 @@
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { generateSecretKey } from "nostr-tools";
 import { User } from "../contexts/user-context";
 import { USER_DATA_TTL_HOURS } from "./constants";

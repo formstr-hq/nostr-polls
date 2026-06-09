@@ -21,7 +21,7 @@ import {
   type StoredAccount as PackageStoredAccount,
 } from "@formstr/signer";
 import { Event, EventTemplate, nip19 } from "nostr-tools";
-import { hexToBytes } from "@noble/hashes/utils";
+import { hexToBytes } from "@noble/hashes/utils.js";
 import { NostrSignerPlugin } from "nostr-signer-capacitor-plugin";
 
 import { defaultRelays, fetchUserProfile } from "../../nostr";
@@ -64,8 +64,8 @@ export type StoredAccount = {
 };
 
 export type PassphraseRequest =
-  | { kind: "unlock"; pubkey: string }
-  | { kind: "migrate"; pubkey: string };
+  | { kind: "unlock"; pubkey: string; error?: string }
+  | { kind: "migrate"; pubkey: string; error?: string };
 
 export type PassphraseCallback = (
   req: PassphraseRequest,
@@ -273,6 +273,48 @@ class SignerManager {
   // Login methods — preserved names, delegated to the package
   // -------------------------------------------------------------------------
 
+  /**
+   * Underlying `@formstr/signer` instance. Exposed so UI helpers
+   * (e.g. `renderLoginHtml` + `attachLoginListeners`) can drive the same
+   * signer this manager wraps. Callers must call `afterLogin(pubkey)`
+   * once the package's `onLogin` fires so the kind-0 profile is refreshed.
+   */
+  getPackageSigner(): Signer {
+    return this.signer;
+  }
+
+  /**
+   * Post-login bootstrap for accounts created/unlocked via the package's
+   * built-in login UI. Refreshes the kind-0 cache; if the relays have no
+   * kind-0 for this pubkey, treats it as a brand-new account and publishes
+   * default profile + inbox relays.
+   */
+  async afterLogin(pubkey: string): Promise<void> {
+    const kind0 = await fetchUserProfile(pubkey).catch(() => null);
+    if (kind0) {
+      await this.afterLoginRefreshProfile(pubkey);
+      return;
+    }
+    const user: User = {
+      pubkey,
+      name: ANONYMOUS_USER_NAME,
+      picture: DEFAULT_IMAGE_URL,
+    };
+    setCachedUserData(pubkey, { name: user.name, picture: user.picture });
+    this.user = user;
+    try {
+      await this.publishKind0(user);
+    } catch (e) {
+      console.warn("Failed to publish default kind-0:", e);
+    }
+    try {
+      await publishInboxRelays(defaultRelays);
+    } catch (e) {
+      console.warn("publishInboxRelays failed:", e);
+    }
+    this.notify();
+  }
+
   async loginWithNip07(): Promise<void> {
     const account = await this.signer.loginWithExtension();
     await this.afterLoginRefreshProfile(account.pubkey);
@@ -396,15 +438,23 @@ class SignerManager {
       console.warn("ncryptsec account is locked but no passphraseCallback registered");
       return null;
     }
-    const passphrase = await this.passphraseCallback({ kind: "unlock", pubkey });
-    if (!passphrase) return null;
-    try {
-      await this.signer.loginWithNcryptsec(ncryptsec, passphrase);
-      return this.signer.getActiveSigner();
-    } catch (e) {
-      console.error("Failed to unlock ncryptsec:", e);
-      return null;
+    let error: string | undefined;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const passphrase = await this.passphraseCallback({
+        kind: "unlock",
+        pubkey,
+        error,
+      });
+      if (!passphrase) return null;
+      try {
+        await this.signer.loginWithNcryptsec(ncryptsec, passphrase);
+        return this.signer.getActiveSigner();
+      } catch (e) {
+        console.error("Failed to unlock ncryptsec:", e);
+        error = "Incorrect passphrase. Try again.";
+      }
     }
+    return null;
   }
 
   /**

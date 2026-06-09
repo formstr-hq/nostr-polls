@@ -38,7 +38,7 @@ import { Filters } from "./Filter";
 import { useUserContext } from "../../hooks/useUserContext";
 import { ProofofWorkModal } from "./ProofofWorkModal";
 import { getAppBaseUrl } from "../../utils/platform";
-import { bytesToHex } from "@noble/hashes/utils";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import dayjs from "dayjs";
 import { useMiningWorker } from "../../hooks/useMiningWorker";
 import PollTimer from "./PollTimer";

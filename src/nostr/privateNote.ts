@@ -1,5 +1,5 @@
 import { nip44, generateSecretKey } from "nostr-tools";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 
 // A ViewKey is a 32-byte symmetric key used directly as a NIP-44 conversation key.
 // Per-post (M1): generated fresh on publish, embedded in the share URL fragment,

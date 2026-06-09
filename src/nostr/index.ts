@@ -1,5 +1,5 @@
 import { Event, EventTemplate, Filter, finalizeEvent, SimplePool } from "nostr-tools";
-import { hexToBytes } from "@noble/hashes/utils";
+import { hexToBytes } from "@noble/hashes/utils.js";
 import { nostrRuntime } from "../singletons";
 import { signerManager } from "../singletons/Signer/SignerManager";
 import { getCachedOutboxRelays, getOutboxRelays } from "./OutboxService";
