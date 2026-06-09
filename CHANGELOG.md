@@ -1,3 +1,11 @@
+# 1.8.11
+
+- Replace SignerManager with @formstr/signer
+- Encrypt all raw nsecs with passphrase encrypted nip-49. App doesn't store any nsec in raw form anymore.
+- Fix Remote Signer flows.
+- Add QR Code logins for signer.
+- Prompt to sign in for logged out users when required.
+
 # 1.8.7
 
 - Fix stuck feeds
