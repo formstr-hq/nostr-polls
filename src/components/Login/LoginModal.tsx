@@ -181,7 +181,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
       maxWidth="xs"
       fullWidth
       PaperProps={{
-        sx: { borderRadius: 3, overflow: "hidden", bgcolor: "background.paper" },
+        sx: { borderRadius: 3, overflowY: "auto", bgcolor: "background.paper" },
       }}
     >
       <Box
