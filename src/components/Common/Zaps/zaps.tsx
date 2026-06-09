@@ -90,8 +90,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
 
     try {
       const zapRequestEvent = nip57.makeZapRequest({
-        profile: pollEvent.pubkey,
-        event: pollEvent.id,
+        event: pollEvent,
         amount: amount * 1000,
         comment: "",
         relays,

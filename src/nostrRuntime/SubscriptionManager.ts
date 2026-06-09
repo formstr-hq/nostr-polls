@@ -152,7 +152,7 @@ export class SubscriptionManager {
         for (const chunkFilter of chunks) {
           const closer = this.pool.subscribeMany(
             relays,
-            [chunkFilter],
+            chunkFilter,
             {
               onevent: (event) => {
                 // Add to event store
@@ -190,38 +190,41 @@ export class SubscriptionManager {
       // Functionally identical to subscribeMany(allRelays) — nostr-tools already
       // opens one connection per relay internally.
       managedSub.chunks = [];
+      const expectedEose = relays.length * filters.length;
       const eoseState = { count: 0 };
 
       for (const relay of relays) {
-        const closer = this.pool.subscribeMany(
-          [relay],
-          filters,
-          {
-            onevent: (event) => {
-              this.eventStore.addEvent(event);
+        for (const filter of filters) {
+          const closer = this.pool.subscribeMany(
+            [relay],
+            filter,
+            {
+              onevent: (event) => {
+                this.eventStore.addEvent(event);
 
-              if (!managedSub.firstEventAt) managedSub.firstEventAt = Date.now();
-              managedSub.eventCount++;
-              recordEventRelay(event.id, relay);
+                if (!managedSub.firstEventAt) managedSub.firstEventAt = Date.now();
+                managedSub.eventCount++;
+                recordEventRelay(event.id, relay);
 
-              for (const callback of Array.from(managedSub.callbacks)) {
-                callback(event);
-              }
-            },
-            oneose: () => {
-              eoseState.count++;
-              if (eoseState.count === relays.length) {
-                managedSub.eoseReceived = true;
-                managedSub.eoseAt = Date.now();
-                for (const eoseCallback of Array.from(managedSub.eoseCallbacks)) {
-                  eoseCallback();
+                for (const callback of Array.from(managedSub.callbacks)) {
+                  callback(event);
                 }
-                managedSub.eoseCallbacks.clear();
-              }
-            },
-          }
-        );
-        managedSub.chunks.push(closer);
+              },
+              oneose: () => {
+                eoseState.count++;
+                if (eoseState.count === expectedEose) {
+                  managedSub.eoseReceived = true;
+                  managedSub.eoseAt = Date.now();
+                  for (const eoseCallback of Array.from(managedSub.eoseCallbacks)) {
+                    eoseCallback();
+                  }
+                  managedSub.eoseCallbacks.clear();
+                }
+              },
+            }
+          );
+          managedSub.chunks.push(closer);
+        }
       }
     }
 
@@ -407,7 +410,7 @@ export class SubscriptionManager {
           for (const cf of chunks) {
             const closer = this.pool.subscribeMany(
               sub.relays,
-              [cf],
+              cf,
               {
                 onevent: (event) => {
                   this.eventStore.addEvent(event);
@@ -437,37 +440,40 @@ export class SubscriptionManager {
       } else {
         sub.chunks = [];
         sub.closer = null;
+        const expectedEose = sub.relays.length * sub.filters.length;
         const eoseState = { count: 0 };
 
         for (const relay of sub.relays) {
-          const closer = this.pool.subscribeMany(
-            [relay],
-            sub.filters,
-            {
-              onevent: (event) => {
-                this.eventStore.addEvent(event);
-                if (!sub.firstEventAt) sub.firstEventAt = Date.now();
-                sub.eventCount++;
-                recordEventRelay(event.id, relay);
-                for (const callback of Array.from(sub.callbacks)) {
-                  callback(event);
-                }
-              },
-              oneose: () => {
-                eoseState.count++;
-                if (eoseState.count === sub.relays.length) {
-                  sub.eoseReceived = true;
-                  sub.eoseAt = Date.now();
-                  for (const eoseCallback of Array.from(sub.eoseCallbacks)) {
-                    eoseCallback();
+          for (const filter of sub.filters) {
+            const closer = this.pool.subscribeMany(
+              [relay],
+              filter,
+              {
+                onevent: (event) => {
+                  this.eventStore.addEvent(event);
+                  if (!sub.firstEventAt) sub.firstEventAt = Date.now();
+                  sub.eventCount++;
+                  recordEventRelay(event.id, relay);
+                  for (const callback of Array.from(sub.callbacks)) {
+                    callback(event);
                   }
-                  // Don't clear — new subscribers may have added callbacks
-                  // between reconnect and EOSE. They'll be removed on unsubscribe.
-                }
-              },
-            }
-          );
-          sub.chunks.push(closer);
+                },
+                oneose: () => {
+                  eoseState.count++;
+                  if (eoseState.count === expectedEose) {
+                    sub.eoseReceived = true;
+                    sub.eoseAt = Date.now();
+                    for (const eoseCallback of Array.from(sub.eoseCallbacks)) {
+                      eoseCallback();
+                    }
+                    // Don't clear — new subscribers may have added callbacks
+                    // between reconnect and EOSE. They'll be removed on unsubscribe.
+                  }
+                },
+              }
+            );
+            sub.chunks.push(closer);
+          }
         }
       }
     }
