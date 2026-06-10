@@ -38,6 +38,23 @@ interface Props {
 
 type ExpandedSection = "bunker" | "ncryptsec" | "qr" | null;
 
+/**
+ * Render a debuggable string from any thrown value. We surface this in the
+ * modal UI for NIP-55 sign-in failures because Capacitor on Android offers
+ * no inline devtools — without this the user has to wire up adb logcat to
+ * see the underlying exception.
+ */
+function formatErrorDetails(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack ?? `${err.name}: ${err.message}`;
+  }
+  try {
+    return JSON.stringify(err, null, 2);
+  } catch {
+    return String(err);
+  }
+}
+
 // Default permissions requested when pairing with a NIP-46 remote signer.
 // Amber expects `sign_event:<kind>` entries (a bare `sign_event` without a
 // kind makes recent builds fail-closed before showing the approve screen).
@@ -70,6 +87,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const [qrRelays, setQrRelays] = useState("wss://relay.nsec.app");
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [installedSigners, setInstalledSigners] = useState<SignerAppInfo[]>([]);
   const qrAbortRef = useRef<AbortController | null>(null);
   useBackClose(open, onClose);
@@ -92,6 +110,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
       setNcryptsecPass("");
       setQrUri(null);
       setError("");
+      setErrorDetails(null);
     }
   }, [open]);
 
@@ -100,6 +119,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
 
   const toggleSection = (section: Exclude<ExpandedSection, null>) => {
     setError("");
+    setErrorDetails(null);
     if (section !== "qr") {
       qrAbortRef.current?.abort();
       qrAbortRef.current = null;
@@ -248,8 +268,41 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           </Typography>
         </Box>
         {error && (
-          <Alert severity="error" sx={{ width: "100%", borderRadius: 2 }}>
-            {error}
+          <Alert
+            severity="error"
+            sx={{
+              width: "100%",
+              borderRadius: 2,
+              "& .MuiAlert-message": { width: "100%" },
+            }}
+          >
+            <Typography
+              variant="body2"
+              sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+            >
+              {error}
+            </Typography>
+            {errorDetails && (
+              <Box
+                component="pre"
+                sx={{
+                  mt: 1,
+                  mb: 0,
+                  p: 1,
+                  borderRadius: 1,
+                  bgcolor: "rgba(0,0,0,0.08)",
+                  fontFamily: "monospace",
+                  fontSize: "0.7rem",
+                  lineHeight: 1.4,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  maxHeight: 240,
+                  overflow: "auto",
+                }}
+              >
+                {errorDetails}
+              </Box>
+            )}
           </Alert>
         )}
       </Box>
@@ -276,14 +329,17 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
               accentAlpha={accentAlpha}
               onClick={async () => {
                 setError("");
+                setErrorDetails(null);
                 try {
                   await signerManager.runLogin((s) =>
                     s.loginWithAndroidSigner({ packageName: app.packageName }),
                   );
                   finishLogin();
                 } catch (err) {
-                  setError("Signer sign-in failed");
-                  console.error(err);
+                  const msg = err instanceof Error ? err.message : String(err);
+                  setError(`Signer sign-in failed: ${msg}`);
+                  setErrorDetails(formatErrorDetails(err));
+                  console.error("[NIP-55 sign-in]", err);
                 }
               }}
             />
