@@ -1,3 +1,9 @@
+# 1.8.13
+
+- Fix NIP-55 (Amber) sign-in not dismissing the login modal.
+- Fix login modal popping up automatically while already signed in.
+- Stop external signer (Amber / NIP-46 bunker) approval prompts on cold start — signed-in users now resume silently from cached session state. Ncryptsec users still get the passphrase prompt by design.
+
 # 1.8.11
 
 - Replace SignerManager with @formstr/signer

@@ -283,6 +283,14 @@ class SignerManager {
           );
           if (signer) return signer;
         }
+
+        // Account exists but we couldn't unlock it (Amber denied / extension
+        // gone / NIP-46 offline / ncryptsec passphrase cancelled). Don't fall
+        // through to the login modal — the user IS logged in, just locked.
+        // Let the caller decide whether to surface a toast, retry, etc.
+        throw new Error(
+          `Signer locked for account ${account.pubkey} (${account.method})`,
+        );
       }
 
       // Case 2: there's a pending legacy nsec/guest migration. Prompt for a
@@ -489,39 +497,19 @@ class SignerManager {
 
   /**
    * Attempt to re-establish an in-memory ActiveSigner without user input.
-   * Returns the unlocked signer on success, null otherwise.
+   * Delegates to the package's `unlock()` which rebuilds the runtime signer
+   * from persisted state without re-pairing — for nip46 that means no
+   * `connect` request to the bunker, and for android no `getPublicKey`
+   * roundtrip through the signer-app plugin. ncryptsec returns null and
+   * the caller drives the passphrase prompt via promptUnlock().
+   *
+   * The `account` arg is unused now but kept on the signature so callers
+   * don't change shape; `unlock()` reads the active account itself.
    */
   private async silentUnlock(
-    account: PackageStoredAccount,
+    _account: PackageStoredAccount,
   ): Promise<ActiveSigner | null> {
-    switch (account.method) {
-      case "extension":
-        await this.signer.loginWithExtension();
-        return this.signer.getActiveSigner();
-
-      case "android":
-        if (!account.androidPackageName) return null;
-        await this.signer.loginWithAndroidSigner({
-          packageName: account.androidPackageName,
-        });
-        return this.signer.getActiveSigner();
-
-      case "nip46": {
-        if (!account.nip46?.uri) return null;
-        const opts: { pool: typeof pool; clientSecretKey?: Uint8Array } = {
-          pool,
-        };
-        if (account.nip46.clientSecretKey) {
-          opts.clientSecretKey = hexToBytes(account.nip46.clientSecretKey);
-        }
-        await this.signer.loginWithBunkerUri(account.nip46.uri, opts);
-        return this.signer.getActiveSigner();
-      }
-
-      case "ncryptsec":
-        // ncryptsec can never unlock silently — it needs a passphrase.
-        return null;
-    }
+    return this.signer.unlock({ pool });
   }
 
   private async promptUnlock(

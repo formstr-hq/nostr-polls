@@ -275,11 +275,15 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
               accentColor={theme.palette.secondary.main}
               accentAlpha={accentAlpha}
               onClick={async () => {
+                setError("");
                 try {
-                  await signerManager.loginWithNip55(app.packageName);
-                  onClose();
-                } catch {
+                  await signerManager.runLogin((s) =>
+                    s.loginWithAndroidSigner({ packageName: app.packageName }),
+                  );
+                  finishLogin();
+                } catch (err) {
                   setError("Signer sign-in failed");
+                  console.error(err);
                 }
               }}
             />
