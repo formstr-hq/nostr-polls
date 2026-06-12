@@ -46,7 +46,7 @@ const TopicsFeed: React.FC = () => {
   const navigate = useNavigate();
   const { tag } = useParams();
   const { user, requestLogin } = useUserContext();
-  const subRef = useRef<ReturnType<typeof nostrRuntime.subscribe> | null>(null);
+  const subsRef = useRef<ReturnType<typeof nostrRuntime.subscribe>[]>([]);
   const isMounted = useRef(true);
   const { setItems, clearItems } = useSubNav();
   const { registerRefresh } = useFeedActions();
@@ -102,10 +102,8 @@ const TopicsFeed: React.FC = () => {
     // Cleanup on unmount
     return () => {
       isMounted.current = false;
-      if (subRef.current) {
-        subRef.current.unsubscribe();
-        subRef.current = null;
-      }
+      subsRef.current.forEach((s) => s.unsubscribe());
+      subsRef.current = [];
     };
   }, []);
   useEffect(() => {
@@ -140,13 +138,25 @@ const TopicsFeed: React.FC = () => {
     setLoading(true);
     setTagsMap(new Map()); // clear on refresh
 
-    if (subRef.current) {
-      subRef.current.unsubscribe();
-      subRef.current = null;
-    }
+    subsRef.current.forEach((s) => s.unsubscribe());
+    subsRef.current = [];
 
-    // Subscribe once
-    const sub = nostrRuntime.subscribe(
+    // On manual retry, close stale WebSockets so we re-handshake — mobile NAT
+    // often kills connections silently and pool.close() alone isn't enough.
+    const fresh = refreshKey > 0;
+
+    const upsertTag = (id: string, ts: number) => {
+      setTagsMap((prev) => {
+        const current = prev.get(id) || 0;
+        if (ts <= current) return prev;
+        const updated = new Map(prev);
+        updated.set(id, ts);
+        return updated;
+      });
+    };
+
+    // Primary source: rating events for hashtags
+    const ratingSub = nostrRuntime.subscribe(
       relays,
       [{ kinds: [34259], "#m": ["hashtag"], limit: 100 }],
       {
@@ -154,44 +164,48 @@ const TopicsFeed: React.FC = () => {
           setLoading(false);
           const dTag = event.tags.find((t) => t[0] === "d");
           const parsedDTag = dTag ? parseRatingDTag(dTag[1]) : null;
-
           if (parsedDTag && parsedDTag.type === "hashtag") {
-            const id = parsedDTag.id;
-
-            setTagsMap((prev) => {
-              const currentTimestamp = prev.get(id) || 0;
-              if (event.created_at > currentTimestamp) {
-                const updated = new Map(prev);
-                updated.set(id, event.created_at);
-                return updated;
-              }
-              return prev;
-            });
+            upsertTag(parsedDTag.id, event.created_at);
           }
         },
         onEose: () => {
           if (isMounted.current) setLoading(false);
         },
+        fresh,
       }
     );
 
-    subRef.current = sub;
+    // Fallback source: interest sets (NIP-51 kind 10015) from the network.
+    // Many users curate hashtags here even when they don't rate them, so this
+    // surfaces topics even on sparse relays.
+    const interestsSub = nostrRuntime.subscribe(
+      relays,
+      [{ kinds: [10015], limit: 100 }],
+      {
+        onEvent: (event: Event) => {
+          setLoading(false);
+          for (const tagArr of event.tags) {
+            if (tagArr[0] !== "t" || !tagArr[1]) continue;
+            const id = tagArr[1].toLowerCase().trim();
+            if (id) upsertTag(id, event.created_at);
+          }
+        },
+        fresh,
+      }
+    );
 
-    // Timeout to stop loading even if no onEose event
+    subsRef.current = [ratingSub, interestsSub];
+
+    // Stop the spinner after 5s even if EOSE never arrives, but keep the
+    // subscriptions open so late events on slow mobile networks still arrive.
     const timeout = setTimeout(() => {
       if (isMounted.current) setLoading(false);
-      if (subRef.current) {
-        subRef.current.unsubscribe();
-        subRef.current = null;
-      }
     }, 5000);
 
     return () => {
       clearTimeout(timeout);
-      if (subRef.current) {
-        subRef.current.unsubscribe();
-        subRef.current = null;
-      }
+      subsRef.current.forEach((s) => s.unsubscribe());
+      subsRef.current = [];
     };
   }, [tag, relays, refreshKey]); // refreshKey forces a re-fetch on manual refresh
 
@@ -254,9 +268,23 @@ const TopicsFeed: React.FC = () => {
           </Box>
         ) : displayTags.length === 0 ? (
           activeTab === "discover" ? (
-            <Typography color="text.secondary" sx={{ textAlign: "center", mt: 4 }}>
-              No topics found yet.
-            </Typography>
+            <Box
+              sx={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                mt: 4,
+                gap: 2,
+              }}
+            >
+              <Typography color="text.secondary">
+                No topics found yet.
+              </Typography>
+              <Button variant="outlined" onClick={handleRefresh}>
+                Retry
+              </Button>
+            </Box>
           ) : !user ? (
             <Box
               sx={{
