@@ -23,6 +23,8 @@ interface MentionTextAreaProps {
   maxRows?: number;
   /** Called when the user pastes an image/video file into the textarea */
   onFilePaste?: (file: File, cursorPos: number) => void;
+  /** Exposes the underlying textarea so parents can insert text at the caret. */
+  inputRef?: React.MutableRefObject<HTMLTextAreaElement | null>;
 }
 
 interface ProfileMatch {
@@ -41,6 +43,7 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
   minRows = 4,
   maxRows = 8,
   onFilePaste,
+  inputRef: externalInputRef,
 }) => {
   const { profiles } = useAppContext();
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -49,6 +52,11 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
+
+  const setInputRef = (el: HTMLTextAreaElement | null) => {
+    (inputRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el;
+    if (externalInputRef) externalInputRef.current = el;
+  };
 
   const open = mentionQuery !== null && matches.length > 0;
 
@@ -175,7 +183,7 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
   return (
     <Box ref={anchorRef}>
       <TextField
-        inputRef={inputRef}
+        inputRef={setInputRef}
         label={label}
         value={value}
         onChange={handleChange}

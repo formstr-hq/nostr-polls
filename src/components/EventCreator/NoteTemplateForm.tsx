@@ -34,6 +34,7 @@ import { publishWithGossip } from "../../utils/publish";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import MentionTextArea, { extractMentionTags } from "./MentionTextArea";
+import EmojiPickerButton from "../Common/EmojiPickerButton";
 import { PostEnhancementDialog } from "./PostEnhancementDialog";
 import { aiService } from "../../services/ai-service";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -75,9 +76,25 @@ const NoteTemplateForm: React.FC<{
   const [customExpiryDate, setCustomExpiryDate] = useState<Dayjs | null>(null);
   const [showExpiry, setShowExpiry] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   // Ref so async upload callbacks always see the latest content value
   const eventContentRef = useRef(eventContent);
   useEffect(() => { eventContentRef.current = eventContent; }, [eventContent]);
+
+  const insertEmoji = (emoji: string) => {
+    const el = textAreaRef.current;
+    const current = eventContentRef.current;
+    const pos = el?.selectionStart ?? current.length;
+    const next = current.slice(0, pos) + emoji + current.slice(pos);
+    setEventContent(next);
+    const newPos = pos + emoji.length;
+    requestAnimationFrame(() => {
+      if (el) {
+        el.focus();
+        el.setSelectionRange(newPos, newPos);
+      }
+    });
+  };
   const { showNotification } = useNotification();
   const { user } = useUserContext();
   const { relays, writeRelays } = useRelays();
@@ -320,6 +337,19 @@ const NoteTemplateForm: React.FC<{
               </span>
             </Tooltip>
 
+            <EmojiPickerButton
+              onSelect={insertEmoji}
+              disabled={isSubmitting}
+              tooltip="Insert emoji"
+              placement="bottom-start"
+              iconButtonSx={{
+                border: "1px solid",
+                borderColor: "primary.main",
+                borderRadius: "50%",
+                color: "primary.main",
+              }}
+            />
+
             {/* Expiration toggle */}
             <Tooltip title={showExpiry ? "Hide expiration" : "Set expiration (NIP-40)"}>
               <IconButton
@@ -412,6 +442,7 @@ const NoteTemplateForm: React.FC<{
               required
               placeholder="Share your thoughts. Use @mentions and #hashtags."
               onFilePaste={(file, cursorPos) => uploadFile(file, cursorPos)}
+              inputRef={textAreaRef}
             />
             {isDragOver && (
               <Box

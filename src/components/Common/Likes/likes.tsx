@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Tooltip, Box, IconButton, useTheme, Modal } from "@mui/material";
 import FavoriteBorder from "@mui/icons-material/FavoriteBorder";
 import EmojiPicker, { Theme } from "emoji-picker-react";
@@ -8,6 +8,9 @@ import { signEvent } from "../../../nostr";
 import { useRelays } from "../../../hooks/useRelays";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { pool } from "../../../singletons";
+import ReactionsDetailsModal from "./ReactionsDetailsModal";
+
+const LONG_PRESS_MS = 500;
 
 interface LikesProps {
   pollEvent: Event;
@@ -40,7 +43,33 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const { user, requestLogin } = useUserContext();
   const { relays } = useRelays();
   const [showPicker, setShowPicker] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didLongPress = useRef(false);
   const theme = useTheme();
+
+  const reactions = likesMap?.get(pollEvent.id) || [];
+
+  const startLongPress = () => {
+    didLongPress.current = false;
+    if (reactions.length === 0) return;
+    longPressTimer.current = setTimeout(() => {
+      didLongPress.current = true;
+      setShowDetails(true);
+    }, LONG_PRESS_MS);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const handleClick = () => {
+    if (didLongPress.current) return;
+    setShowPicker(true);
+  };
 
   const userReactionEvent = () => {
     if (!user) return null;
@@ -74,7 +103,6 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
 
   // Compute top emojis + count, preserving tags for custom emoji rendering
   const getTopEmojis = () => {
-    const reactions = likesMap?.get(pollEvent.id) || [];
     const emojiData: Record<string, { count: number; tags?: string[][] }> = {};
     reactions.forEach((r) => {
       if (!emojiData[r.content]) {
@@ -91,6 +119,15 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const topEmojis = getTopEmojis();
   const userReaction = userReactionEvent();
 
+  const hasReactions = reactions.length > 0;
+  const tooltipTitle = hasReactions
+    ? userReaction
+      ? "Tap to change · Hold to see reactions"
+      : "Tap to react · Hold to see reactions"
+    : userReaction
+    ? "Change reaction"
+    : "React";
+
   return (
     <Box
       display="flex"
@@ -99,45 +136,57 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
       position="relative"
       sx={{ p: 0, my: -5 }}
     >
-      {/* Heart / User emoji */}
-      <Tooltip
-        title={userReaction ? "Change reaction" : "React"}
-        onClick={() => setShowPicker(true)}
-      >
-        <IconButton size="small" sx={{ p: 0 }}>
-          {userReaction ? (
-            <RenderEmoji content={userReaction.content} tags={userReaction.tags} />
-          ) : (
-            <FavoriteBorder sx={{ p: 0 }} />
-          )}
-        </IconButton>
-      </Tooltip>
+      <Tooltip title={tooltipTitle}>
+        <Box
+          display="flex"
+          alignItems="center"
+          sx={{ cursor: "pointer", userSelect: "none" }}
+          onMouseDown={startLongPress}
+          onMouseUp={cancelLongPress}
+          onMouseLeave={cancelLongPress}
+          onTouchStart={startLongPress}
+          onTouchEnd={cancelLongPress}
+          onTouchCancel={cancelLongPress}
+          onContextMenu={(e) => {
+            if (didLongPress.current) e.preventDefault();
+          }}
+          onClick={handleClick}
+        >
+          <IconButton size="small" sx={{ p: 0 }} component="span">
+            {userReaction ? (
+              <RenderEmoji content={userReaction.content} tags={userReaction.tags} />
+            ) : (
+              <FavoriteBorder sx={{ p: 0 }} />
+            )}
+          </IconButton>
 
-      {/* Top 2 emojis next to button */}
-      <Box display="flex" alignItems="center" ml={1} gap={0.5}>
-        {topEmojis.slice(0, 2).map((r) => (
-          <span key={r.emoji} style={{ fontSize: 18 }}>
-            <RenderEmoji content={r.emoji} tags={r.tags} />
-          </span>
-        ))}
-        {topEmojis.length > 2 && (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 20,
-              height: 20,
-              borderRadius: "50%",
-              backgroundColor: theme.palette.primary.main,
-              color: theme.palette.primary.contrastText,
-              fontSize: 12,
-            }}
-          >
-            +{topEmojis.length - 2}
-          </span>
-        )}
-      </Box>
+          {/* Top 2 emojis next to button */}
+          <Box display="flex" alignItems="center" ml={1} gap={0.5}>
+            {topEmojis.slice(0, 2).map((r) => (
+              <span key={r.emoji} style={{ fontSize: 18 }}>
+                <RenderEmoji content={r.emoji} tags={r.tags} />
+              </span>
+            ))}
+            {topEmojis.length > 2 && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 20,
+                  height: 20,
+                  borderRadius: "50%",
+                  backgroundColor: theme.palette.primary.main,
+                  color: theme.palette.primary.contrastText,
+                  fontSize: 12,
+                }}
+              >
+                +{topEmojis.length - 2}
+              </span>
+            )}
+          </Box>
+        </Box>
+      </Tooltip>
 
       {/* Emoji picker modal */}
       <Modal
@@ -170,6 +219,12 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           />
         </Box>
       </Modal>
+
+      <ReactionsDetailsModal
+        open={showDetails}
+        onClose={() => setShowDetails(false)}
+        reactions={reactions}
+      />
     </Box>
   );
 };

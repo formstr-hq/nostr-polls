@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import {
   Box,
   IconButton,
@@ -10,6 +10,7 @@ import SendIcon from "@mui/icons-material/Send";
 import ReplyIcon from "@mui/icons-material/Reply";
 import CloseIcon from "@mui/icons-material/Close";
 import { DMMessage } from "../../contexts/dm-context";
+import EmojiPickerButton from "../Common/EmojiPickerButton";
 
 interface MessageInputProps {
   replyTo: DMMessage | null;
@@ -27,6 +28,32 @@ const MessageInput: React.FC<MessageInputProps> = ({
 }) => {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const cursorRef = useRef<number>(0);
+
+  const trackCursor = () => {
+    if (inputRef.current) {
+      cursorRef.current = inputRef.current.selectionStart ?? input.length;
+    }
+  };
+
+  const handleEmojiSelect = useCallback(
+    (emoji: string) => {
+      const pos = Math.min(cursorRef.current, input.length);
+      const next = input.slice(0, pos) + emoji + input.slice(pos);
+      setInput(next);
+      const newPos = pos + emoji.length;
+      cursorRef.current = newPos;
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(newPos, newPos);
+        }
+      });
+    },
+    [input]
+  );
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || sending) return;
@@ -104,13 +131,25 @@ const MessageInput: React.FC<MessageInputProps> = ({
         py={1.5}
         sx={{ borderTop: 1, borderColor: "divider" }}
       >
+        <EmojiPickerButton
+          onSelect={handleEmojiSelect}
+          disabled={sending}
+          placement="top-start"
+        />
         <TextField
           fullWidth
           size="small"
           placeholder="Type a message..."
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            trackCursor();
+          }}
           onKeyDown={handleKeyDown}
+          onKeyUp={trackCursor}
+          onClick={trackCursor}
+          onSelect={trackCursor}
+          inputRef={inputRef}
           multiline
           maxRows={4}
           disabled={sending}
