@@ -220,7 +220,8 @@ const ChatView: React.FC = () => {
       mx="auto"
       display="flex"
       flexDirection="column"
-      height="calc(100vh - 64px)"
+      height="100%"
+      minHeight={0}
     >
       {/* Top bar */}
       <Box
@@ -255,6 +256,7 @@ const ChatView: React.FC = () => {
       {/* Messages area */}
       <Box
         flex={1}
+        minHeight={0}
         overflow="auto"
         px={2}
         py={1}
