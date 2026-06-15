@@ -142,6 +142,7 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
       onStart={onStart}
       onDrag={onDrag}
       onStop={onStop}
+      allowMobileScroll
     >
       <Box
         ref={nodeRef}
