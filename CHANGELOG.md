@@ -1,3 +1,12 @@
+# 1.8.15
+
+- Movable action buttons can now snap to the vertical middle of the left/right edge, not just the corners.
+- Tap the reaction emojis next to a post to open the full reactions breakdown.
+- Four new color themes: Midnight, Crimson Noir, Steel Noir, and Amber Noir.
+- Smarter image previews in notes — portrait images get a taller box (no more thin cropped slices), and lightbox tap-to-close behaves correctly.
+- Following / Reacted / Zapped feeds keep listening after a timeout, so notes from slow or flaky relays still stream in instead of getting stuck on an empty/Retry screen.
+- Emoji picker opens instantly and works offline — it now uses your device's native emojis instead of fetching them each time.
+
 # 1.8.14
 
 - Chat UI: emoji picker, movable action buttons, and assorted chat view fixes.

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Tooltip, Box, IconButton, useTheme, Modal } from "@mui/material";
 import FavoriteBorder from "@mui/icons-material/FavoriteBorder";
-import EmojiPicker, { Theme } from "emoji-picker-react";
+import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { Event, EventTemplate } from "nostr-tools/lib/types/core";
 import { signEvent } from "../../../nostr";
@@ -224,6 +224,9 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           }}
         >
           <EmojiPicker
+            // Device-font emojis — no CDN sprite fetch, instant open, offline-safe.
+            emojiStyle={EmojiStyle.NATIVE}
+            lazyLoadEmojis={false}
             theme={
               theme.palette.mode === "light"
                 ? ("light" as Theme)
