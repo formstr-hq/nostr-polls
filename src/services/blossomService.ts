@@ -2,11 +2,16 @@ import { EventTemplate } from "nostr-tools";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-export const DEFAULT_BLOSSOM_SERVER = "https://blossom.primal.net";
+export const DEFAULT_BLOSSOM_SERVERS = [
+  "https://blossom.primal.net",
+  "https://nostr.build"
+];
 export const BLOSSOM_SERVER_KEY = "pollerama:blossom-server";
 
-export function getBlossomServer(): string {
-  return localStorage.getItem(BLOSSOM_SERVER_KEY) || DEFAULT_BLOSSOM_SERVER;
+export function getBlossomServer(): string[] {
+  const custom = localStorage.getItem(BLOSSOM_SERVER_KEY);
+  if (custom) return [custom, ...DEFAULT_BLOSSOM_SERVERS.filter(s => s !== custom)];
+  return DEFAULT_BLOSSOM_SERVERS;
 }
 
 async function sha256Hex(file: File): Promise<string> {
@@ -24,13 +29,13 @@ async function sha256Hex(file: File): Promise<string> {
  * Upload a file to a Blossom server (BUD-01).
  *
  * @param file     - The file to upload
- * @param server   - Blossom server base URL (e.g. "https://blossom.primal.net")
+ * @param servers  - Array of Blossom server base URLs
  * @param signer   - Signs the kind-24242 auth event
  * @returns        - The public URL of the uploaded blob
  */
 export async function uploadToBlossom(
   file: File,
-  server: string,
+  servers: string | string[],
   signer: (template: EventTemplate) => Promise<any>
 ): Promise<string> {
   const hash = await sha256Hex(file);
@@ -49,23 +54,36 @@ export async function uploadToBlossom(
   });
 
   const authToken = btoa(JSON.stringify(authEvent));
-  const endpoint = server.replace(/\/$/, "") + "/upload";
+  const serverList = Array.isArray(servers) ? servers : [servers];
+  let lastError: Error | null = null;
 
-  const res = await fetch(endpoint, {
-    method: "PUT",
-    headers: {
-      Authorization: `Nostr ${authToken}`,
-      "Content-Type": file.type || "application/octet-stream",
-    },
-    body: file,
-  });
+  for (const server of serverList) {
+    const endpoint = server.replace(/\/$/, "") + "/upload";
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Blossom upload failed (${res.status}): ${body}`);
+    try {
+      const res = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          Authorization: `Nostr ${authToken}`,
+          "Content-Type": file.type || "application/octet-stream",
+        },
+        body: file,
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`Blossom upload failed on ${server} (${res.status}): ${body}`);
+      }
+
+      const data = await res.json();
+      if (!data.url) throw new Error(`Blossom server ${server} returned no URL`);
+      return data.url as string;
+    } catch (err) {
+      console.warn(`Failed to upload to Blossom server: ${server}`, err);
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Continue to next server
+    }
   }
 
-  const data = await res.json();
-  if (!data.url) throw new Error("Blossom server returned no URL");
-  return data.url as string;
+  throw lastError || new Error("All Blossom upload attempts failed.");
 }

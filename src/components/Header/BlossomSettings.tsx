@@ -12,7 +12,7 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import {
   BLOSSOM_SERVER_KEY,
-  DEFAULT_BLOSSOM_SERVER,
+  DEFAULT_BLOSSOM_SERVERS,
 } from "../../services/blossomService";
 
 const PRESET_SERVERS = [
@@ -27,7 +27,7 @@ const PRESET_SERVERS = [
 const CUSTOM_VALUE = "custom";
 
 function getCurrentServer(): string {
-  return localStorage.getItem(BLOSSOM_SERVER_KEY) || DEFAULT_BLOSSOM_SERVER;
+  return localStorage.getItem(BLOSSOM_SERVER_KEY) || DEFAULT_BLOSSOM_SERVERS[0];
 }
 
 function isPreset(url: string): boolean {

@@ -11,7 +11,12 @@ const KEY = "pollerama:userProfileCache";
 
 export type CachedUserData = {
   name?: string;
+  display_name?: string;
   picture?: string;
+  banner?: string;
+  website?: string;
+  nip05?: string;
+  lud16?: string;
   about?: string;
 };
 

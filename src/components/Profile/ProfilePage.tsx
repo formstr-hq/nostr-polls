@@ -39,7 +39,11 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { useNotification } from "../../contexts/notification-context";
 import { Nip05Badge } from "../Common/Nip05Badge";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
-
+import EditIcon from "@mui/icons-material/Edit";
+import LinkIcon from "@mui/icons-material/Link";
+import { FeedActionsProvider } from "../../contexts/FeedActionsContext";
+import CreateFAB from "../Feed/CreateFAB";
+import { ProfileEditModal } from "./ProfileEditModal";
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
@@ -74,6 +78,7 @@ const ProfilePage: React.FC = () => {
   const [pubkey, setPubkey] = useState<string | null>(null);
   const [profile, setProfile] = useState<any>(null);
   const [tabValue, setTabValue] = useState(0);
+  const [editModalOpen, setEditModalOpen] = useState(false);
   const [followsYou, setFollowsYou] = useState(false);
   const [showContactListWarning, setShowContactListWarning] = useState(false);
   const [pendingFollowKey, setPendingFollowKey] = useState<string | null>(null);
@@ -322,10 +327,11 @@ const ProfilePage: React.FC = () => {
   const isOwnProfile = user?.pubkey === pubkey;
 
   return (
-    <Box
-      ref={scrollContainerRef}
-      maxWidth={800}
-      mx="auto"
+    <FeedActionsProvider>
+      <Box
+        ref={scrollContainerRef}
+        maxWidth={800}
+        mx="auto"
       sx={{
         px: 2,
         py: { xs: 2, sm: 4 },
@@ -430,43 +436,53 @@ const ProfilePage: React.FC = () => {
           </Box>
 
           {/* Action buttons */}
-          {!isOwnProfile && user && (
-            <Box
-              sx={{
-                display: "flex",
-                gap: 1,
-                mt: 2,
-                justifyContent: { xs: "center", sm: "flex-start" },
-              }}
-            >
-              {user.follows?.includes(pubkey) ? (
-                <Button
-                  variant="contained"
-                  size="small"
-                  startIcon={<CheckCircleIcon />}
-                  disableElevation
-                >
-                  Following
-                </Button>
-              ) : (
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={addToContacts}
-                >
-                  {followsYou ? "Follow Back" : "Follow"}
-                </Button>
-              )}
+          <Box
+            sx={{
+              display: "flex",
+              gap: 1,
+              mt: 2,
+              justifyContent: { xs: "center", sm: "flex-start" },
+            }}
+          >
+            {isOwnProfile ? (
               <Button
                 variant="outlined"
                 size="small"
-                startIcon={<MailIcon />}
-                onClick={() => navigate(`/messages/${npub}`)}
+                onClick={() => setEditModalOpen(true)}
               >
-                Message
+                Edit Profile
               </Button>
-            </Box>
-          )}
+            ) : user ? (
+              <>
+                {user.follows?.includes(pubkey) ? (
+                  <Button
+                    variant="contained"
+                    size="small"
+                    startIcon={<CheckCircleIcon />}
+                    disableElevation
+                  >
+                    Following
+                  </Button>
+                ) : (
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={addToContacts}
+                  >
+                    {followsYou ? "Follow Back" : "Follow"}
+                  </Button>
+                )}
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<MailIcon />}
+                  onClick={() => navigate(`/messages/${npub}`)}
+                >
+                  Message
+                </Button>
+              </>
+            ) : null}
+          </Box>
 
           {/* Bio */}
           {profile?.about && (
@@ -476,6 +492,31 @@ const ProfilePage: React.FC = () => {
                 <TextWithImages content={profile.about} />
               </Typography>
             </>
+          )}
+
+          {/* Website */}
+          {profile?.website && (
+            <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 0.5 }}>
+              <LinkIcon fontSize="small" color="action" />
+              <Typography
+                variant="body2"
+                component="a"
+                href={
+                  profile.website.startsWith("http")
+                    ? profile.website
+                    : `https://${profile.website}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{
+                  color: "primary.main",
+                  textDecoration: "none",
+                  "&:hover": { textDecoration: "underline" },
+                }}
+              >
+                {profile.website.replace(/^https?:\/\//, "")}
+              </Typography>
+            </Box>
           )}
 
           {/* Stats + Rate */}
@@ -590,7 +631,30 @@ const ProfilePage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+      </Box>
+
+      {/* FAB with custom Profile actions */}
+      <CreateFAB
+        extraActions={
+          isOwnProfile
+            ? [
+                {
+                  icon: <EditIcon />,
+                  name: "Edit Profile",
+                  onClick: () => setEditModalOpen(true),
+                },
+              ]
+            : []
+        }
+      />
+
+      {/* Profile Edit Modal */}
+      <ProfileEditModal
+        open={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        userProfile={profile}
+      />
+    </FeedActionsProvider>
   );
 };
 

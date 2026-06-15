@@ -101,7 +101,12 @@ function buildUserFromAccount(account: PackageStoredAccount): User {
   return {
     pubkey: account.pubkey,
     name: cached?.name ?? ANONYMOUS_USER_NAME,
+    display_name: cached?.display_name,
     picture: cached?.picture ?? DEFAULT_IMAGE_URL,
+    banner: cached?.banner,
+    website: cached?.website,
+    nip05: cached?.nip05,
+    lud16: cached?.lud16,
     about: cached?.about,
   };
 }
@@ -337,15 +342,24 @@ class SignerManager {
         `publishKind0: active signer pubkey ${signerPubkey} does not match target ${user.pubkey}`,
       );
     }
+    
+    // Build profile object including extended fields if they exist
+    const profileContent: Record<string, any> = {
+      name: user.name,
+      about: user.about || "",
+      picture: user.picture || "",
+    };
+    if (user.display_name) profileContent.display_name = user.display_name;
+    if (user.banner) profileContent.banner = user.banner;
+    if (user.website) profileContent.website = user.website;
+    if (user.nip05) profileContent.nip05 = user.nip05;
+    if (user.lud16) profileContent.lud16 = user.lud16;
+
     const kind0Event: EventTemplate = {
       kind: 0,
       created_at: Math.floor(Date.now() / 1000),
       tags: [],
-      content: JSON.stringify({
-        name: user.name,
-        about: user.about || "",
-        picture: user.picture || "",
-      }),
+      content: JSON.stringify(profileContent),
     };
     const signed = await signer.signEvent(kind0Event);
     pool.publish(defaultRelays, signed);
@@ -605,7 +619,12 @@ class SignerManager {
       const parsed = parseProfileContent(kind0, pubkey);
       setCachedUserData(pubkey, {
         name: parsed.name,
+        display_name: parsed.display_name,
         picture: parsed.picture,
+        banner: parsed.banner,
+        website: parsed.website,
+        nip05: parsed.nip05,
+        lud16: parsed.lud16,
         about: parsed.about,
       });
       // Refresh exposed user; the signer.onChange callback already set

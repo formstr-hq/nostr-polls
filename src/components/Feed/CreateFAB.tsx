@@ -7,7 +7,15 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { DraggableCorner } from "../Common/DraggableCorner";
 
-const CreateFAB: React.FC = () => {
+interface CreateFABProps {
+  extraActions?: {
+    icon: React.ReactNode;
+    name: string;
+    onClick: () => void;
+  }[];
+}
+
+const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -77,6 +85,18 @@ const CreateFAB: React.FC = () => {
             onClick={handleRefresh}
             sx={actionSx}
           />
+          {extraActions.map((action, index) => (
+            <SpeedDialAction
+              key={`extra-action-${index}`}
+              icon={action.icon}
+              tooltipTitle={action.name}
+              onClick={() => {
+                setOpen(false);
+                action.onClick();
+              }}
+              sx={actionSx}
+            />
+          ))}
           <SpeedDialAction
             icon={<AddIcon />}
             tooltipTitle="Create"

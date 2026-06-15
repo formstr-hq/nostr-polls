@@ -8,7 +8,12 @@ import { signerManager, StoredAccount } from "../singletons/Signer/SignerManager
 
 export type User = {
   name?: string;
+  display_name?: string;
   picture?: string;
+  banner?: string;
+  website?: string;
+  nip05?: string;
+  lud16?: string;
   pubkey: string;
   privateKey?: string;
   follows?: string[];
