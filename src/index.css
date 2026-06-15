@@ -1,6 +1,7 @@
 html, body {
   height: 100%;
   overflow: hidden;
+  touch-action: pan-x pan-y;
 }
 
 #root {

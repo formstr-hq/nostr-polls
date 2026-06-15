@@ -24,6 +24,7 @@ import {
 } from "../../../utils/translation-cache";
 import { LinkPreviewCard } from "./LinkPreviewCard";
 import { NaddrHandlers } from "./NaddrHandlers";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
 interface TextWithImagesProps {
   content: string;
@@ -123,18 +124,38 @@ const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, inde
           >
             <CloseIcon />
           </IconButton>
-          <img
-            src={src}
-            alt={`img-${index}-full`}
+          <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              maxWidth: "92vw",
-              maxHeight: "88vh",
-              objectFit: "contain",
-              borderRadius: "8px",
-              cursor: "default",
+              width: "92vw",
+              height: "88vh",
+              touchAction: "none",
             }}
-          />
+          >
+            <TransformWrapper
+              doubleClick={{ mode: "toggle", step: 2 }}
+              wheel={{ step: 0.1 }}
+              pinch={{ step: 5 }}
+              minScale={1}
+              maxScale={6}
+            >
+              <TransformComponent
+                wrapperStyle={{ width: "100%", height: "100%" }}
+                contentStyle={{ width: "100%", height: "100%" }}
+              >
+                <img
+                  src={src}
+                  alt={`img-${index}-full`}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                    borderRadius: "8px",
+                  }}
+                />
+              </TransformComponent>
+            </TransformWrapper>
+          </div>
         </div>,
         document.body
       )}

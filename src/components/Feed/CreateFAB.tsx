@@ -5,6 +5,7 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
+import { DraggableCorner } from "../Common/DraggableCorner";
 
 const CreateFAB: React.FC = () => {
   const [open, setOpen] = useState(false);
@@ -42,43 +43,49 @@ const CreateFAB: React.FC = () => {
   };
 
   return (
-    <SpeedDial
-      ariaLabel="Feed actions"
-      sx={{
-        position: "fixed",
-        bottom: 24,
-        right: 24,
-        zIndex: 1000,
-        "& .MuiFab-primary": {
-          border: (theme: any) => `2px solid ${theme.palette.primary.main}`,
-        },
-      }}
-      icon={<SpeedDialIcon icon={<AddIcon />} />}
-      open={open}
-      onOpen={() => setOpen(true)}
-      onClose={() => setOpen(false)}
+    <DraggableCorner
+      storageKey="pollerama:createFabCorner"
+      defaultCorner="br"
+      offset={{ x: 24, y: 24 }}
+      zIndex={1000}
     >
-      {isScrolledDown && (
-        <SpeedDialAction
-          icon={<KeyboardArrowUpIcon />}
-          tooltipTitle="Back to top"
-          onClick={handleScrollToTop}
-          sx={actionSx}
-        />
+      {(corner) => (
+        <SpeedDial
+          ariaLabel="Feed actions"
+          direction={corner.startsWith("t") ? "down" : "up"}
+          sx={{
+            "& .MuiFab-primary": {
+              border: (theme: any) => `2px solid ${theme.palette.primary.main}`,
+            },
+          }}
+          icon={<SpeedDialIcon icon={<AddIcon />} />}
+          open={open}
+          onOpen={() => setOpen(true)}
+          onClose={() => setOpen(false)}
+        >
+          {isScrolledDown && (
+            <SpeedDialAction
+              icon={<KeyboardArrowUpIcon />}
+              tooltipTitle="Back to top"
+              onClick={handleScrollToTop}
+              sx={actionSx}
+            />
+          )}
+          <SpeedDialAction
+            icon={<RefreshIcon />}
+            tooltipTitle="Refresh"
+            onClick={handleRefresh}
+            sx={actionSx}
+          />
+          <SpeedDialAction
+            icon={<AddIcon />}
+            tooltipTitle="Create"
+            onClick={handleCreate}
+            sx={actionSx}
+          />
+        </SpeedDial>
       )}
-      <SpeedDialAction
-        icon={<RefreshIcon />}
-        tooltipTitle="Refresh"
-        onClick={handleRefresh}
-        sx={actionSx}
-      />
-      <SpeedDialAction
-        icon={<AddIcon />}
-        tooltipTitle="Create"
-        onClick={handleCreate}
-        sx={actionSx}
-      />
-    </SpeedDial>
+    </DraggableCorner>
   );
 };
 

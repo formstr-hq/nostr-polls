@@ -39,6 +39,7 @@ import { FeedScrollProvider } from "./contexts/FeedScrollContext";
 import { SubNavProvider } from "./contexts/SubNavContext";
 import { AppearanceProvider, useAppearance } from "./contexts/AppearanceContext";
 import NavSidebar from "./components/SidePane";
+import { DraggableCorner } from "./components/Common/DraggableCorner";
 import { VideoPlayerProvider } from "./contexts/VideoPlayerContext";
 import { FloatingVideoPlayer } from "./components/Common/FloatingVideoPlayer";
 import { useAndroidNotifications } from "./hooks/useAndroidNotifications";
@@ -145,13 +146,18 @@ function AppContent() {
         <NavSidebar open={sidebarOpen} onToggle={toggleSidebar} />
         <Box key={user?.pubkey ?? 'anon'} sx={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           {!sidebarOpen && (
-            <Fab
-              size="small"
-              onClick={toggleSidebar}
-              sx={{ position: "fixed", bottom: 20, left: 12, zIndex: 1200 }}
+            <DraggableCorner
+              storageKey="pollerama:sidebarFabCorner"
+              defaultCorner="bl"
+              offset={{ x: 12, y: 20 }}
+              zIndex={1200}
             >
-              <MenuOpenIcon fontSize="small" />
-            </Fab>
+              {() => (
+                <Fab size="small" onClick={toggleSidebar}>
+                  <MenuOpenIcon fontSize="small" />
+                </Fab>
+              )}
+            </DraggableCorner>
           )}
           <Routes>
           <Route path="/create" element={<ScrollPage><EventCreator /></ScrollPage>} />
