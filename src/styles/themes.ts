@@ -77,6 +77,38 @@ export const COLOR_PRESETS: ColorPreset[] = [
     lightBg: '#fff5f0',
     darkBg: '#2d1a0a',
   },
+  {
+    id: 'midnight',
+    name: 'Midnight',
+    lightPrimary: '#000000',
+    darkPrimary: '#ffffff',
+    lightBg: '#ffffff',
+    darkBg: '#000000',
+  },
+  {
+    id: 'crimson-noir',
+    name: 'Crimson Noir',
+    lightPrimary: '#8e1d2b',
+    darkPrimary: '#e35d6a',
+    lightBg: '#f7f5f3',
+    darkBg: '#000000',
+  },
+  {
+    id: 'steel-noir',
+    name: 'Steel Noir',
+    lightPrimary: '#2f4a63',
+    darkPrimary: '#7fa6c4',
+    lightBg: '#f4f6f8',
+    darkBg: '#000000',
+  },
+  {
+    id: 'amber-noir',
+    name: 'Amber Noir',
+    lightPrimary: '#8a5a12',
+    darkPrimary: '#d9a441',
+    lightBg: '#f7f5f0',
+    darkBg: '#000000',
+  },
 ];
 
 export function getFontPreset(id: string): FontPreset {

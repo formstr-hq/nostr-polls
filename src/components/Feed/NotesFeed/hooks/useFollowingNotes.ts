@@ -18,6 +18,10 @@ export const useFollowingNotes = () => {
   const initialLoadDoneRef = useRef(false);
   const oldestEventTimestampRef = useRef<number | null>(null);
   const loadingRef = useRef(false);
+  // A fetch that times out keeps its subscription open so late-arriving events
+  // (slow/flaky relays) still stream in. We hold the handle here to tear it
+  // down on the next fetch or on unmount.
+  const activeHandleRef = useRef<{ unsubscribe: () => void } | null>(null);
 
   const { relays } = useRelays();
   const { user } = useUserContext();
@@ -121,6 +125,10 @@ export const useFollowingNotes = () => {
     loadingRef.current = true;
     setLoadFailed(false);
     if (fresh) setRefreshing(true); else setLoadingMore(true);
+    // Close any previous subscription we kept open after a timeout so fetches
+    // don't stack up.
+    activeHandleRef.current?.unsubscribe();
+    activeHandleRef.current = null;
     const authors = Array.from(user.follows);
 
     prefetchOutboxRelays(authors); // fire-and-forget, populates cache for gossip model
@@ -195,6 +203,9 @@ export const useFollowingNotes = () => {
           firstEventHandled = true;
           initialLoadDoneRef.current = true;
           setInitialLoadDone(true);
+          // Events arrived (possibly after the timeout flagged a failure) —
+          // clear the error so the empty/Retry state is replaced by notes.
+          setLoadFailed(false);
           setVersion((v) => v + 1);
         } else {
           scheduleRender();
@@ -202,6 +213,7 @@ export const useFollowingNotes = () => {
       },
       onEose: () => {
         handle.unsubscribe();
+        activeHandleRef.current = null;
         if (eventCount > 0) setVersion((v) => v + 1);
         startMissingNotesFetcher();
         finishFetch();
@@ -209,11 +221,28 @@ export const useFollowingNotes = () => {
       fresh,
     });
 
+    activeHandleRef.current = handle;
+
+    // On timeout, DON'T tear down the subscription. Under flaky connectivity
+    // relays frequently connect after our 8s budget — keeping the sub open
+    // lets those late events stream into the feed (matching how the
+    // notifications subscription stays alive and back-fills). We only clear the
+    // loading spinner here; finishFetch flags loadFailed when nothing has
+    // arrived yet so the empty/Retry state shows, but the still-open
+    // subscription replaces it with notes the moment events land. The handle is
+    // closed on the next fetch, on EOSE, or on unmount.
     timeoutId = setTimeout(() => {
-      handle.unsubscribe();
       finishFetch(true);
     }, FETCH_TIMEOUT_MS);
   }, [user?.follows, relays, startMissingNotesFetcher]);
+
+  // Close any subscription kept open past a timeout when the hook unmounts.
+  useEffect(() => {
+    return () => {
+      activeHandleRef.current?.unsubscribe();
+      activeHandleRef.current = null;
+    };
+  }, []);
 
   const refreshNotes = useCallback(() => {
     initialLoadDoneRef.current = false;

@@ -38,10 +38,27 @@ const isVideoUrl = (url: string) =>
 
 // ---- Parsers ----
 
+// Preview box aspect-ratio caps (width / height). Wide images are capped at
+// 16:9 and tall images at 4:5 so a portrait photo gets a tall box (showing the
+// whole subject) instead of being cropped to a thin horizontal slice.
+const WIDEST_RATIO = 16 / 9;
+const TALLEST_RATIO = 4 / 5;
+
 // Stateful lightbox wrapper — must be a proper component (not an inline call)
 // so that useState is always called at a stable component boundary.
 const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, index }) => {
   const [open, setOpen] = React.useState(false);
+  // Aspect ratio of the preview box. Starts at the wide cap for a stable
+  // initial layout, then snaps to the image's clamped natural ratio on load.
+  const [ratio, setRatio] = React.useState<number>(WIDEST_RATIO);
+
+  const handleLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const { naturalWidth, naturalHeight } = e.currentTarget;
+    if (naturalWidth > 0 && naturalHeight > 0) {
+      const natural = naturalWidth / naturalHeight;
+      setRatio(Math.min(WIDEST_RATIO, Math.max(TALLEST_RATIO, natural)));
+    }
+  }, []);
 
   // Back gesture: push a history entry when open so the back button closes the lightbox.
   React.useEffect(() => {
@@ -63,17 +80,32 @@ const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, inde
   return (
     <>
       <div
-        style={{ position: "relative", marginBottom: "0.5rem", borderRadius: "6px", overflow: "hidden", cursor: "pointer" }}
+        style={{
+          position: "relative",
+          marginBottom: "0.5rem",
+          borderRadius: "6px",
+          overflow: "hidden",
+          cursor: "pointer",
+          width: "100%",
+          aspectRatio: String(ratio),
+          // Safety net for extreme viewports — a tall (4:5) box on a narrow
+          // column still stays within a sensible height.
+          maxHeight: "80vh",
+        }}
         onClick={() => setOpen(true)}
       >
         <img
           src={src}
           alt={`img-${index}`}
+          onLoad={handleLoad}
           style={{
             display: "block",
             width: "100%",
-            height: "220px",
+            height: "100%",
             objectFit: "cover",
+            // Favor the top of the image for any residual crop (subjects/faces
+            // are usually near the top rather than the dead center).
+            objectPosition: "top",
           }}
         />
         {/* Expand icon — signals the image is clipped and tappable */}
@@ -125,7 +157,6 @@ const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, inde
             <CloseIcon />
           </IconButton>
           <div
-            onClick={(e) => e.stopPropagation()}
             style={{
               width: "92vw",
               height: "88vh",
@@ -141,14 +172,27 @@ const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, inde
             >
               <TransformComponent
                 wrapperStyle={{ width: "100%", height: "100%" }}
-                contentStyle={{ width: "100%", height: "100%" }}
+                contentStyle={{
+                  width: "100%",
+                  height: "100%",
+                  // Center the (now content-sized) image so clicks land on the
+                  // empty area around it — which bubbles up to close.
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
               >
                 <img
                   src={src}
                   alt={`img-${index}-full`}
+                  // Clicking the actual image should NOT dismiss — only the
+                  // surrounding backdrop/letterbox should. Sizing to max-w/h
+                  // (instead of 100%) makes the element match the visible
+                  // picture so the empty margins belong to the backdrop.
+                  onClick={(e) => e.stopPropagation()}
                   style={{
-                    width: "100%",
-                    height: "100%",
+                    maxWidth: "100%",
+                    maxHeight: "100%",
                     objectFit: "contain",
                     borderRadius: "8px",
                   }}
@@ -165,7 +209,7 @@ const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, inde
 
 // ImageParser itself has no hooks — safe to call as a plain function inside render loops.
 const ImageParser = ({ part, index }: { part: string; index: number }) => {
-  return isImageUrl(part) ? <ImageWithLightbox src={part} index={index} /> : null;
+  return isImageUrl(part) ? <ImageWithLightbox key={index} src={part} index={index} /> : null;
 };
 
 const URLParser = ({ part, index, color }: { part: string; index: number; color: string }) => {
