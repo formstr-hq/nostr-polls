@@ -1,3 +1,9 @@
+# 1.8.14
+
+- Chat UI: emoji picker, movable action buttons, and assorted chat view fixes.
+- Easier topic discovery in feeds.
+- Optional "Pollerama" client tag on published events (Settings → General). Off by default.
+
 # 1.8.13
 
 - Fix NIP-55 (Amber) sign-in not dismissing the login modal.

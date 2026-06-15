@@ -3,6 +3,7 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 import { nostrRuntime } from "../singletons";
 import { signerManager } from "../singletons/Signer/SignerManager";
 import { getCachedOutboxRelays, getOutboxRelays } from "./OutboxService";
+import { withClientTag } from "../services/clientTagSettings";
 
 export const defaultRelays = [
   "wss://relay.damus.io/",
@@ -160,18 +161,19 @@ export const getATagFromEvent = (event: Event) => {
 };
 
 export const signEvent = async (event: EventTemplate, secret?: string) => {
+  const tagged = withClientTag(event);
   let signedEvent;
   let secretKey;
   if (secret) {
     secretKey = hexToBytes(secret);
-    signedEvent = finalizeEvent(event, secretKey);
+    signedEvent = finalizeEvent(tagged, secretKey);
     return signedEvent;
   }
   const signer = await signerManager.getSigner();
   if (!signer) {
     throw Error("Login Method Not Provided");
   }
-  signedEvent = await signer.signEvent(event);
+  signedEvent = await signer.signEvent(tagged);
   return signedEvent;
 };
 
