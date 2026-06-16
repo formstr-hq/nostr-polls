@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, ButtonBase, Typography, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
+import CheckIcon from '@mui/icons-material/Check';
 import { FONT_PRESETS, COLOR_PRESETS } from '../../styles/themes';
 import { useAppearance } from '../../contexts/AppearanceContext';
 import { ColorSchemeToggle } from '../ColorScheme';
@@ -25,6 +26,8 @@ export const AppearanceSettings: React.FC = () => {
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
           {COLOR_PRESETS.map((preset) => {
             const selected = colorPresetId === preset.id;
+            const swatchColor =
+              theme.palette.mode === 'dark' ? preset.darkPrimary : preset.lightPrimary;
             return (
               <ButtonBase
                 key={preset.id}
@@ -34,7 +37,7 @@ export const AppearanceSettings: React.FC = () => {
                   borderRadius: '50%',
                   p: '3px',
                   border: '2px solid',
-                  borderColor: selected ? preset.lightPrimary : 'transparent',
+                  borderColor: selected ? 'text.primary' : 'transparent',
                   transition: 'border-color 0.15s',
                 }}
               >
@@ -43,9 +46,21 @@ export const AppearanceSettings: React.FC = () => {
                     width: 28,
                     height: 28,
                     borderRadius: '50%',
-                    bgcolor: preset.lightPrimary,
+                    bgcolor: swatchColor,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                   }}
-                />
+                >
+                  {selected && (
+                    <CheckIcon
+                      sx={{
+                        fontSize: 18,
+                        color: theme.palette.getContrastText(swatchColor),
+                      }}
+                    />
+                  )}
+                </Box>
               </ButtonBase>
             );
           })}

@@ -58,6 +58,17 @@ export class NostrRuntime {
       if (poolRelays.size === 0) return;
       this.cleanStaleRelays(Array.from(poolRelays.keys()));
     }, 60_000);
+
+    // Connection watchdog: while the tab is foregrounded and online, detect
+    // active subscriptions whose underlying socket has silently died (relay
+    // idle-close, server restart, NAT timeout) and reconnect them. The
+    // visibilitychange/online reconnect triggers in App.tsx don't cover a tab
+    // that simply stays open for a long time — this does.
+    setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      this.checkConnectionHealth();
+    }, 30_000);
   }
 
   /**
@@ -497,6 +508,37 @@ export class NostrRuntime {
    */
   reconnect(): void {
     this.subscriptionManager.reconnectAll();
+  }
+
+  /**
+   * Whether a relay's underlying WebSocket is currently usable. Treats a
+   * CONNECTING or OPEN socket as healthy; a missing relay object, missing
+   * socket, or CLOSING/CLOSED socket as dead.
+   */
+  private isRelayHealthy(url: string): boolean {
+    const normalized = poolNormalizeUrl(url);
+    if (!normalized) return true; // can't assess — don't trigger churn
+    const poolRelays = (this.pool as any).relays as Map<string, any>;
+    const relay = poolRelays.get(normalized);
+    if (!relay || !relay.ws) return false;
+    // WebSocket.CONNECTING = 0, OPEN = 1, CLOSING = 2, CLOSED = 3
+    return relay.ws.readyState === 0 || relay.ws.readyState === 1;
+  }
+
+  /**
+   * If any relay backing an active subscription has a dead socket, reconnect
+   * all subscriptions. Driven by the watchdog interval so a long-lived tab
+   * recovers from silently-dropped connections without user interaction.
+   */
+  checkConnectionHealth(): void {
+    const active = this.subscriptionManager.getActiveRelays();
+    if (active.size === 0) return;
+    for (const url of Array.from(active)) {
+      if (!this.isRelayHealthy(url)) {
+        this.reconnect();
+        return;
+      }
+    }
   }
 
   /**

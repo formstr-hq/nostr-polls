@@ -261,11 +261,12 @@ function decodeBolt11Amount(invoice: string): number | null {
 const LightningInvoiceParser = ({
   part,
   index,
+  color,
 }: {
   part: string;
   index: number;
+  color: string;
 }) => {
-  const theme = useTheme();
   const lower = part.toLowerCase();
   const isBolt11 = lower.startsWith("lnbc") || lower.startsWith("lntb");
   const isLnurl = lower.startsWith("lnurl");
@@ -293,14 +294,14 @@ const LightningInvoiceParser = ({
         display: "inline-flex",
         alignItems: "center",
         gap: 0.75,
-        border: `1px solid ${theme.palette.primary.main}`,
+        border: `1px solid ${color}`,
         borderRadius: 1,
         px: 1.5,
         py: 0.5,
         my: 0.5,
       }}
     >
-      <BoltIcon sx={{ color: theme.palette.primary.main, fontSize: 18 }} />
+      <BoltIcon sx={{ color, fontSize: 18 }} />
       <Typography variant="body2" sx={{ fontWeight: 500 }}>
         {amountText}
       </Typography>
@@ -333,13 +334,14 @@ const NostrParser = ({
   index,
   profiles,
   fetchUserProfileThrottled,
+  color,
 }: {
   part: string;
   index: number;
   profiles: Map<string, any> | undefined;
   fetchUserProfileThrottled: (pubkey: string) => void;
+  color: string;
 }) => {
-  const theme = useTheme();
   const isNostrUri = part.startsWith("nostr:");
   const isBareNip19 = NIP19_BARE_PREFIXES.some((p) => part.startsWith(p));
   if (!isNostrUri && !isBareNip19) return null;
@@ -405,7 +407,7 @@ const NostrParser = ({
           <Link
             to={`/profile/${encoded}`}
             style={{
-              color: theme.palette.primary.main,
+              color,
               textDecoration: "underline",
               display: "inline-flex",
               alignItems: "center",
@@ -594,8 +596,9 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
             index,
             profiles,
             fetchUserProfileThrottled,
+            color: theme.palette.primary.main,
           }) ||
-          LightningInvoiceParser({ part, index }) ||
+          LightningInvoiceParser({ part, index, color: theme.palette.primary.main }) ||
           CustomEmojiParser({ part, index, emojiMap });
 
         // Collect plain URLs that aren't already embedded as media

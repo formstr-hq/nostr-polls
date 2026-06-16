@@ -66,25 +66,47 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
     if (reposted) return;
 
     const isKind1 = event.kind === 1;
+    const created_at = Math.floor(Date.now() / 1000);
+    const baseTags = [
+      ["e", event.id, relays[0], event.pubkey],
+      ["p", event.pubkey],
+    ];
 
-    const repostTemplate: EventTemplate = {
-      kind: isKind1 ? 6 : 16,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [
-        ["e", event.id, relays[0], event.pubkey],
-        ["p", event.pubkey],
-      ],
-      content: isKind1 ? JSON.stringify(event) : "",
-    };
+    const repostTemplates: EventTemplate[] = [];
 
-    if (!isKind1) {
-      repostTemplate.tags.push(["k", event.kind.toString()]);
+    if (isKind1) {
+      // Standard NIP-18 note repost.
+      repostTemplates.push({
+        kind: 6,
+        created_at,
+        tags: baseTags,
+        content: JSON.stringify(event),
+      });
+    } else {
+      // Generic repost (NIP-18 kind 16) for non-note content like polls.
+      repostTemplates.push({
+        kind: 16,
+        created_at,
+        tags: [...baseTags, ["k", event.kind.toString()]],
+        content: "",
+      });
+      // Also publish a kind-6 repost shaped like a normal note repost. Many
+      // clients only surface kind-6 reposts in their feeds, so this is how
+      // polls get reposted there too.
+      repostTemplates.push({
+        kind: 6,
+        created_at,
+        tags: baseTags,
+        content: JSON.stringify(event),
+      });
     }
 
     try {
-      const signedEvent = await signEvent(repostTemplate, user!.privateKey);
-      pool.publish(relays, signedEvent);
-      addEventToMap(signedEvent);
+      for (const template of repostTemplates) {
+        const signedEvent = await signEvent(template, user!.privateKey);
+        pool.publish(relays, signedEvent);
+        addEventToMap(signedEvent);
+      }
       setReposted(true);
     } catch (error) {
       console.error("Repost failed:", error);

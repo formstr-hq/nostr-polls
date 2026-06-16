@@ -1,7 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { nip19, nip05, Event } from "nostr-tools";
 import { nostrRuntime } from "../../singletons";
 import { searchRelays } from "../../nostr";
+import { useUserContext } from "../../hooks/useUserContext";
+import { useAppContext } from "../../hooks/useAppContext";
 
 export type InputType = "idle" | "nip19" | "nip05" | "hashtag" | "text";
 
@@ -75,6 +77,8 @@ export function useSearch(): UseSearchReturn {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchedRelays, setSearchedRelays] = useState<string[]>([]);
+  const { user } = useUserContext();
+  const { profiles } = useAppContext();
 
   // Detect type and reset on every query change
   useEffect(() => {
@@ -170,6 +174,42 @@ export function useSearch(): UseSearchReturn {
     };
   }, [query, inputType]);
 
+  // Match the user's own contacts (people they follow) against the free-text
+  // query locally — no network. These are surfaced before the relay results so
+  // people you actually know rank first.
+  const contactMatches = useMemo<Event[]>(() => {
+    if (inputType !== "text") return [];
+    const q = query.trim().toLowerCase();
+    if (q.length < 2 || !user?.follows?.length) return [];
+
+    const matched: Event[] = [];
+    for (const pubkey of user.follows) {
+      const profile = profiles.get(pubkey);
+      if (!profile?.event) continue;
+      const hit = [
+        profile.name,
+        profile.display_name,
+        profile.username,
+        profile.nip05,
+      ].some((v) => typeof v === "string" && v.toLowerCase().includes(q));
+      if (hit) matched.push(profile.event);
+    }
+    return matched;
+  }, [inputType, query, user?.follows, profiles]);
+
+  // Contacts first, then relay results with any duplicates removed.
+  const mergedResults = useMemo<SearchResults>(() => {
+    if (contactMatches.length === 0) return results;
+    const contactPubkeys = new Set(contactMatches.map((e) => e.pubkey));
+    return {
+      ...results,
+      profiles: [
+        ...contactMatches,
+        ...results.profiles.filter((e) => !contactPubkeys.has(e.pubkey)),
+      ],
+    };
+  }, [results, contactMatches]);
+
   return {
     query,
     setQuery,
@@ -177,7 +217,7 @@ export function useSearch(): UseSearchReturn {
     nip19Result,
     nip05Pubkey,
     nip05Loading,
-    results,
+    results: mergedResults,
     loading,
     error,
     searchedRelays,

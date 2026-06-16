@@ -1,3 +1,15 @@
+# 1.8.18
+
+- Profiles now show your web of trust: an "In your wider network" badge and a "Followed by … you follow" row showing which people you follow also follow them.
+- New notes are surfaced in the speed dial with a notification dot, and no longer pop into the feed on their own — they're buffered and dropped into their natural spot only when you tap "+N", so the feed never jumps under you.
+- Global search now also finds people from your contacts and lists them first.
+- Long-lived tabs that quietly lost their relay connections now reconnect automatically; the speed-dial refresh reconnects too.
+- Web of trust now computes in the background with a progress indicator instead of freezing the app, and the result is cached.
+- Reposting a poll now shows up in more clients, and poll reposts match the cleaner notes repost style.
+- The Pollerama logo follows your theme — the wordmark uses your selected font and its colors track light/dark and the accent color.
+- The selected accent color is now clearly marked in Appearance settings.
+- Fixed the notes feeds not loading (and the refresh button doing nothing) when the web of trust was empty or stale.
+
 # 1.8.15
 
 - Movable action buttons can now snap to the vertical middle of the left/right edge, not just the corners.

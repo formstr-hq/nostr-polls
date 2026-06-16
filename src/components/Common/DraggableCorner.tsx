@@ -19,6 +19,8 @@ interface DraggableCornerProps {
   defaultCorner: Corner;
   offset?: { x: number; y: number };
   zIndex?: number;
+  /** When true, keep the element fully opaque (skip the idle fade-out). */
+  disableIdle?: boolean;
   children: (corner: Corner) => React.ReactNode;
 }
 
@@ -46,6 +48,7 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
   defaultCorner,
   offset = { x: 16, y: 16 },
   zIndex = 1200,
+  disableIdle = false,
   children,
 }) => {
   const [corner, setCorner] = useState<Corner>(() => {
@@ -94,7 +97,7 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
     position: "fixed",
     zIndex,
     touchAction: "none",
-    opacity: idle ? IDLE_OPACITY : 1,
+    opacity: idle && !disableIdle ? IDLE_OPACITY : 1,
     transition: `${transforms}, opacity ${FADE_MS}ms ease`,
   };
   if (corner.startsWith("t")) cornerSx.top = offset.y;

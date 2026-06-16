@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Event, Filter } from "nostr-tools";
 import { useRelays } from "../../../../hooks/useRelays";
 import { nostrRuntime } from "../../../../singletons";
@@ -13,11 +13,19 @@ export const useFollowingNotes = () => {
   const [loadFailed, setLoadFailed] = useState(false);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
   const [version, setVersion] = useState(0);
-  const [pendingCount, setPendingCount] = useState(0);
   const missingNotesRef = useRef<Set<string>>(new Set());
   const initialLoadDoneRef = useRef(false);
   const oldestEventTimestampRef = useRef<number | null>(null);
   const loadingRef = useRef(false);
+  // Frozen snapshot of displayed note ids. Anything in the store not in here is
+  // "pending" — buffered wherever it would sort (new notes aren't always newest;
+  // late ones land mid-feed). Merging adds the ids so they slot in at once
+  // rather than popping in and shifting scroll.
+  const displayedIdsRef = useRef<Set<string>>(new Set());
+  // Ids known at load time (displayed or already in the store). Only notes that
+  // arrive afterwards count as new, so cached notes don't flash a "+N" on load.
+  const knownIdsRef = useRef<Set<string>>(new Set());
+  const readyRef = useRef(false);
   // A fetch that times out keeps its subscription open so late-arriving events
   // (slow/flaky relays) still stream in. We hold the handle here to tear it
   // down on the next fetch or on unmount.
@@ -26,28 +34,29 @@ export const useFollowingNotes = () => {
   const { relays } = useRelays();
   const { user } = useUserContext();
 
-  const notes = useCallback(() => {
-    if (!user?.follows?.length) return new Map<string, Event>();
-    const events = nostrRuntime.query({
-      kinds: [1],
-      authors: Array.from(user.follows),
-    });
+  // Displayed notes (ids in the snapshot) + pending count (ids not in it, within
+  // the loaded window), one pass.
+  const { notes, pendingCount } = useMemo(() => {
     const noteMap = new Map<string, Event>();
-    for (const event of events) noteMap.set(event.id, event);
-    return noteMap;
+    if (!user?.follows?.length) return { notes: noteMap, pendingCount: 0 };
+    const events = nostrRuntime.query({ kinds: [1], authors: Array.from(user.follows) });
+    let pending = 0;
+    for (const event of events) {
+      if (displayedIdsRef.current.has(event.id)) noteMap.set(event.id, event);
+      else if (readyRef.current && !knownIdsRef.current.has(event.id)) pending++;
+    }
+    return { notes: noteMap, pendingCount: pending };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.follows, version]);
 
-  const reposts = useCallback(() => {
-    if (!user?.follows?.length) return new Map<string, Event[]>();
-    const events = nostrRuntime.query({
-      kinds: [6],
-      authors: Array.from(user.follows),
-    });
+  const reposts = useMemo(() => {
     const repostMap = new Map<string, Event[]>();
+    if (!user?.follows?.length) return repostMap;
+    const events = nostrRuntime.query({ kinds: [6], authors: Array.from(user.follows) });
     for (const event of events) {
+      // Only attach reposts to notes already displayed.
       const originalNoteId = event.tags.find((t) => t[0] === "e")?.[1];
-      if (originalNoteId) {
+      if (originalNoteId && displayedIdsRef.current.has(originalNoteId)) {
         const existing = repostMap.get(originalNoteId) || [];
         if (!existing.find((e) => e.id === event.id)) {
           repostMap.set(originalNoteId, [...existing, event]);
@@ -58,7 +67,8 @@ export const useFollowingNotes = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.follows, version]);
 
-  // Check for newer notes — non-destructive, adds to pendingCount
+  // Pull newer notes into the store (buffered — not added to the snapshot) and
+  // trigger a recompute so the pending count reflects them.
   const checkForNewer = useCallback(() => {
     if (!initialLoadDoneRef.current || !user?.follows?.length || !relays?.length) return;
     const authors = Array.from(user.follows!);
@@ -66,12 +76,16 @@ export const useFollowingNotes = () => {
     if (!currentEvents.length) return;
     const since = Math.max(...currentEvents.map((e) => e.created_at));
     const gossipRelays = getRelaysForAuthors(relays, authors);
+    let received = 0;
     const handle = nostrRuntime.subscribe(
       gossipRelays,
       [{ kinds: [1], authors, since: since + 1, limit: 20 }],
       {
-        onEvent: () => setPendingCount((c) => c + 1),
-        onEose: () => handle.unsubscribe(),
+        onEvent: () => { received++; },
+        onEose: () => {
+          if (received > 0) setVersion((v) => v + 1);
+          handle.unsubscribe();
+        },
       }
     );
   }, [user?.follows, relays]);
@@ -94,9 +108,16 @@ export const useFollowingNotes = () => {
   }, [user?.follows, relays]);
 
   const mergeNewNotes = useCallback(() => {
+    if (user?.follows?.length) {
+      for (const e of nostrRuntime.query({ kinds: [1], authors: Array.from(user.follows) })) {
+        if (!knownIdsRef.current.has(e.id)) {
+          displayedIdsRef.current.add(e.id);
+          knownIdsRef.current.add(e.id);
+        }
+      }
+    }
     setVersion((v) => v + 1);
-    setPendingCount(0);
-  }, []);
+  }, [user?.follows]);
 
   // Fetch the original notes for any reposts in one shot, no polling loop
   const startMissingNotesFetcher = useCallback(() => {
@@ -190,9 +211,19 @@ export const useFollowingNotes = () => {
     const handle = nostrRuntime.subscribe(gossipRelays, [noteFilter, repostFilter, deletionFilter], {
       onEvent: (event: Event) => {
         eventCount++;
-        if (event.kind === 6) {
+        // User-driven fetch: these belong on screen, so whitelist their ids
+        // and mark them known.
+        if (event.kind === 1) {
+          displayedIdsRef.current.add(event.id);
+          knownIdsRef.current.add(event.id);
+        } else if (event.kind === 6) {
           const originalNoteId = event.tags.find((t) => t[0] === "e")?.[1];
-          if (originalNoteId) missingNotesRef.current.add(originalNoteId);
+          if (originalNoteId) {
+            missingNotesRef.current.add(originalNoteId);
+            // Whitelist the reposted note so it shows once fetched.
+            displayedIdsRef.current.add(originalNoteId);
+            knownIdsRef.current.add(originalNoteId);
+          }
         }
         if (oldestEventTimestampRef.current === null || event.created_at < oldestEventTimestampRef.current) {
           oldestEventTimestampRef.current = event.created_at;
@@ -214,6 +245,14 @@ export const useFollowingNotes = () => {
       onEose: () => {
         handle.unsubscribe();
         activeHandleRef.current = null;
+        // First load: mark everything already in the store as known so only
+        // later arrivals count as new. (Guarded against pagination resets.)
+        if (!readyRef.current) {
+          for (const e of nostrRuntime.query({ kinds: [1], authors })) {
+            knownIdsRef.current.add(e.id);
+          }
+          readyRef.current = true;
+        }
         if (eventCount > 0) setVersion((v) => v + 1);
         startMissingNotesFetcher();
         finishFetch();
@@ -248,16 +287,18 @@ export const useFollowingNotes = () => {
     initialLoadDoneRef.current = false;
     missingNotesRef.current.clear();
     oldestEventTimestampRef.current = null;
+    displayedIdsRef.current = new Set();
+    knownIdsRef.current = new Set();
+    readyRef.current = false;
     setVersion(0);
-    setPendingCount(0);
     setInitialLoadDone(false);
     setLoadFailed(false);
     fetchNotes(true);
   }, [fetchNotes]);
 
   return {
-    notes: notes(),
-    reposts: reposts(),
+    notes,
+    reposts,
     fetchNotes,
     refreshNotes,
     checkForNewer,
