@@ -4,6 +4,8 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
+  Typography,
+  useTheme,
 } from "@mui/material";
 import RepeatIcon from "@mui/icons-material/Repeat";
 import FormatQuoteIcon from "@mui/icons-material/FormatQuote";
@@ -25,6 +27,7 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
   const { showNotification } = useNotification();
   const { relays } = useRelays();
   const { repostsMap, fetchRepostsThrottled, addEventToMap } = useAppContext();
+  const theme = useTheme();
 
   const [reposted, setReposted] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
@@ -94,6 +97,11 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
     setQuoteDialogOpen(true);
   };
 
+  // Count unique reposters for this event
+  const repostCount = new Set(
+    (repostsMap?.get(event.id) || []).map((e: Event) => e.pubkey)
+  ).size;
+
   return (
     <div style={{ marginLeft: 20 }}>
       <span
@@ -102,6 +110,8 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
           cursor: "pointer",
           display: "flex",
           flexDirection: "row",
+          alignItems: "center",
+          gap: 4,
           padding: 2,
         }}
       >
@@ -109,10 +119,10 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
           sx={
             reposted
               ? {
-                  fontSize: 28,
-                  color: "#4CAF50",
+                  fontSize: 20,
+                  color: theme.palette.primary.main,
                   "& path": {
-                    stroke: "#4CAF50",
+                    stroke: theme.palette.primary.main,
                     strokeWidth: 2,
                   },
                 }
@@ -121,6 +131,14 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
                 }
           }
         />
+        {repostCount > 0 && (
+          <Typography
+            variant="caption"
+            sx={{ color: reposted ? theme.palette.primary.main : "inherit" }}
+          >
+            {repostCount}
+          </Typography>
+        )}
       </span>
       <Menu
         anchorEl={menuAnchor}

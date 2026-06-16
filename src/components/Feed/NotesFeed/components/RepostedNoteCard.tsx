@@ -1,12 +1,8 @@
-import { Avatar, Tooltip, Typography } from "@mui/material";
-import { nip19 } from "nostr-tools";
-import { DEFAULT_IMAGE_URL } from "../../../../utils/constants";
-import { useAppContext } from "../../../../hooks/useAppContext";
+import { useTheme } from "@mui/material";
 import { Event } from "nostr-tools";
 import { Notes } from "../../../../components/Notes";
-import ReplayIcon from '@mui/icons-material/Replay';
-import { useNavigate } from "react-router-dom";
-import { openProfileTab } from "../../../../nostr";
+import RepeatIcon from "@mui/icons-material/Repeat";
+import OverlappingAvatars from "../../../Common/OverlappingAvatars";
 
 interface RepostsCardProps {
   note: Event;
@@ -14,8 +10,7 @@ interface RepostsCardProps {
 }
 
 const RepostsCard: React.FC<RepostsCardProps> = ({ note, reposts }) => {
-  const { profiles, fetchUserProfileThrottled } = useAppContext();
-  const navigate = useNavigate();
+  const theme = useTheme();
 
   // Filter reposts that belong to this note by checking tags for 'e' with note.id
   const matchingReposts = reposts.filter((r) => {
@@ -23,74 +18,23 @@ const RepostsCard: React.FC<RepostsCardProps> = ({ note, reposts }) => {
     return taggedNoteId === note.id;
   });
 
-  // Pre-fetch profiles
-  matchingReposts.forEach((r) => {
-    if (!profiles?.get(r.pubkey)) {
-      fetchUserProfileThrottled(r.pubkey);
-    }
-  });
+  // Dedupe by reposter so each person counts once
+  const reposterIds = Array.from(new Set(matchingReposts.map((r) => r.pubkey)));
 
   return (
     <div style={{ marginBottom: "1.5rem" }}>
-      {matchingReposts.length > 0 && (
+      {reposterIds.length > 0 && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
             marginBottom: 6,
-            color: "#4caf50", // green for reposts
+            color: theme.palette.primary.main,
           }}
         >
-          <ReplayIcon />
-          <Typography> Reposted by</Typography>
-          {matchingReposts.slice(0, 3).map((r) => {
-            const profile = profiles?.get(r.pubkey);
-            const displayName =
-              profile?.name || nip19.npubEncode(r.pubkey).substring(0, 8) + "...";
-
-            return (
-              <Tooltip title={`Reposted by ${displayName}`} key={r.id}>
-                <div
-                  onClick={() => openProfileTab(nip19.npubEncode(r.pubkey), navigate)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      openProfileTab(nip19.npubEncode(r.pubkey), navigate);
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    cursor: "pointer",
-                  }}
-                >
-                  <Avatar
-                    src={profile?.picture || DEFAULT_IMAGE_URL}
-                    alt={displayName}
-                    sx={{ width: 24, height: 24 }}
-                  />
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      color: "inherit",
-                      "&:hover, &:focus-visible": { textDecoration: "underline" },
-                    }}
-                  >
-                    {displayName}
-                  </Typography>
-                </div>
-              </Tooltip>
-            );
-          })}
-          {matchingReposts.length > 3 && (
-            <Typography variant="caption">
-              +{matchingReposts.length - 3} more
-            </Typography>
-          )}
+          <RepeatIcon fontSize="small" />
+          <OverlappingAvatars ids={reposterIds} />
         </div>
       )}
       <Notes event={note} />
