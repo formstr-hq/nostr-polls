@@ -1,7 +1,7 @@
 name: Build Debug iOS (PR + Manual)
 
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled]
   workflow_dispatch:
     inputs:
@@ -31,7 +31,7 @@ jobs:
           script: |
             let pr;
 
-            if (context.eventName === "pull_request") {
+            if (context.eventName === "pull_request" || context.eventName === "pull_request_target") {
               pr = context.payload.pull_request;
             }
 
