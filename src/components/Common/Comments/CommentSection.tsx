@@ -12,14 +12,21 @@ import {
   Typography,
   Collapse,
   Box,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  CircularProgress,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import CellTowerIcon from "@mui/icons-material/CellTower";
 import FlagIcon from "@mui/icons-material/Flag";
+import EditIcon from "@mui/icons-material/Edit";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { signEvent } from "../../../nostr";
 import { useRelays } from "../../../hooks/useRelays";
-import { Event, nip19 } from "nostr-tools";
+import { Event, EventTemplate, nip19 } from "nostr-tools";
 import { DEFAULT_IMAGE_URL } from "../../../utils/constants";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { TextWithImages } from "../Parsers/TextWithImages";
@@ -30,7 +37,7 @@ import { getColorsWithTheme } from "../../../styles/theme";
 import { useNotification } from "../../../contexts/notification-context";
 import { nostrRuntime } from "../../../singletons";
 import { SubscriptionHandle } from "../../../nostrRuntime/types";
-import { publishWithGossip } from "../../../utils/publish";
+import { publishWithGossip, waitForPublish } from "../../../utils/publish";
 import { usePublishDiagnostic } from "../../../hooks/usePublishDiagnostic";
 import { PublishDiagnosticModal } from "../PublishDiagnosticModal";
 import { FeedbackMenu } from "../../FeedbackMenu";
@@ -88,8 +95,10 @@ interface CommentCardProps {
 }
 
 const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncestors, children }) => {
-  const { profiles, fetchUserProfileThrottled } = useAppContext();
+  const { profiles, fetchUserProfileThrottled, editsMap, editsHistoryMap, fetchEditsThrottled, addEventToMap } = useAppContext();
   const { user } = useUserContext();
+  const { writeRelays } = useRelays();
+  const { showNotification } = useNotification();
   const eventRelays = useEventRelays(comment.id);
   const { reportEvent, reportUser } = useReports();
   const navigate = useNavigate();
@@ -99,8 +108,55 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
   const [reportPostOpen, setReportPostOpen] = useState(false);
   const [reportUserOpen, setReportUserOpen] = useState(false);
 
+  // Edit state — mirrors the note edit mechanism (kind 1010 overlaid via
+  // editsMap), which works for both kind 1 and kind 1111 comments.
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editHistoryOpen, setEditHistoryOpen] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [isPublishingEdit, setIsPublishingEdit] = useState(false);
+
   const commentUser = profiles?.get(comment.pubkey);
   if (!commentUser) fetchUserProfileThrottled(comment.pubkey);
+
+  // Load any edits for this comment so the latest revision is displayed.
+  useEffect(() => {
+    fetchEditsThrottled(comment.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comment.id]);
+
+  const latestEdit = editsMap?.get(comment.id);
+  const displayContent = latestEdit ? latestEdit.content : comment.content;
+  const isEdited = !!latestEdit;
+  const isOwnComment = !!user && user.pubkey === comment.pubkey;
+
+  const handlePublishEdit = async () => {
+    if (!user || isPublishingEdit) return;
+    setIsPublishingEdit(true);
+    try {
+      const editEvent: EventTemplate = {
+        kind: 1010,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["e", comment.id]],
+        content: editContent,
+      };
+      const signed = await signEvent(editEvent);
+      if (!signed) throw new Error("sign failed");
+      // Apply locally immediately so editsMap reflects the change without
+      // waiting for the throttled refetch.
+      addEventToMap(signed);
+      setEditDialogOpen(false);
+      const res = await waitForPublish(writeRelays, signed);
+      if (res.ok) {
+        showNotification("Comment edited", "success");
+      } else {
+        showNotification("Edit failed to publish to any relay", "error");
+      }
+    } catch {
+      showNotification("Failed to publish edit", "error");
+    } finally {
+      setIsPublishingEdit(false);
+    }
+  };
 
   const handleCopyNevent = () => {
     copyToClipboard(nip19.neventEncode({ id: comment.id }));
@@ -164,7 +220,20 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
               </Typography>
             </Box>
           }
-          subheader={calculateTimeAgo(comment.created_at)}
+          subheader={
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+              <span>{calculateTimeAgo(comment.created_at)}</span>
+              {isEdited && (
+                <Chip
+                  label="Edited"
+                  size="small"
+                  variant="outlined"
+                  onClick={(e) => { e.stopPropagation(); setEditHistoryOpen(true); }}
+                  sx={{ height: 18, fontSize: "0.7rem", cursor: "pointer" }}
+                />
+              )}
+            </Box>
+          }
           action={
             <IconButton size="small" onClick={(e) => setMenuAnchor(e.currentTarget)}>
               <MoreVertIcon fontSize="small" />
@@ -173,7 +242,7 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
         />
         <CardContent style={{ marginLeft: "8px", padding: "8px" }}>
           <Typography>
-            <TextWithImages content={comment.content} tags={comment.tags} />
+            <TextWithImages content={displayContent} tags={comment.tags} />
           </Typography>
         </CardContent>
 
@@ -194,6 +263,19 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
         <MenuItem onClick={handleCopyNevent}>Copy Event Id</MenuItem>
         <MenuItem onClick={handleCopyLink}>Copy Link</MenuItem>
         <MenuItem onClick={handleCopyNpub}>Copy Author npub</MenuItem>
+        {isOwnComment && (
+          <MenuItem
+            onClick={() => {
+              setEditContent(displayContent);
+              setEditDialogOpen(true);
+              setMenuAnchor(null);
+            }}
+            sx={{ gap: 1 }}
+          >
+            <EditIcon fontSize="small" />
+            Edit
+          </MenuItem>
+        )}
         {user && (
           <MenuItem onClick={() => { setMenuAnchor(null); setReportPostOpen(true); }} sx={{ color: "error.main" }}>
             <FlagIcon fontSize="small" sx={{ mr: 1 }} />
@@ -221,6 +303,55 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
         onSubmit={(reason: ReportReason, content: string) => { reportUser(comment.pubkey, reason, content); setReportUserOpen(false); }}
         title="Report user"
       />
+
+      <Dialog open={editHistoryOpen} onClose={() => setEditHistoryOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Edit history</DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          {(editsHistoryMap?.get(comment.id) || []).map((edit, i) => (
+            <Box key={edit.id} sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider" }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+                {i === 0 ? "Latest · " : ""}{calculateTimeAgo(edit.created_at)}
+              </Typography>
+              <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>{edit.content}</Typography>
+            </Box>
+          ))}
+          <Box sx={{ px: 2, py: 1.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+              Original · {calculateTimeAgo(comment.created_at)}
+            </Typography>
+            <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>{comment.content}</Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditHistoryOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Edit comment</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            multiline
+            fullWidth
+            minRows={3}
+            maxRows={10}
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditDialogOpen(false)} disabled={isPublishingEdit}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={isPublishingEdit || editContent.trim() === displayContent.trim() || !editContent.trim()}
+            onClick={handlePublishEdit}
+          >
+            {isPublishingEdit ? <CircularProgress size={18} color="inherit" /> : "Publish"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };

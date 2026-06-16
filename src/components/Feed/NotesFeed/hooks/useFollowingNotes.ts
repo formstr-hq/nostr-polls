@@ -284,14 +284,15 @@ export const useFollowingNotes = () => {
   }, []);
 
   const refreshNotes = useCallback(() => {
-    initialLoadDoneRef.current = false;
+    // Non-destructive refresh: keep the notes already on screen and pull newer
+    // ones in the background. fetchNotes(true) whitelists each newly arrived
+    // note id into the displayed snapshot as events land, so they slot in
+    // without blanking the feed or losing scroll position. We intentionally do
+    // NOT clear displayedIdsRef/knownIdsRef here — clearing them was what
+    // emptied the feed on reload. (knownIdsRef must also survive so existing
+    // notes aren't re-counted as "new".) The LinearProgress overlay driven by
+    // `refreshing` is the only visible signal that a refresh is in flight.
     missingNotesRef.current.clear();
-    oldestEventTimestampRef.current = null;
-    displayedIdsRef.current = new Set();
-    knownIdsRef.current = new Set();
-    readyRef.current = false;
-    setVersion(0);
-    setInitialLoadDone(false);
     setLoadFailed(false);
     fetchNotes(true);
   }, [fetchNotes]);

@@ -208,13 +208,15 @@ export const useDiscoverNotes = () => {
     }, [relays]);
 
     const refreshNotes = useCallback((webOfTrust: Set<string>) => {
+        // Non-destructive refresh: keep the notes already on screen and pull
+        // newer ones in the background. fetchNotes(fresh=true) whitelists each
+        // newly arrived note id into the displayed snapshot, so they slot in
+        // without blanking the feed or losing scroll position. We intentionally
+        // do NOT clear displayedIdsRef/knownIdsRef — clearing them was what
+        // emptied the feed on reload. The `refreshing` LinearProgress overlay is
+        // the only visible signal that a refresh is in flight. (oldestTimestamp
+        // is reset inside fetchNotes for the fresh path.)
         loadingRef.current = false;
-        oldestTimestampRef.current = null;
-        displayedIdsRef.current = new Set();
-        knownIdsRef.current = new Set();
-        readyRef.current = false;
-        setVersion(0);
-        setInitialLoadComplete(false);
         fetchNotes(webOfTrust, true);
     }, [fetchNotes]);
 
