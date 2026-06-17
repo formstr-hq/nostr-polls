@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Tooltip, Box, IconButton, useTheme, Modal } from "@mui/material";
 import FavoriteBorder from "@mui/icons-material/FavoriteBorder";
-import EmojiPicker, { Theme } from "emoji-picker-react";
+import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { Event, EventTemplate } from "nostr-tools/lib/types/core";
 import { signEvent } from "../../../nostr";
@@ -160,8 +160,22 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
             )}
           </IconButton>
 
-          {/* Top 2 emojis next to button */}
-          <Box display="flex" alignItems="center" ml={1} gap={0.5}>
+          {/* Top 2 emojis next to button — clicking the cluster (incl. the
+              "+x" badge) opens the reactions details modal instead of the
+              emoji picker. stopPropagation keeps the parent's click (which
+              opens the picker) from also firing. */}
+          <Box
+            display="flex"
+            alignItems="center"
+            ml={1}
+            gap={0.5}
+            onClick={(e) => {
+              if (!hasReactions) return;
+              e.stopPropagation();
+              setShowDetails(true);
+            }}
+            sx={hasReactions ? { cursor: "pointer" } : undefined}
+          >
             {topEmojis.slice(0, 2).map((r) => (
               <span key={r.emoji} style={{ fontSize: 18 }}>
                 <RenderEmoji content={r.emoji} tags={r.tags} />
@@ -210,6 +224,9 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           }}
         >
           <EmojiPicker
+            // Device-font emojis — no CDN sprite fetch, instant open, offline-safe.
+            emojiStyle={EmojiStyle.NATIVE}
+            lazyLoadEmojis={false}
             theme={
               theme.palette.mode === "light"
                 ? ("light" as Theme)

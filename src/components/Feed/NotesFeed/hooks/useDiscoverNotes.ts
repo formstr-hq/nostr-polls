@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { nostrRuntime } from "../../../../singletons";
 import { useRelays } from "../../../../hooks/useRelays";
 import { Filter } from "nostr-tools/lib/types";
@@ -8,7 +8,6 @@ const LOAD_TIMEOUT_MS = 5000;
 export const useDiscoverNotes = () => {
     const { relays } = useRelays();
     const [version, setVersion] = useState(0);
-    const [pendingCount, setPendingCount] = useState(0);
     const [loadingMore, setLoadingMore] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
@@ -16,24 +15,55 @@ export const useDiscoverNotes = () => {
     const loadingRef = useRef(false);
     const oldestTimestampRef = useRef<number | null>(null);
     const webOfTrustRef = useRef<Set<string>>(new Set());
+    // Frozen snapshot of the note ids currently displayed. Anything in the store
+    // that isn't in this set is "pending" — buffered regardless of where it
+    // would sort (new notes aren't always newest; late-arriving notes land in
+    // the middle). Merging adds the pending ids so they slot into place at once,
+    // instead of popping in one-by-one and shifting scroll.
+    const displayedIdsRef = useRef<Set<string>>(new Set());
+    // Ids we already know about (displayed, or present in the store the moment
+    // the feed first loaded). Only notes that arrive *after* that baseline count
+    // as new — otherwise pre-existing cached notes would flash a "+N" on load.
+    const knownIdsRef = useRef<Set<string>>(new Set());
+    const readyRef = useRef(false);
 
-    // Query runtime for notes (only re-queries when version bumps, i.e. when user merges)
-    const notes = useCallback(() => {
-        if (!webOfTrustRef.current.size) return new Map<string, any>();
-        const events = nostrRuntime.query({ kinds: [1], authors: Array.from(webOfTrustRef.current) });
-        const noteMap = new Map<string, any>();
-        for (const event of events) noteMap.set(event.id, event);
-        return noteMap;
+    // Displayed map (ids in the snapshot) + pending count (ids not yet known).
+    // Recomputed whenever `version` bumps.
+    const { noteMap, pendingCount } = useMemo(() => {
+        const authors = Array.from(webOfTrustRef.current);
+        const map = new Map<string, any>();
+        if (!authors.length) return { noteMap: map, pendingCount: 0 };
+        const events = nostrRuntime.query({ kinds: [1], authors });
+        let pending = 0;
+        for (const event of events) {
+            if (displayedIdsRef.current.has(event.id)) {
+                map.set(event.id, event);
+            } else if (readyRef.current && !knownIdsRef.current.has(event.id)) {
+                // Arrived after the feed loaded → a genuinely new note.
+                pending++;
+            }
+        }
+        return { noteMap: map, pendingCount: pending };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [version]);
 
-    // Merge buffered notes into the displayed list
+    // Reveal buffered notes: add every not-yet-known store id to the snapshot so
+    // they appear in their natural sorted positions.
     const mergeNewNotes = useCallback(() => {
+        const authors = Array.from(webOfTrustRef.current);
+        if (authors.length) {
+            for (const e of nostrRuntime.query({ kinds: [1], authors })) {
+                if (!knownIdsRef.current.has(e.id)) {
+                    displayedIdsRef.current.add(e.id);
+                    knownIdsRef.current.add(e.id);
+                }
+            }
+        }
         setVersion((v) => v + 1);
-        setPendingCount(0);
     }, []);
 
-    // Check for newer notes — non-destructive, adds to pendingCount
+    // Pull newer notes into the store (they stay buffered — not added to the
+    // snapshot) and trigger a recompute so the pending count reflects them.
     const checkForNewer = useCallback(() => {
         if (!initialLoadComplete || !relays?.length) return;
         const authors = Array.from(webOfTrustRef.current);
@@ -41,12 +71,16 @@ export const useDiscoverNotes = () => {
         const currentEvents = nostrRuntime.query({ kinds: [1] });
         if (!currentEvents.length) return;
         const since = Math.max(...currentEvents.map((e: any) => e.created_at));
+        let received = 0;
         const handle = nostrRuntime.subscribe(
             relays,
             [{ kinds: [1], authors, since: since + 1, limit: 20 }],
             {
-                onEvent: () => setPendingCount((c) => c + 1),
-                onEose: () => handle.unsubscribe(),
+                onEvent: () => { received++; },
+                onEose: () => {
+                    if (received > 0) setVersion((v) => v + 1);
+                    handle.unsubscribe();
+                },
             }
         );
     }, [initialLoadComplete, relays]);
@@ -113,6 +147,12 @@ export const useDiscoverNotes = () => {
         const handle = nostrRuntime.subscribe(relays, [filter, deletionFilter], {
             onEvent: (event: any) => {
                 eventCount++;
+                // User-driven fetch (initial/fresh/pagination): these notes are
+                // meant to be on screen, so display them and mark them known.
+                if (event.kind === 1) {
+                    displayedIdsRef.current.add(event.id);
+                    knownIdsRef.current.add(event.id);
+                }
                 if (oldestTimestampRef.current === null || event.created_at < oldestTimestampRef.current) {
                     oldestTimestampRef.current = event.created_at;
                 }
@@ -126,6 +166,18 @@ export const useDiscoverNotes = () => {
             },
             onEose: () => {
                 if (renderDebounceId) { clearTimeout(renderDebounceId); renderDebounceId = null; }
+                // Establish the "known" baseline on the first load: everything
+                // already in the store is considered seen, so only later
+                // arrivals count as new. (Guarded so pagination doesn't reset it.)
+                if (!readyRef.current) {
+                    const authors = Array.from(webOfTrustRef.current);
+                    if (authors.length) {
+                        for (const e of nostrRuntime.query({ kinds: [1], authors })) {
+                            knownIdsRef.current.add(e.id);
+                        }
+                    }
+                    readyRef.current = true;
+                }
                 if (eventCount > 0) setVersion((v) => v + 1);
                 setLoadingMore(false);
                 setRefreshing(false);
@@ -156,16 +208,20 @@ export const useDiscoverNotes = () => {
     }, [relays]);
 
     const refreshNotes = useCallback((webOfTrust: Set<string>) => {
+        // Non-destructive refresh: keep the notes already on screen and pull
+        // newer ones in the background. fetchNotes(fresh=true) whitelists each
+        // newly arrived note id into the displayed snapshot, so they slot in
+        // without blanking the feed or losing scroll position. We intentionally
+        // do NOT clear displayedIdsRef/knownIdsRef — clearing them was what
+        // emptied the feed on reload. The `refreshing` LinearProgress overlay is
+        // the only visible signal that a refresh is in flight. (oldestTimestamp
+        // is reset inside fetchNotes for the fresh path.)
         loadingRef.current = false;
-        oldestTimestampRef.current = null;
-        setVersion(0);
-        setPendingCount(0);
-        setInitialLoadComplete(false);
         fetchNotes(webOfTrust, true);
     }, [fetchNotes]);
 
     return {
-        notes: notes(),
+        notes: noteMap,
         pendingCount,
         loadingMore,
         refreshing,

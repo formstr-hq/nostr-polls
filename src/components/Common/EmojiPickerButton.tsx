@@ -8,7 +8,7 @@ import {
   useTheme,
 } from "@mui/material";
 import SentimentSatisfiedAltIcon from "@mui/icons-material/SentimentSatisfiedAlt";
-import EmojiPicker, { Theme } from "emoji-picker-react";
+import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
 
 interface EmojiPickerButtonProps {
   onSelect: (emoji: string) => void;
@@ -69,6 +69,11 @@ const EmojiPickerButton: React.FC<EmojiPickerButtonProps> = ({
             onTouchMove={(e) => e.stopPropagation()}
           >
             <EmojiPicker
+              // NATIVE renders emojis with the device font instead of fetching
+              // PNG sprites from a CDN on every open — no network, no flicker,
+              // works offline.
+              emojiStyle={EmojiStyle.NATIVE}
+              lazyLoadEmojis={false}
               theme={
                 theme.palette.mode === "light"
                   ? ("light" as Theme)

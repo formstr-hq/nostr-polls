@@ -19,6 +19,8 @@ export function buildTheme(
   darkPrimary: string,
   lightBg: string,
   darkBg: string,
+  lightSecondary: string = "#bdbdbc",
+  darkSecondary: string = "#bdbdbc",
 ) {
   return createTheme({
     typography: {
@@ -29,14 +31,14 @@ export function buildTheme(
         palette: {
           mode: "dark",
           primary: { main: darkPrimary },
-          secondary: { main: "#bdbdbc" },
+          secondary: { main: darkSecondary },
           background: { default: darkBg, paper: darkBg },
         },
       },
       light: {
         palette: {
           primary: { main: lightPrimary },
-          secondary: { main: "#bdbdbc" },
+          secondary: { main: lightSecondary },
           background: { default: lightBg, paper: lightBg },
         },
       }
@@ -44,7 +46,7 @@ export function buildTheme(
     palette: {
       mode: "light",
       primary: { main: lightPrimary },
-      secondary: { main: "#bdbdbc" },
+      secondary: { main: lightSecondary },
       background: { default: lightBg, paper: lightBg },
     },
     components: {

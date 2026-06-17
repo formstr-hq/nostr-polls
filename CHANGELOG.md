@@ -1,3 +1,32 @@
+# 1.8.20
+
+- New unified Home feed — notes, polls, and articles in a single stream — is now the default landing screen. Scope it to people you Follow or your wider Network (web of trust); replies are filtered out so it stays a feed of top-level posts.
+- Movies feed now waits for relays to finish responding (EOSE) instead of cutting the batch off after a few seconds, so busy relay pools return the full set of titles.
+- Topic feed tabs renamed for clarity: "Interests feed", "my topics", and "discover topics".
+- Mobile sub-navigation now includes the Home feed (Following / Network), and the Notes "Discover" tab is labeled "Network".
+- Theme updates: themes now carry a secondary accent color that flows through the app.
+
+# 1.8.18
+
+- Profiles now show your web of trust: an "In your wider network" badge and a "Followed by … you follow" row showing which people you follow also follow them.
+- New notes are surfaced in the speed dial with a notification dot, and no longer pop into the feed on their own — they're buffered and dropped into their natural spot only when you tap "+N", so the feed never jumps under you.
+- Global search now also finds people from your contacts and lists them first.
+- Long-lived tabs that quietly lost their relay connections now reconnect automatically; the speed-dial refresh reconnects too.
+- Web of trust now computes in the background with a progress indicator instead of freezing the app, and the result is cached.
+- Reposting a poll now shows up in more clients, and poll reposts match the cleaner notes repost style.
+- The Pollerama logo follows your theme — the wordmark uses your selected font and its colors track light/dark and the accent color.
+- The selected accent color is now clearly marked in Appearance settings.
+- Fixed the notes feeds not loading (and the refresh button doing nothing) when the web of trust was empty or stale.
+
+# 1.8.15
+
+- Movable action buttons can now snap to the vertical middle of the left/right edge, not just the corners.
+- Tap the reaction emojis next to a post to open the full reactions breakdown.
+- Four new color themes: Midnight, Crimson Noir, Steel Noir, and Amber Noir.
+- Smarter image previews in notes — portrait images get a taller box (no more thin cropped slices), and lightbox tap-to-close behaves correctly.
+- Following / Reacted / Zapped feeds keep listening after a timeout, so notes from slow or flaky relays still stream in instead of getting stuck on an empty/Retry screen.
+- Emoji picker opens instantly and works offline — it now uses your device's native emojis instead of fetching them each time.
+
 # 1.8.14
 
 - Chat UI: emoji picker, movable action buttons, and assorted chat view fixes.

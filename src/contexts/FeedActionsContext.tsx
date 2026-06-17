@@ -9,6 +9,14 @@ interface FeedActionsCtx {
   registerRefresh: (fn: () => void) => void;
   /** Calls the currently registered refresh function */
   refresh: () => void;
+  /** Number of newer items the active feed has buffered but not yet shown */
+  newItemCount: number;
+  /** Noun for the buffered items, e.g. "notes" / "polls" */
+  newItemLabel: string;
+  /** Merges the active feed's buffered new items into view */
+  showNewItems: () => void;
+  /** Called by the active feed to report its buffered new-item count + merge fn */
+  reportNewItems: (count: number, label: string, fn: () => void) => void;
 }
 
 const FeedActionsContext = createContext<FeedActionsCtx>({
@@ -17,15 +25,23 @@ const FeedActionsContext = createContext<FeedActionsCtx>({
   reportScrollState: () => {},
   registerRefresh: () => {},
   refresh: () => {},
+  newItemCount: 0,
+  newItemLabel: "posts",
+  showNewItems: () => {},
+  reportNewItems: () => {},
 });
 
 export const FeedActionsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isScrolledDown, setIsScrolledDown] = useState(false);
+  const [newItemCount, setNewItemCount] = useState(0);
+  const [newItemLabel, setNewItemLabel] = useState("posts");
   const scrollFnRef = useRef<() => void>(() => {});
   const refreshFnRef = useRef<() => void>(() => {});
+  const showNewItemsFnRef = useRef<() => void>(() => {});
 
   const scrollToTop = useCallback(() => scrollFnRef.current(), []);
   const refresh = useCallback(() => refreshFnRef.current(), []);
+  const showNewItems = useCallback(() => showNewItemsFnRef.current(), []);
 
   const reportScrollState = useCallback((isDown: boolean, fn: () => void) => {
     scrollFnRef.current = fn;
@@ -36,8 +52,26 @@ export const FeedActionsProvider: React.FC<{ children: React.ReactNode }> = ({ c
     refreshFnRef.current = fn;
   }, []);
 
+  const reportNewItems = useCallback((count: number, label: string, fn: () => void) => {
+    showNewItemsFnRef.current = fn;
+    setNewItemCount((prev) => (prev !== count ? count : prev));
+    setNewItemLabel((prev) => (prev !== label ? label : prev));
+  }, []);
+
   return (
-    <FeedActionsContext.Provider value={{ isScrolledDown, scrollToTop, reportScrollState, registerRefresh, refresh }}>
+    <FeedActionsContext.Provider
+      value={{
+        isScrolledDown,
+        scrollToTop,
+        reportScrollState,
+        registerRefresh,
+        refresh,
+        newItemCount,
+        newItemLabel,
+        showNewItems,
+        reportNewItems,
+      }}
+    >
       {children}
     </FeedActionsContext.Provider>
   );

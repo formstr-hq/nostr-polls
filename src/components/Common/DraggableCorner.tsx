@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import DraggableRaw, {
   DraggableData,
   DraggableEvent,
@@ -10,13 +10,23 @@ const Draggable = DraggableRaw as unknown as React.ComponentClass<
   Partial<DraggableProps>
 >;
 
-export type Corner = "tl" | "tr" | "bl" | "br";
+// l/r = left/right edge. First char is the vertical band: t = top, m = vertical
+// middle of the edge, b = bottom.
+export type Corner = "tl" | "tr" | "ml" | "mr" | "bl" | "br";
 
 interface DraggableCornerProps {
   storageKey: string;
   defaultCorner: Corner;
   offset?: { x: number; y: number };
   zIndex?: number;
+  /** When true, keep the element fully opaque (skip the idle fade-out). */
+  disableIdle?: boolean;
+  /**
+   * CSS selector (within this component) for the element that initiates a drag.
+   * Without it, the whole wrapper is draggable — and wrappers like SpeedDial
+   * reserve large empty padding areas that then hijack scroll gestures.
+   */
+  handle?: string;
   children: (corner: Corner) => React.ReactNode;
 }
 
@@ -27,19 +37,25 @@ const IDLE_OPACITY = 0.35;
 const FADE_MS = 280;
 
 const isCorner = (v: string | null): v is Corner =>
-  v === "tl" || v === "tr" || v === "bl" || v === "br";
+  v === "tl" || v === "tr" || v === "ml" || v === "mr" || v === "bl" || v === "br";
 
 const anchorLeft = (corner: Corner, offsetX: number, width: number) =>
   corner.endsWith("l") ? offsetX : window.innerWidth - offsetX - width;
 
 const anchorTop = (corner: Corner, offsetY: number, height: number) =>
-  corner.startsWith("t") ? offsetY : window.innerHeight - offsetY - height;
+  corner.startsWith("t")
+    ? offsetY
+    : corner.startsWith("b")
+      ? window.innerHeight - offsetY - height
+      : Math.round((window.innerHeight - height) / 2);
 
 export const DraggableCorner: React.FC<DraggableCornerProps> = ({
   storageKey,
   defaultCorner,
   offset = { x: 16, y: 16 },
   zIndex = 1200,
+  disableIdle = false,
+  handle,
   children,
 }) => {
   const [corner, setCorner] = useState<Corner>(() => {
@@ -49,6 +65,10 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [snapping, setSnapping] = useState(false);
   const [idle, setIdle] = useState(true);
+  // Measured node height — needed to vertically center the mid-edge rest
+  // positions (ml/mr). A new object each time guarantees a re-render on resize
+  // so the center recomputes against the new window height.
+  const [nodeSize, setNodeSize] = useState<{ height: number }>({ height: 0 });
   const nodeRef = useRef<HTMLDivElement>(null!);
   const wasDragged = useRef(false);
   const idleTimer = useRef<number | null>(null);
@@ -66,6 +86,16 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = nodeRef.current;
+      if (el) setNodeSize({ height: el.offsetHeight });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
   const transforms = snapping
     ? `transform ${SNAP_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.4)`
     : "none";
@@ -74,11 +104,12 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
     position: "fixed",
     zIndex,
     touchAction: "none",
-    opacity: idle ? IDLE_OPACITY : 1,
+    opacity: idle && !disableIdle ? IDLE_OPACITY : 1,
     transition: `${transforms}, opacity ${FADE_MS}ms ease`,
   };
   if (corner.startsWith("t")) cornerSx.top = offset.y;
-  else cornerSx.bottom = offset.y;
+  else if (corner.startsWith("b")) cornerSx.bottom = offset.y;
+  else cornerSx.top = Math.round((window.innerHeight - nodeSize.height) / 2);
   if (corner.endsWith("l")) cornerSx.left = offset.x;
   else cornerSx.right = offset.x;
 
@@ -109,7 +140,9 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     const horizontal: "l" | "r" = cx < window.innerWidth / 2 ? "l" : "r";
-    const vertical: "t" | "b" = cy < window.innerHeight / 2 ? "t" : "b";
+    // Top / middle / bottom thirds → t / m / b
+    const third = window.innerHeight / 3;
+    const vertical: "t" | "m" | "b" = cy < third ? "t" : cy < 2 * third ? "m" : "b";
     const newCorner = `${vertical}${horizontal}` as Corner;
 
     const currLeft = anchorLeft(corner, offset.x, rect.width);
@@ -142,6 +175,7 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
       onStart={onStart}
       onDrag={onDrag}
       onStop={onStop}
+      handle={handle}
       allowMobileScroll
     >
       <Box

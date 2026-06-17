@@ -1,4 +1,12 @@
-import { ReactNode, createContext, useEffect, useRef, useState } from "react";
+import {
+  ReactNode,
+  createContext,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { Box, LinearProgress, Modal, Typography } from "@mui/material";
 import { Event, EventTemplate, Filter } from "nostr-tools";
 import { parseContacts, getATagFromEvent } from "../nostr";
 import { useRelays } from "../hooks/useRelays";
@@ -10,6 +18,45 @@ import { signerManager } from "../singletons/Signer/SignerManager";
 
 const WOT_STORAGE_KEY_PREFIX = `pollerama:webOfTrust`;
 const WOT_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
+
+// The web-of-trust "network index" maps every reachable pubkey to the subset of
+// the user's own follows that follow them. It powers the "followed by … you
+// follow" row on profiles. Persisted in a compact form that references each
+// source (one of the user's follows) by integer index, keeping it small enough
+// for localStorage even on large follow graphs.
+type SerializedNetworkIndex = { follows: string[]; edges: Record<string, number[]> };
+
+function serializeNetworkIndex(index: Map<string, Set<string>>): string {
+  const follows: string[] = [];
+  const followIdx = new Map<string, number>();
+  const edges: Record<string, number[]> = {};
+  index.forEach((sources, target) => {
+    const arr: number[] = [];
+    sources.forEach((src) => {
+      let i = followIdx.get(src);
+      if (i === undefined) {
+        i = follows.length;
+        follows.push(src);
+        followIdx.set(src, i);
+      }
+      arr.push(i);
+    });
+    edges[target] = arr;
+  });
+  return JSON.stringify({ follows, edges });
+}
+
+function deserializeNetworkIndex(json: string): Map<string, Set<string>> {
+  const parsed = JSON.parse(json) as SerializedNetworkIndex;
+  const map = new Map<string, Set<string>>();
+  for (const target in parsed.edges) {
+    const sources = parsed.edges[target]
+      .map((i) => parsed.follows[i])
+      .filter((pk): pk is string => Boolean(pk));
+    map.set(target, new Set(sources));
+  }
+  return map;
+}
 
 interface ListContextInterface {
   lists: Map<string, Event> | undefined;
@@ -24,6 +71,8 @@ interface ListContextInterface {
   bookmarkFollowPack: (packEvent: Event) => Promise<void>;
   unbookmarkFollowPack: (packEvent: Event) => Promise<void>;
   fetchAndHydratePacks: (adrefs: string[]) => void;
+  // Which of the user's own follows follow `pubkey` (the "followed by" set).
+  getNetworkFollowers: (pubkey: string) => string[];
 }
 
 export const ListContext = createContext<ListContextInterface | null>(null);
@@ -40,7 +89,16 @@ export function ListProvider({ children }: { children: ReactNode }) {
   const { user, setUser, requestLogin } = useUserContext();
   const { relays } = useRelays();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
+  const wotInFlightRef = useRef(false);
+  const wotAttemptedRef = useRef(false);
+  // pubkey -> set of the user's follows who follow them. Lives in a ref (large,
+  // mutated incrementally); `wotIndexVersion` bumps to notify consumers.
+  const networkIndexRef = useRef<Map<string, Set<string>>>(new Map());
+  const [wotIndexVersion, setWotIndexVersion] = useState(0);
+  // Blocking modal shown while the WoT is fetched/computed — the stream of
+  // contact lists is heavy enough to make the UI janky, so we block instead.
   const [isFetchingWoT, setIsFetchingWoT] = useState(false);
+  const [wotProfileCount, setWotProfileCount] = useState(0);
   const prevPubkeyRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -52,7 +110,12 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setMyTopicsEvent(undefined);
       setBookmarkedPackKeys(new Set());
       setBookmarks10003(null);
+      wotInFlightRef.current = false;
+      wotAttemptedRef.current = false;
+      networkIndexRef.current = new Map();
+      setWotIndexVersion((v) => v + 1);
       setIsFetchingWoT(false);
+      setWotProfileCount(0);
     }
     prevPubkeyRef.current = next;
   }, [user?.pubkey]);
@@ -266,71 +329,130 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   const subscribeToContacts = () => {
     if (!user || !user.follows?.length) return;
+    // Guard against concurrent subscriptions: webOfTrust isn't set on `user`
+    // until EOSE, so the triggering effect could otherwise fire again mid-fetch.
+    if (wotInFlightRef.current) return;
+    wotAttemptedRef.current = true;
 
-    const storedWoT = localStorage.getItem(
-      `${WOT_STORAGE_KEY_PREFIX}${user.pubkey}`,
-    );
-    const storedTime = localStorage.getItem(
-      `${WOT_STORAGE_KEY_PREFIX}${user.pubkey}_time`,
-    );
-    const currentTime = new Date().getTime();
+    const pubkey = user.pubkey;
+    const unionKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}`;
+    const timeKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_time`;
+    const indexKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_index`;
 
-    // Use cached WoT if within TTL (5 days)
-    if (storedWoT && storedTime && currentTime - Number(storedTime) < WOT_TTL) {
-      setUser((prev: User | null) => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          webOfTrust: new Set(JSON.parse(storedWoT) || []),
-        };
-      });
-      return;
+    const storedTime = localStorage.getItem(timeKey);
+    let cachedUnion: string[] | null = null;
+    try {
+      const raw = localStorage.getItem(unionKey);
+      cachedUnion = raw ? JSON.parse(raw) : null;
+    } catch {
+      cachedUnion = null;
+    }
+    // Only trust a non-empty cache within TTL. An empty array is never a valid
+    // result — treat it as a cache miss and re-fetch rather than leaving the
+    // user with an empty web of trust for the next 5 days.
+    const cacheValid =
+      Array.isArray(cachedUnion) &&
+      cachedUnion.length > 0 &&
+      storedTime &&
+      Date.now() - Number(storedTime) < WOT_TTL;
+
+    if (cacheValid) {
+      // The union set powers the "in your wider network" check — restore it now.
+      setUser((prev: User | null) =>
+        prev ? { ...prev, webOfTrust: new Set(cachedUnion!) } : null,
+      );
+
+      const storedIndex = localStorage.getItem(indexKey);
+      if (storedIndex) {
+        try {
+          networkIndexRef.current = deserializeNetworkIndex(storedIndex);
+          setWotIndexVersion((v) => v + 1);
+          return; // Fully hydrated from cache — no network needed.
+        } catch {
+          // Corrupt index — fall through and rebuild it.
+        }
+      }
+      // Existing flat-list user (cached union but no index): silently backfill
+      // the index below. The union is already live, so this isn't user-visible.
     }
 
-    setIsFetchingWoT(true); // Show warning that WoT is being fetched
+    // Background fetch: pull kind-3 lists from every follow and build both the
+    // union set and the inverted "network index". We accumulate locally and only
+    // commit once at EOSE — calling setUser per-event used to re-render the whole
+    // app on each of up to 500 events and hang it, so it stays off the hot path.
+    wotInFlightRef.current = true;
+    setWotProfileCount(0);
+    setIsFetchingWoT(true); // Block the UI — the contact-list stream is heavy.
 
-    const filter: Filter = {
-      kinds: [3],
-      authors: user.follows,
-      limit: 500,
-    };
+    const filter: Filter = { kinds: [3], authors: user.follows, limit: 500 };
+    // Seed the union with whatever we already have so a sparse fetch can only
+    // ever add to the web of trust, never shrink it (e.g. a backfill that comes
+    // back with fewer contact lists must not wipe a good cached union).
+    const union = new Set<string>(cachedUnion ?? user.webOfTrust ?? []);
+    const index = new Map<string, Set<string>>();
+    let lastUiUpdate = 0;
 
     const handle = nostrRuntime.subscribe(relays, [filter], {
       onEvent: (event: Event) => {
-        const newPubkeys = event.tags
-          .filter((tag) => tag[0] === "p" && tag[1])
-          .map((tag) => tag[1]);
-
-        setUser((prev) => {
-          if (!prev) return null;
-
-          const prevTrust = prev.webOfTrust ?? new Set<string>();
-          const newSet = new Set([...Array.from(prevTrust), ...newPubkeys]);
-
-          // Store in localStorage with 5-day TTL
-          localStorage.setItem(
-            `${WOT_STORAGE_KEY_PREFIX}${user.pubkey}`,
-            JSON.stringify(Array.from(newSet)),
-          );
-          const currentTime = new Date().getTime();
-          localStorage.setItem(
-            `${WOT_STORAGE_KEY_PREFIX}${user.pubkey}_time`,
-            currentTime.toString(),
-          );
-          return {
-            ...prev,
-            webOfTrust: newSet,
-          } as User;
-        });
+        const source = event.pubkey; // one of the user's follows
+        for (const tag of event.tags) {
+          if (tag[0] === "p" && tag[1]) {
+            const target = tag[1];
+            union.add(target);
+            let sources = index.get(target);
+            if (!sources) {
+              sources = new Set();
+              index.set(target, sources);
+            }
+            sources.add(source);
+          }
+        }
+        // Throttle progress updates so the modal doesn't re-render per event.
+        const now = Date.now();
+        if (now - lastUiUpdate > 200) {
+          lastUiUpdate = now;
+          setWotProfileCount(union.size);
+        }
       },
       onEose() {
         handle.unsubscribe();
-        setIsFetchingWoT(false); // Hide warning after fetching
+        wotInFlightRef.current = false;
+        setIsFetchingWoT(false);
+        setWotProfileCount(union.size);
+
+        // Don't persist an empty result — leave any existing cache intact so
+        // the next session retries instead of being stuck empty.
+        if (union.size > 0) {
+          try {
+            localStorage.setItem(unionKey, JSON.stringify(Array.from(union)));
+            localStorage.setItem(timeKey, Date.now().toString());
+            localStorage.setItem(indexKey, serializeNetworkIndex(index));
+          } catch {
+            // localStorage quota exceeded — keep the index in memory for this
+            // session; it'll be recomputed next load.
+          }
+        }
+
+        networkIndexRef.current = index;
+        setWotIndexVersion((v) => v + 1);
+        setUser((prev) =>
+          prev ? ({ ...prev, webOfTrust: union } as User) : null,
+        );
       },
     });
 
     return handle;
   };
+
+  const getNetworkFollowers = useCallback(
+    (pk: string): string[] => {
+      const sources = networkIndexRef.current.get(pk);
+      return sources ? Array.from(sources) : [];
+    },
+    // Recreated whenever the index changes so consumers depending on this
+    // function (in effect/memo deps) recompute once it's ready.
+    [wotIndexVersion], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const fetchMyTopics = async () => {
     if (!user) return;
@@ -409,7 +531,8 @@ export function ListProvider({ children }: { children: ReactNode }) {
     if (user) {
       if (!lists) fetchLists();
       if (!user.follows || user.follows.length === 0) fetchContacts();
-      if (!user.webOfTrust || user.webOfTrust.size === 0) subscribeToContacts();
+      if (!wotAttemptedRef.current && (!user.webOfTrust || user.webOfTrust.size === 0))
+        subscribeToContacts();
       if (!myTopics) fetchMyTopics();
       if (bookmarkedPackKeys.size === 0 && !bookmarks10003) fetchBookmarks();
     }
@@ -596,11 +719,35 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   return (
     <>
-      {isFetchingWoT && (
-        <div className="warning">
-          fetching web of trust... may take a few seconds..
-        </div>
-      )}
+      <Modal open={isFetchingWoT} aria-labelledby="wot-modal-title">
+        <Box
+          sx={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            width: { xs: "85%", sm: 420 },
+            maxWidth: "90vw",
+            bgcolor: "background.paper",
+            borderRadius: 2,
+            boxShadow: 24,
+            p: 4,
+            outline: "none",
+          }}
+        >
+          <Typography id="wot-modal-title" variant="h6" gutterBottom>
+            Computing your web of trust
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Please wait while we analyze the people you follow. This powers your
+            feeds and content moderation, and only happens occasionally.
+          </Typography>
+          <LinearProgress sx={{ mb: 1.5, borderRadius: 1, height: 8 }} />
+          <Typography variant="caption" color="text.secondary">
+            Loaded {wotProfileCount.toLocaleString()} profiles
+          </Typography>
+        </Box>
+      </Modal>
       <ListContext.Provider
         value={{
           lists,
@@ -615,6 +762,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
           bookmarkFollowPack,
           unbookmarkFollowPack,
           fetchAndHydratePacks,
+          getNetworkFollowers,
         }}
       >
         {children}

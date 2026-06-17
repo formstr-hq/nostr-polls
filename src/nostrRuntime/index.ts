@@ -58,6 +58,17 @@ export class NostrRuntime {
       if (poolRelays.size === 0) return;
       this.cleanStaleRelays(Array.from(poolRelays.keys()));
     }, 60_000);
+
+    // Connection watchdog: while the tab is foregrounded and online, detect
+    // active subscriptions whose underlying socket has silently died (relay
+    // idle-close, server restart, NAT timeout) and reconnect them. The
+    // visibilitychange/online reconnect triggers in App.tsx don't cover a tab
+    // that simply stays open for a long time — this does.
+    setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      this.checkConnectionHealth();
+    }, 30_000);
   }
 
   /**
@@ -375,6 +386,20 @@ export class NostrRuntime {
       relayResults.forEach((entry, i) => {
         const url = relays[i];
 
+        // Guard so a single relay can only decrement `pending` once. A relay
+        // that sends EOSE and *then* closes (or errors after connecting) would
+        // otherwise call oneDone() twice, dropping pending to zero prematurely
+        // and finishing before other relays — including the one holding the
+        // event — have answered. That double-count was a source of intermittent
+        // "couldn't load" failures.
+        let settled = false;
+        const relayDone = (eosed: boolean) => {
+          if (settled) return;
+          settled = true;
+          if (eosed) entry.eosed = true;
+          oneDone();
+        };
+
         // Each relay gets its own independent connection so oneose is
         // unambiguously scoped to that single relay (SimplePool batches
         // EOSE across relays and fires too early for diagnostic purposes).
@@ -390,21 +415,16 @@ export class NostrRuntime {
                   finish();
                 }
               },
-              oneose() {
-                // This relay definitively has no match — it sent EOSE
-                entry.eosed = true;
-                oneDone();
-              },
-              onclose() {
-                // Relay closed before sending EOSE (connection dropped, auth
-                // required, etc.) — treat as a non-response, not a confirmed miss
-                oneDone();
-              },
+              // This relay definitively has no match — it sent EOSE.
+              oneose() { relayDone(true); },
+              // Relay closed before sending EOSE (connection dropped, auth
+              // required, etc.) — a non-response, not a confirmed miss.
+              onclose() { relayDone(false); },
             });
           })
           .catch(() => {
-            // Could not connect at all — count as non-response
-            oneDone();
+            // Could not connect at all — count as non-response.
+            relayDone(false);
           });
       });
 
@@ -497,6 +517,44 @@ export class NostrRuntime {
    */
   reconnect(): void {
     this.subscriptionManager.reconnectAll();
+  }
+
+  /**
+   * Whether a relay's underlying WebSocket is currently usable. Treats a
+   * CONNECTING or OPEN socket as healthy; a missing relay object, missing
+   * socket, or CLOSING/CLOSED socket as dead.
+   */
+  private isRelayHealthy(url: string): boolean {
+    const normalized = poolNormalizeUrl(url);
+    if (!normalized) return true; // can't assess — don't trigger churn
+    const poolRelays = (this.pool as any).relays as Map<string, any>;
+    const relay = poolRelays.get(normalized);
+    if (!relay || !relay.ws) return false;
+    // WebSocket.CONNECTING = 0, OPEN = 1, CLOSING = 2, CLOSED = 3
+    return relay.ws.readyState === 0 || relay.ws.readyState === 1;
+  }
+
+  /**
+   * Reconnect all subscriptions only when EVERY relay backing an active
+   * subscription is unhealthy — i.e. a genuine total connectivity loss
+   * (sleep/wake, network drop). Driven by the watchdog interval so a
+   * long-lived tab recovers without user interaction.
+   *
+   * We deliberately do NOT reconnect when only *some* relays are unhealthy.
+   * Under the gossip model a feed subscribes across many relays and, in
+   * Nostr, it's normal for a few to be slow, unreachable, or idle-closed at
+   * any given moment. Reconnecting globally on a single bad relay caused a
+   * reconnect storm every 30s that tore down in-flight fetches and left feeds
+   * stuck in their retry state. As long as one relay is alive, data flows, so
+   * we leave the connections alone.
+   */
+  checkConnectionHealth(): void {
+    const active = this.subscriptionManager.getActiveRelays();
+    if (active.size === 0) return;
+    const anyHealthy = Array.from(active).some((url) => this.isRelayHealthy(url));
+    if (!anyHealthy) {
+      this.reconnect();
+    }
   }
 
   /**

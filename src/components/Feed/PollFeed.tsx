@@ -4,13 +4,13 @@ import { verifyEvent } from "nostr-tools";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useRelays } from "../../hooks/useRelays";
 import { useReports } from "../../hooks/useReports";
-import { Box, Typography } from "@mui/material";
+import { Box } from "@mui/material";
 import FeedError from "./FeedError";
 import { nostrRuntime } from "../../singletons";
 import { SubscriptionHandle } from "../../nostrRuntime/types";
 import UnifiedFeed from "./UnifiedFeed";
 import PollResponseForm from "../PollResponse/PollResponseForm";
-import ReplayIcon from "@mui/icons-material/Replay";
+import RepeatIcon from "@mui/icons-material/Repeat";
 import OverlappingAvatars from "../Common/OverlappingAvatars";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { getRelaysForAuthors, prefetchOutboxRelays } from "../../nostr/OutboxService";
@@ -44,23 +44,22 @@ interface PollFeedItemProps {
 
 const PollFeedItem = React.memo(
   ({ event, reposts, userResponse }: PollFeedItemProps) => {
-    const repostedBy = reposts.map((r) => r.pubkey);
+    // Dedupe by reposter so each person counts once.
+    const repostedBy = Array.from(new Set(reposts.map((r) => r.pubkey)));
     return (
       <Box sx={{ my: "20px", mx: { xs: 0, sm: "auto" }, width: "100%", maxWidth: { xs: "100%", sm: "600px" } }}>
         {repostedBy.length > 0 && (
           <Box
             sx={{
-              fontSize: "0.75rem",
-              color: "#4caf50",
-              ml: "10px",
-              mr: "10px",
               display: "flex",
-              flexDirection: "row",
               alignItems: "center",
+              gap: 1,
+              mb: 0.75,
+              ml: "10px",
+              color: "primary.main",
             }}
           >
-            <ReplayIcon />
-            <Typography sx={{ mr: 1 }}>Reposted by</Typography>
+            <RepeatIcon fontSize="small" />
             <OverlappingAvatars ids={repostedBy} />
           </Box>
         )}

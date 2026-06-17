@@ -10,7 +10,7 @@ import {
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { useNavigate, useParams } from "react-router-dom";
 import { nip19, Event as NostrEvent } from "nostr-tools";
-import EmojiPicker, { Theme } from "emoji-picker-react";
+import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
 import { useTheme } from "@mui/material/styles";
 import { useDMContext } from "../../hooks/useDMContext";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -367,6 +367,9 @@ const ChatView: React.FC = () => {
           onTouchMove={(e) => e.stopPropagation()}
         >
           <EmojiPicker
+            // Device-font emojis — no CDN sprite fetch, instant open, offline-safe.
+            emojiStyle={EmojiStyle.NATIVE}
+            lazyLoadEmojis={false}
             theme={
               theme.palette.mode === "light"
                 ? ("light" as Theme)

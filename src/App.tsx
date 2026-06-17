@@ -53,6 +53,7 @@ import { getFontPreset, getColorPreset } from "./styles/themes";
 
 import EventList from "./components/Feed/FeedsLayout";
 import NotesFeed from "./components/Feed/NotesFeed/components";
+import HomeFeed from "./components/Feed/HomeFeed";
 import ProfilesFeed from "./components/Feed/ProfileFeed";
 import { PollFeed } from "./components/Feed/PollFeed";
 import MoviesFeed from "./components/Feed/MoviesFeed";
@@ -97,6 +98,8 @@ function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
       colorPreset.darkPrimary,
       colorPreset.lightBg,
       colorPreset.darkBg,
+      colorPreset.lightSecondary,
+      colorPreset.darkSecondary,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fontPreset.id, colorPreset.id],
@@ -189,6 +192,7 @@ function AppContent() {
           <Route path="/ratings" element={<EventList />} />
 
           <Route path="/feeds" element={<FeedsLayout />}>
+            <Route path="home" element={<HomeFeed />} />
             <Route path="notes" element={<NotesFeed />} />
             <Route path="profiles" element={<ProfilesFeed />} />
             <Route path="topics" element={<TopicsFeed />}>
@@ -214,7 +218,7 @@ function AppContent() {
           <Route
             index
             path="/"
-            element={<Navigate to={`/feeds/${localStorage.getItem("pollerama:lastFeed") || "polls"}`} replace />}
+            element={<Navigate to={`/feeds/${localStorage.getItem("pollerama:lastFeed") || "home"}`} replace />}
           />
         </Routes>
         </Box>
