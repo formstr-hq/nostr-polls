@@ -8,8 +8,7 @@ import {
   TextField,
   Box,
   CircularProgress,
-  IconButton,
-  InputAdornment,
+
   Avatar,
   Typography,
 } from "@mui/material";
@@ -86,18 +85,30 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
 
   const handleSave = async () => {
     if (!user) return;
+    const cleanNip05 = nip05.trim();
+    const cleanLud16 = lud16.trim();
+
+    if (cleanNip05 && !cleanNip05.includes("@")) {
+      showNotification("NIP-05 identifier must contain an '@' symbol (e.g. name@domain.com).", "error");
+      return;
+    }
+
+    if (cleanLud16 && !cleanLud16.includes("@")) {
+      showNotification("Lightning Address (LUD-16) must contain an '@' symbol (e.g. name@wallet.com).", "error");
+      return;
+    }
     setLoading(true);
     try {
       await signerManager.publishKind0({
         pubkey: user.pubkey,
-        name,
-        display_name: displayName,
-        about,
-        picture,
-        banner,
-        website,
-        nip05,
-        lud16,
+        name: name.trim(),
+        display_name: displayName.trim(),
+        about: about.trim(),
+        picture: picture.trim(),
+        banner: banner.trim(),
+        website: website.trim(),
+        nip05: cleanNip05,
+        lud16: cleanLud16,
       });
       showNotification("Profile updated successfully!");
       

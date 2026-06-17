@@ -50,6 +50,30 @@ const MoviesFeed: React.FC = () => {
       until: currentCursor || now,
     };
 
+    // Finalize once — whichever comes first, EOSE or the fallback timeout.
+    // Relying on a fixed short timeout (the old 3s) under a busy relay pool cut
+    // the batch off after only a handful of events arrived; waiting for EOSE
+    // collects everything the relays actually have.
+    let settled = false;
+    const finalize = () => {
+      if (settled) return;
+      settled = true;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      handle.unsubscribe();
+
+      if (oldestTimestamp) {
+        setCursor(oldestTimestamp - 1);
+        cursorRef.current = oldestTimestamp - 1;
+      }
+
+      setInitialLoadComplete(true);
+      loadingRef.current = false;
+      setLoading(false);
+    };
+
     const handle = nostrRuntime.subscribe(currentRelays, [filter], {
       onEvent: (event) => {
         const dTag = event.tags.find((t) => t[0] === "d");
@@ -70,21 +94,11 @@ const MoviesFeed: React.FC = () => {
           oldestTimestamp = event.created_at;
         }
       },
+      onEose: finalize,
     });
 
-    timeoutRef.current = setTimeout(() => {
-      timeoutRef.current = null;
-      handle.unsubscribe();
-
-      if (oldestTimestamp) {
-        setCursor(oldestTimestamp - 1);
-        cursorRef.current = oldestTimestamp - 1;
-      }
-
-      setInitialLoadComplete(true);
-      loadingRef.current = false;
-      setLoading(false);
-    }, 3000);
+    // Fallback in case EOSE never arrives (slow/unresponsive relay).
+    timeoutRef.current = setTimeout(finalize, 8000);
   };
 
   const handleRated = (imdbId: string) => {

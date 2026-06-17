@@ -137,9 +137,19 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
     setDiag(null);
     try {
       const decoded = nip19.decode(neventId).data as EventPointer;
+      const eventId = decoded?.id;
+      // A note/naddr reference (or malformed input) may not carry an event id.
+      // Without one there's nothing to fetch and the relay filter would be
+      // invalid ({"ids":[null]}), which relays reject instantly — so bail to the
+      // error state rather than firing a doomed request.
+      if (!eventId) {
+        setLoading(false);
+        return;
+      }
 
-      // Phase 1: user relays + default relays + nevent hints + cached outbox relays for author.
-      // Always include defaultRelays so notes not on the user's custom relays can still be found.
+      // Relay set: user relays + default relays + nevent hints + cached outbox
+      // relays for the author. Always include defaultRelays so notes not on the
+      // user's custom relays can still be found.
       let relaysToUse = Array.from(
         new Set([...relays, ...defaultRelays, ...(decoded.relays || [])])
       );
@@ -147,7 +157,23 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
         relaysToUse = getRelaysForAuthors(relaysToUse, [decoded.author]);
       }
 
-      const phase1 = await nostrRuntime.fetchWithDiagnostics(relaysToUse, decoded.id);
+      // Primary path: fetch through the shared pool. It reuses already-open,
+      // healthy connections and the event cache, so it's far more reliable than
+      // opening a burst of fresh standalone WebSockets. Most references resolve
+      // here; the diagnostic prober below is only a fallback for genuine misses.
+      const pooled = await nostrRuntime.querySync(relaysToUse, {
+        ids: [eventId],
+        limit: 1,
+      });
+      const pooledHit = pooled.find((e) => e.id === eventId);
+      if (pooledHit) {
+        setEvent(pooledHit);
+        return;
+      }
+
+      // Phase 1: per-relay diagnostic probe so the error state can explain which
+      // relays were tried and whether they confirmed a miss (EOSE) or timed out.
+      const phase1 = await nostrRuntime.fetchWithDiagnostics(relaysToUse, eventId);
 
       if (phase1.event) {
         setEvent(phase1.event);
@@ -162,7 +188,7 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
         const tried = new Set(relaysToUse);
         const gossipRelays = outboxRelays.filter((r) => !tried.has(r));
         if (gossipRelays.length > 0) {
-          phase2 = await nostrRuntime.fetchWithDiagnostics(gossipRelays, decoded.id);
+          phase2 = await nostrRuntime.fetchWithDiagnostics(gossipRelays, eventId);
         }
       }
 

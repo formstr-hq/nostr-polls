@@ -44,6 +44,7 @@ import LinkIcon from "@mui/icons-material/Link";
 import { FeedActionsProvider } from "../../contexts/FeedActionsContext";
 import CreateFAB from "../Feed/CreateFAB";
 import { ProfileEditModal } from "./ProfileEditModal";
+import { NetworkFollowedBy } from "./NetworkFollowedBy";
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
@@ -399,6 +400,17 @@ const ProfilePage: React.FC = () => {
                 {followsYou && (
                   <Chip label="Follows you" size="small" variant="outlined" />
                 )}
+                {user &&
+                  !isOwnProfile &&
+                  !user.follows?.includes(pubkey) &&
+                  user.webOfTrust?.has(pubkey) && (
+                    <Chip
+                      label="In your wider network"
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                    />
+                  )}
               </Box>
 
               {profile?.nip05 && (
@@ -552,6 +564,7 @@ const ProfilePage: React.FC = () => {
               <strong>{followingCount ?? "–"}</strong> following
             </Typography>
           </Box>
+          {!isOwnProfile && <NetworkFollowedBy pubkey={pubkey} />}
           <Rate entityId={pubkey} entityType="profile" />
         </Box>
       </Card>

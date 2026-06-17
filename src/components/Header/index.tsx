@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { AppBar, Toolbar, Typography, Button, IconButton, Badge } from "@mui/material";
+import { AppBar, Toolbar, Button, IconButton, Badge } from "@mui/material";
 import { styled } from "@mui/system";
 import MailIcon from "@mui/icons-material/Mail";
 import SearchIcon from "@mui/icons-material/Search";
-import logo from "../../Images/logo.svg";
+import PolleramaLogo from "../../Images/PolleramaLogo";
 import { UserMenu } from "./UserMenu";
 import { useNavigate } from "react-router-dom";
 import { getColorsWithTheme } from "../../styles/theme";
@@ -63,8 +63,7 @@ const Header: React.FC = () => {
           <HeaderCenterSection>
             <LogoAndTitle>
               <StyledButton onClick={() => navigate("/")} variant="text">
-                <img src={logo} alt="Logo" height={32} width={32} />
-                <Typography variant="h6">Pollerama</Typography>
+                <PolleramaLogo height={32} />
               </StyledButton>
             </LogoAndTitle>
           </HeaderCenterSection>

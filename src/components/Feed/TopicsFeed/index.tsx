@@ -63,19 +63,19 @@ const TopicsFeed: React.FC = () => {
     setItems([
       {
         key: "interests",
-        label: "My Interests",
+        label: "Interests feed",
         active: activeTab === "interests",
         onClick: () => handleTabChange("interests"),
       },
       {
         key: "myTopics",
-        label: "Topics",
+        label: "my topics",
         active: activeTab === "myTopics",
         onClick: () => handleTabChange("myTopics"),
       },
       {
         key: "discover",
-        label: "Discover",
+        label: "discover topics",
         active: activeTab === "discover",
         onClick: () => handleTabChange("discover"),
       },

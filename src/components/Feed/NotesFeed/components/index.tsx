@@ -45,7 +45,7 @@ const NotesFeed = () => {
     setItems([
       {
         key: "discover",
-        label: "Discover",
+        label: "Network",
         active: activeTab === "discover",
         onClick: () => handleSetActiveTab("discover"),
       },

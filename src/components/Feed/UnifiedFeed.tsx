@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { Box, CircularProgress, Fab, LinearProgress } from "@mui/material";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { useNotification } from "../../contexts/notification-context";
@@ -76,7 +76,7 @@ function UnifiedFeed<T>({
   const virtuosoScrollerRef = useRef<HTMLElement | null>(null);
   // Scroll state reported up to the SpeedDial via context
   const scrolledDownRef = useRef(false);
-  const { reportScrollState } = useFeedActions();
+  const { reportScrollState, reportNewItems } = useFeedActions();
 
   const virtuosoRef = (externalVirtuosoRef ?? internalVirtuosoRef) as React.RefObject<VirtuosoHandle>;
 
@@ -102,6 +102,21 @@ function UnifiedFeed<T>({
     onEndReached?.();
     onRefreshNewer?.();
   }, [onEndReached, onRefreshNewer]);
+
+  // Immersive feeds surface their buffered "new items" through the SpeedDial
+  // (CreateFAB) rather than a floating button, so report the count up.
+  useEffect(() => {
+    if (!isImmersive) return;
+    reportNewItems(newItemCount ?? 0, newItemLabel, () => onShowNewItems?.());
+  }, [isImmersive, newItemCount, newItemLabel, onShowNewItems, reportNewItems]);
+
+  // Clear the count when this feed unmounts so a stale badge doesn't linger.
+  useEffect(() => {
+    return () => {
+      if (isImmersive) reportNewItems(0, newItemLabel, () => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Only active in nested (topic explorer) mode
   useTopicExplorerScroll(
@@ -195,7 +210,9 @@ function UnifiedFeed<T>({
         )}
       </div>
 
-      {newItemCount != null && newItemCount > 0 && onShowNewItems && (
+      {/* Immersive feeds show new items via the SpeedDial; the floating button
+          is only for embedded/nested feeds that have no SpeedDial. */}
+      {!isImmersive && newItemCount != null && newItemCount > 0 && onShowNewItems && (
         <Fab
           variant="extended"
           size="small"

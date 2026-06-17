@@ -10,6 +10,7 @@ import {
   useTheme,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import AllInclusiveIcon from "@mui/icons-material/AllInclusive";
 import HowToVoteIcon from "@mui/icons-material/HowToVote";
 import TagIcon from "@mui/icons-material/Tag";
 import ArticleIcon from "@mui/icons-material/Article";
@@ -25,21 +26,25 @@ import { useSubNav } from "../../contexts/SubNavContext";
 // feed is currently mounted. Active state is read from localStorage so we can
 // show the correct selection even for feeds that aren't mounted yet.
 const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
+  home: [
+    { key: "following", label: "Following" },
+    { key: "network", label: "Network" },
+  ],
   polls: [
     { key: "global", label: "Global" },
     { key: "following", label: "Following" },
     { key: "webOfTrust", label: "Web of Trust" },
   ],
   notes: [
-    { key: "discover", label: "Discover" },
+    { key: "discover", label: "Network" },
     { key: "following", label: "Following" },
     { key: "reacted", label: "Reacted" },
     { key: "zapped", label: "Zapped" },
   ],
   topics: [
-    { key: "interests", label: "My Interests" },
-    { key: "myTopics", label: "Topics" },
-    { key: "discover", label: "Discover" },
+    { key: "interests", label: "Interests feed" },
+    { key: "myTopics", label: "my topics" },
+    { key: "discover", label: "discover topics" },
   ],
   "follow-packs": [
     { key: "global", label: "Global" },
@@ -53,6 +58,7 @@ const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
 };
 
 const FEED_STORAGE_KEYS: Record<string, string> = {
+  home: "pollerama:homeSource",
   polls: "pollerama:pollSource",
   notes: "pollerama:lastNotesTab",
   topics: "pollerama:lastTopicsTab",
@@ -61,6 +67,7 @@ const FEED_STORAGE_KEYS: Record<string, string> = {
 };
 
 const FEED_DEFAULT_SUB: Record<string, string> = {
+  home: "following",
   polls: "global",
   notes: "discover",
   topics: "interests",
@@ -69,6 +76,7 @@ const FEED_DEFAULT_SUB: Record<string, string> = {
 };
 
 const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = [
+  { value: "home",         label: "Home",         Icon: AllInclusiveIcon },
   { value: "polls",        label: "Polls",        Icon: HowToVoteIcon },
   { value: "topics",       label: "Topics",       Icon: TagIcon },
   { value: "notes",        label: "Notes",        Icon: ArticleIcon },
