@@ -21,6 +21,12 @@ interface DraggableCornerProps {
   zIndex?: number;
   /** When true, keep the element fully opaque (skip the idle fade-out). */
   disableIdle?: boolean;
+  /**
+   * CSS selector (within this component) for the element that initiates a drag.
+   * Without it, the whole wrapper is draggable — and wrappers like SpeedDial
+   * reserve large empty padding areas that then hijack scroll gestures.
+   */
+  handle?: string;
   children: (corner: Corner) => React.ReactNode;
 }
 
@@ -49,6 +55,7 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
   offset = { x: 16, y: 16 },
   zIndex = 1200,
   disableIdle = false,
+  handle,
   children,
 }) => {
   const [corner, setCorner] = useState<Corner>(() => {
@@ -168,6 +175,7 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
       onStart={onStart}
       onDrag={onDrag}
       onStop={onStop}
+      handle={handle}
       allowMobileScroll
     >
       <Box

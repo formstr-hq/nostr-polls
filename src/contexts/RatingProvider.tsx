@@ -27,7 +27,11 @@ export const RatingProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [ratings, setRatings] = useState<RatingMap>(new Map());
   const [userRatingEvents, setUserRatingEvents] = useState<UserRatingMap>(new Map());
   const trackedIdsRef = useRef<Set<string>>(new Set());
-  const lastTrackedIds = useRef<string[]>([]);
+  // Snapshot from the previous tick — used to detect when the tracked set has
+  // stopped growing (scrolling settled) before we resubscribe.
+  const pendingIds = useRef<string[]>([]);
+  // The id set our current subscription actually covers.
+  const subscribedIds = useRef<string[]>([]);
   const subscriptionRef = useRef<ReturnType<typeof nostrRuntime.subscribe> | null>(null);
 
   const { user } = useUserContext();
@@ -87,31 +91,35 @@ export const RatingProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [user]);
 
   useEffect(() => {
+    const sameSet = (a: string[], b: string[]) =>
+      a.length === b.length && a.every((id, i) => id === b[i]);
+
     const interval = setInterval(() => {
       const ids = Array.from(trackedIdsRef.current);
-      const hasChanged =
-        ids.length !== lastTrackedIds.current.length ||
-        ids.some((id, i) => id !== lastTrackedIds.current[i]);
-      if (!hasChanged) return;
 
-      lastTrackedIds.current = ids;
+      // Already covered by the live subscription — nothing to do.
+      if (sameSet(ids, subscribedIds.current)) return;
+
+      // Still changing (new cards mounting as the user scrolls) — wait for the
+      // set to settle so we don't tear down an in-flight subscription before it
+      // can deliver. Only resubscribe once it's been stable for a full tick.
+      if (!sameSet(ids, pendingIds.current)) {
+        pendingIds.current = ids;
+        return;
+      }
+
+      if (ids.length === 0) return;
 
       if (subscriptionRef.current) {
         subscriptionRef.current.unsubscribe();
       }
 
-      if (ids.length === 0) return;
-
-      const filters = [
-        {
-          kinds: [34259],
-          "#d": ids,
-        },
-      ];
-
-      subscriptionRef.current = nostrRuntime.subscribe(relays, filters, {
-        onEvent: handleEvent,
-      });
+      subscribedIds.current = ids;
+      subscriptionRef.current = nostrRuntime.subscribe(
+        relays,
+        [{ kinds: [34259], "#d": ids }],
+        { onEvent: handleEvent }
+      );
     }, 3000);
 
     return () => {

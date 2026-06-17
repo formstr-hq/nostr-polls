@@ -26,8 +26,9 @@ export const AppearanceSettings: React.FC = () => {
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
           {COLOR_PRESETS.map((preset) => {
             const selected = colorPresetId === preset.id;
-            const swatchColor =
-              theme.palette.mode === 'dark' ? preset.darkPrimary : preset.lightPrimary;
+            const isDark = theme.palette.mode === 'dark';
+            const swatchColor = isDark ? preset.darkPrimary : preset.lightPrimary;
+            const accentColor = isDark ? preset.darkSecondary : preset.lightSecondary;
             return (
               <ButtonBase
                 key={preset.id}
@@ -47,6 +48,9 @@ export const AppearanceSettings: React.FC = () => {
                     height: 28,
                     borderRadius: '50%',
                     bgcolor: swatchColor,
+                    ...(accentColor && {
+                      background: `linear-gradient(135deg, ${swatchColor} 0%, ${swatchColor} 50%, ${accentColor} 50%, ${accentColor} 100%)`,
+                    }),
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',

@@ -10,8 +10,15 @@ export interface ColorPreset {
   lightPrimary: string;
   darkPrimary: string;
   lightBg: string;
+  /** Dark-mode background. All presets use OLED black (#000000). */
   darkBg: string;
+  /** Optional accent (MUI `secondary`) colors; default to neutral grey. */
+  lightSecondary?: string;
+  darkSecondary?: string;
 }
+
+/** OLED-friendly pure black used as the dark background for every preset. */
+const OLED_BLACK = '#000000';
 
 export const FONT_PRESETS: FontPreset[] = [
   {
@@ -36,6 +43,10 @@ export const FONT_PRESETS: FontPreset[] = [
   },
 ];
 
+// Every preset now uses OLED black in dark mode, so the dedicated "-noir"
+// variants (which only differed by having a black dark background) became
+// duplicates: amber-noir vs golden (gold) and steel-noir vs ocean (blue) were
+// dropped, and crimson-noir was renamed to plain "Crimson".
 export const COLOR_PRESETS: ColorPreset[] = [
   {
     id: 'golden',
@@ -43,7 +54,7 @@ export const COLOR_PRESETS: ColorPreset[] = [
     lightPrimary: '#DAA520',
     darkPrimary: '#FAD13F',
     lightBg: '#f5f4f1',
-    darkBg: '#3d3d3d',
+    darkBg: OLED_BLACK,
   },
   {
     id: 'ocean',
@@ -51,7 +62,7 @@ export const COLOR_PRESETS: ColorPreset[] = [
     lightPrimary: '#0277bd',
     darkPrimary: '#40c4ff',
     lightBg: '#f0f4f8',
-    darkBg: '#102030',
+    darkBg: OLED_BLACK,
   },
   {
     id: 'forest',
@@ -59,7 +70,7 @@ export const COLOR_PRESETS: ColorPreset[] = [
     lightPrimary: '#2e7d32',
     darkPrimary: '#69f0ae',
     lightBg: '#f1f8f1',
-    darkBg: '#1a2a1a',
+    darkBg: OLED_BLACK,
   },
   {
     id: 'dusk',
@@ -67,7 +78,7 @@ export const COLOR_PRESETS: ColorPreset[] = [
     lightPrimary: '#6a1b9a',
     darkPrimary: '#e040fb',
     lightBg: '#f5f0f8',
-    darkBg: '#1a1030',
+    darkBg: OLED_BLACK,
   },
   {
     id: 'ember',
@@ -75,7 +86,7 @@ export const COLOR_PRESETS: ColorPreset[] = [
     lightPrimary: '#d84315',
     darkPrimary: '#ff6d00',
     lightBg: '#fff5f0',
-    darkBg: '#2d1a0a',
+    darkBg: OLED_BLACK,
   },
   {
     id: 'midnight',
@@ -83,31 +94,25 @@ export const COLOR_PRESETS: ColorPreset[] = [
     lightPrimary: '#000000',
     darkPrimary: '#ffffff',
     lightBg: '#ffffff',
-    darkBg: '#000000',
+    darkBg: OLED_BLACK,
   },
   {
-    id: 'crimson-noir',
-    name: 'Crimson Noir',
+    id: 'crimson',
+    name: 'Crimson',
     lightPrimary: '#8e1d2b',
     darkPrimary: '#e35d6a',
     lightBg: '#f7f5f3',
-    darkBg: '#000000',
+    darkBg: OLED_BLACK,
   },
   {
-    id: 'steel-noir',
-    name: 'Steel Noir',
-    lightPrimary: '#2f4a63',
-    darkPrimary: '#7fa6c4',
-    lightBg: '#f4f6f8',
-    darkBg: '#000000',
-  },
-  {
-    id: 'amber-noir',
-    name: 'Amber Noir',
-    lightPrimary: '#8a5a12',
-    darkPrimary: '#d9a441',
-    lightBg: '#f7f5f0',
-    darkBg: '#000000',
+    id: 'cyberpunk',
+    name: 'Cyberpunk',
+    lightPrimary: '#00875a',
+    darkPrimary: '#00ff9f',
+    lightBg: '#f4fff9',
+    darkBg: OLED_BLACK,
+    lightSecondary: '#d6006e',
+    darkSecondary: '#ff2a6d',
   },
 ];
 

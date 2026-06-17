@@ -1,3 +1,11 @@
+# 1.8.20
+
+- New unified Home feed — notes, polls, and articles in a single stream — is now the default landing screen. Scope it to people you Follow or your wider Network (web of trust); replies are filtered out so it stays a feed of top-level posts.
+- Movies feed now waits for relays to finish responding (EOSE) instead of cutting the batch off after a few seconds, so busy relay pools return the full set of titles.
+- Topic feed tabs renamed for clarity: "Interests feed", "my topics", and "discover topics".
+- Mobile sub-navigation now includes the Home feed (Following / Network), and the Notes "Discover" tab is labeled "Network".
+- Theme updates: themes now carry a secondary accent color that flows through the app.
+
 # 1.8.18
 
 - Profiles now show your web of trust: an "In your wider network" badge and a "Followed by … you follow" row showing which people you follow also follow them.

@@ -77,6 +77,7 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
       offset={{ x: 24, y: 24 }}
       zIndex={1000}
       disableIdle={hasNewItems}
+      handle=".MuiSpeedDial-fab"
     >
       {(corner) => (
         <SpeedDial

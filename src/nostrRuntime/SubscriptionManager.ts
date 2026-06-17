@@ -186,45 +186,50 @@ export class SubscriptionManager {
         }
       }
     } else {
-      // Subscribe per relay so we can track which relay each event came from.
-      // Functionally identical to subscribeMany(allRelays) — nostr-tools already
-      // opens one connection per relay internally.
+      // Subscribe per relay so we can track which relay each event came from,
+      // but send ALL filters in a single REQ per relay. nostr-tools' subscribeMany
+      // already does exactly this when given multiple relays (it groups by URL and
+      // emits one REQ per relay with all filters) — looping filters one-at-a-time
+      // instead multiplied our REQ count by the filter count and exhausted relays'
+      // per-connection REQ limits. One REQ per relay carrying all filters is plain
+      // NIP-01 (the relay ORs them) and keeps relay-level attribution intact.
       managedSub.chunks = [];
-      const expectedEose = relays.length * filters.length;
+      const expectedEose = relays.length;
       const eoseState = { count: 0 };
 
       for (const relay of relays) {
-        for (const filter of filters) {
-          const closer = this.pool.subscribeMany(
-            [relay],
-            filter,
-            {
-              onevent: (event) => {
-                this.eventStore.addEvent(event);
+        // subscribeMap groups requests by URL, so mapping all filters to this
+        // one relay produces a single REQ carrying every filter (the relay ORs
+        // them). pool.subscribeMany only accepts one filter per call, which is
+        // what forced the old per-filter REQ fan-out.
+        const closer = this.pool.subscribeMap(
+          filters.map((filter) => ({ url: relay, filter })),
+          {
+            onevent: (event) => {
+              this.eventStore.addEvent(event);
 
-                if (!managedSub.firstEventAt) managedSub.firstEventAt = Date.now();
-                managedSub.eventCount++;
-                recordEventRelay(event.id, relay);
+              if (!managedSub.firstEventAt) managedSub.firstEventAt = Date.now();
+              managedSub.eventCount++;
+              recordEventRelay(event.id, relay);
 
-                for (const callback of Array.from(managedSub.callbacks)) {
-                  callback(event);
+              for (const callback of Array.from(managedSub.callbacks)) {
+                callback(event);
+              }
+            },
+            oneose: () => {
+              eoseState.count++;
+              if (eoseState.count === expectedEose) {
+                managedSub.eoseReceived = true;
+                managedSub.eoseAt = Date.now();
+                for (const eoseCallback of Array.from(managedSub.eoseCallbacks)) {
+                  eoseCallback();
                 }
-              },
-              oneose: () => {
-                eoseState.count++;
-                if (eoseState.count === expectedEose) {
-                  managedSub.eoseReceived = true;
-                  managedSub.eoseAt = Date.now();
-                  for (const eoseCallback of Array.from(managedSub.eoseCallbacks)) {
-                    eoseCallback();
-                  }
-                  managedSub.eoseCallbacks.clear();
-                }
-              },
-            }
-          );
-          managedSub.chunks.push(closer);
-        }
+                managedSub.eoseCallbacks.clear();
+              }
+            },
+          }
+        );
+        managedSub.chunks.push(closer);
       }
     }
 
@@ -440,40 +445,38 @@ export class SubscriptionManager {
       } else {
         sub.chunks = [];
         sub.closer = null;
-        const expectedEose = sub.relays.length * sub.filters.length;
+        // One REQ per relay carrying all filters (see subscribe() for rationale).
+        const expectedEose = sub.relays.length;
         const eoseState = { count: 0 };
 
         for (const relay of sub.relays) {
-          for (const filter of sub.filters) {
-            const closer = this.pool.subscribeMany(
-              [relay],
-              filter,
-              {
-                onevent: (event) => {
-                  this.eventStore.addEvent(event);
-                  if (!sub.firstEventAt) sub.firstEventAt = Date.now();
-                  sub.eventCount++;
-                  recordEventRelay(event.id, relay);
-                  for (const callback of Array.from(sub.callbacks)) {
-                    callback(event);
+          const closer = this.pool.subscribeMap(
+            sub.filters.map((filter) => ({ url: relay, filter })),
+            {
+              onevent: (event) => {
+                this.eventStore.addEvent(event);
+                if (!sub.firstEventAt) sub.firstEventAt = Date.now();
+                sub.eventCount++;
+                recordEventRelay(event.id, relay);
+                for (const callback of Array.from(sub.callbacks)) {
+                  callback(event);
+                }
+              },
+              oneose: () => {
+                eoseState.count++;
+                if (eoseState.count === expectedEose) {
+                  sub.eoseReceived = true;
+                  sub.eoseAt = Date.now();
+                  for (const eoseCallback of Array.from(sub.eoseCallbacks)) {
+                    eoseCallback();
                   }
-                },
-                oneose: () => {
-                  eoseState.count++;
-                  if (eoseState.count === expectedEose) {
-                    sub.eoseReceived = true;
-                    sub.eoseAt = Date.now();
-                    for (const eoseCallback of Array.from(sub.eoseCallbacks)) {
-                      eoseCallback();
-                    }
-                    // Don't clear — new subscribers may have added callbacks
-                    // between reconnect and EOSE. They'll be removed on unsubscribe.
-                  }
-                },
-              }
-            );
-            sub.chunks.push(closer);
-          }
+                  // Don't clear — new subscribers may have added callbacks
+                  // between reconnect and EOSE. They'll be removed on unsubscribe.
+                }
+              },
+            }
+          );
+          sub.chunks.push(closer);
         }
       }
     }
