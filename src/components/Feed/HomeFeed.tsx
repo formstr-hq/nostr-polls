@@ -53,28 +53,20 @@ const dedupeKey = (event: Event): string => {
   return event.id;
 };
 
-// One unified item renderer keyed off the event kind.
+// One unified item renderer keyed off the event kind. All kinds share the same
+// wrapper so notes, polls, and articles align to the same width in the feed
+// (the column itself is capped/centered by FeedsLayout).
 const HomeItem = React.memo(
   ({ event, userResponse }: { event: Event; userResponse?: Event }) => {
+    let inner: React.ReactNode;
     if (event.kind === KIND_POLL) {
-      return (
-        <Box sx={{ my: "20px", mx: { xs: 0, sm: "auto" }, width: "100%", maxWidth: { xs: "100%", sm: "600px" } }}>
-          <PollResponseForm pollEvent={event} userResponse={userResponse} />
-        </Box>
-      );
+      inner = <PollResponseForm pollEvent={event} userResponse={userResponse} />;
+    } else if (event.kind === KIND_ARTICLE) {
+      inner = <ArticleCard event={event} />;
+    } else {
+      inner = <Notes event={event} />;
     }
-    if (event.kind === KIND_ARTICLE) {
-      return (
-        <Box sx={{ maxWidth: 700, mx: "auto" }}>
-          <ArticleCard event={event} />
-        </Box>
-      );
-    }
-    return (
-      <div style={{ marginBottom: "1.5rem" }}>
-        <Notes event={event} />
-      </div>
-    );
+    return <Box sx={{ width: "100%", mb: "1.5rem" }}>{inner}</Box>;
   }
 );
 
