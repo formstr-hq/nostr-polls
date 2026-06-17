@@ -59,6 +59,12 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
   const [uploadingField, setUploadingField] = useState<"picture" | "banner" | null>(null);
 
   const handleImageUpload = async (file: File, field: "picture" | "banner") => {
+    // Enforce a 5MB file size limit
+    if (file.size > 5 * 1024 * 1024) {
+      showNotification("File is too large! Please select an image under 5MB.", "error");
+      return;
+    }
+
     setUploadingField(field);
     try {
       const url = await uploadToBlossom(
