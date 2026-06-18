@@ -7,6 +7,7 @@ import {
   Outlet,
   Navigate,
   useParams,
+  useNavigate,
 } from "react-router-dom";
 
 import { StatusBar, Style } from "@capacitor/status-bar";
@@ -111,8 +112,42 @@ function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
   );
 }
 
+function useDeepLinks() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    let listener: Awaited<ReturnType<typeof CapApp.addListener>> | null = null;
+    CapApp.addListener("appUrlOpen", (event) => {
+      const url = event.url;
+      try {
+        const u = new URL(url);
+        let path = "";
+        
+        if (u.hostname === "pollerama.fun") {
+          path = u.pathname;
+        } else if (url.startsWith("nostr-polls://")) {
+           path = url.replace("nostr-polls://", "/").replace(/\/\/*/g, "/");
+        }
+
+        if (path) {
+          navigate(path);
+        }
+      } catch (err) {
+        console.error("Failed to parse deep link", err);
+      }
+    }).then((l) => {
+      listener = l;
+    });
+
+    return () => {
+      listener?.remove();
+    };
+  }, [navigate]);
+}
+
 // Inner component: static layout — header on top, sidebar + content below
 function AppContent() {
+  useDeepLinks();
   const [sidebarOpen, setSidebarOpen] = React.useState(
     () => localStorage.getItem("pollerama:sidebarOpen") !== "false"
   );

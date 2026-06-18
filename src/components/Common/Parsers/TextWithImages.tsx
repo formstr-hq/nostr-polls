@@ -383,6 +383,19 @@ const NostrParser = ({
     if (type === "naddr") {
       return (
         <React.Fragment key={index}>
+          {data?.kind === 30023 && (
+            <Box sx={{ my: 1 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => {
+                  window.location.href = `https://pages.formstr.app/doc/${encoded}`;
+                }}
+              >
+                Open in Pages
+              </Button>
+            </Box>
+          )}
           <NaddrHandlers encoded={encoded} />
           {suffix}
         </React.Fragment>
