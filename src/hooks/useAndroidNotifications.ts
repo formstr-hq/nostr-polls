@@ -6,13 +6,17 @@ import { Preferences } from '@capacitor/preferences';
 import { useNavigate } from 'react-router-dom';
 import { Event, nip19 } from 'nostr-tools';
 import { useNostrNotifications } from '../contexts/nostr-notification-context';
+import { parseNotification } from '../components/Header/notification-utils';
 import { Conversation } from '../contexts/dm-context';
 import { useDMContext } from './useDMContext';
 import { useUserContext } from './useUserContext';
 import { useRelays } from './useRelays';
 import { initLocalNotifications, fireNotification, NotifExtra } from '../services/localNotificationService';
+import { getNip65InboxRelays } from '../nostr/OutboxService';
 
 const NOTIF_ID_DMS = 1002;
+// Cap how many relays the background worker polls — it opens one socket per relay.
+const MAX_WORKER_RELAYS = 6;
 const PENDING_IDS_KEY = 'notif_pending_ids';
 const EVENT_KEY_PREFIX = 'notif_event_';
 
@@ -49,9 +53,16 @@ async function drainPendingPayloads(): Promise<Event[]> {
   }
 }
 
+/** True if the event addresses `pubkey` via a "p" tag. The background worker
+ *  collects events for every account; the in-app list only shows the active
+ *  profile's, so we filter drained payloads through this before seeding. */
+function eventTargetsPubkey(ev: Event, pubkey: string | undefined): boolean {
+  if (!pubkey) return false;
+  return ev.tags.some((t) => t[0] === 'p' && t[1] === pubkey);
+}
+
 function buildEventNotification(
-  ev: Event,
-  pollMap: Map<string, Event>
+  ev: Event
 ): { title: string; body: string; extra: NotifExtra } {
   if (ev.kind === 1) {
     const nevent = (() => { try { return nip19.neventEncode({ id: ev.id }); } catch { return undefined; } })();
@@ -73,10 +84,14 @@ function buildEventNotification(
   }
 
   if (ev.kind === 9735) {
+    const parsed = parseNotification(ev);
+    const nevent = parsed.postId
+      ? (() => { try { return nip19.neventEncode({ id: parsed.postId! }); } catch { return undefined; } })()
+      : undefined;
     return {
       title: 'New zap ⚡',
-      body: '',
-      extra: { target: 'notifications' },
+      body: parsed.sats ? `${parsed.sats} sats` : '',
+      extra: nevent ? { target: 'note', nevent } : { target: 'notifications' },
     };
   }
 
@@ -116,7 +131,32 @@ function encodeHexToNevent(hex: string): string | undefined {
   try { return nip19.neventEncode({ id: hex }); } catch { return undefined; }
 }
 
-function handleDeepLink(url: string, navigate: ReturnType<typeof useNavigate>) {
+/** Pull the `acct` (hex pubkey) query param a notification deep link may carry. */
+function extractAcct(url: string): string | undefined {
+  const q = url.indexOf('?');
+  if (q === -1) return undefined;
+  const acct = new URLSearchParams(url.slice(q + 1)).get('acct');
+  return acct || undefined;
+}
+
+/** Strip the query string so the existing path matching below stays simple. */
+function stripQuery(url: string): string {
+  const q = url.indexOf('?');
+  return q === -1 ? url : url.slice(0, q);
+}
+
+async function handleDeepLink(
+  rawUrl: string,
+  navigate: ReturnType<typeof useNavigate>,
+  switchToAccount?: (pubkey: string) => Promise<void>
+) {
+  const acct = extractAcct(rawUrl);
+  if (acct && switchToAccount) {
+    await switchToAccount(acct).catch((e) =>
+      console.warn('[useAndroidNotifications] switchAccount on deep link failed:', e)
+    );
+  }
+  const url = stripQuery(rawUrl);
   if (url.includes('/messages/')) {
     const npub = url.split('/messages/')[1];
     navigate(`/messages/${npub}`);
@@ -145,12 +185,20 @@ export function useAndroidNotifications() {
   const navigate = useNavigate();
   const { unreadCount, notifications, lastSeen, pollMap, seedFromCache } = useNostrNotifications();
   const { unreadTotal: dmUnread, conversations } = useDMContext();
-  const { user } = useUserContext();
+  const { user, accounts, switchAccount } = useUserContext();
   const { relays } = useRelays();
   const permitted = useRef(false);
   const prevDMs    = useRef(0);
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
+  // Stable ref to switchAccount so the worker deep-link handler (registered once)
+  // can switch to the account a tapped background notification belongs to.
+  const switchAccountRef = useRef(switchAccount);
+  switchAccountRef.current = switchAccount;
+  // Active pubkey ref so the once-registered drain can filter worker payloads to
+  // the active profile (the in-app list is active-profile only).
+  const userPubkeyRef = useRef(user?.pubkey);
+  userPubkeyRef.current = user?.pubkey;
   // Stable ref to seedFromCache so the mount effect can call it without re-running.
   const seedFromCacheRef = useRef(seedFromCache);
   seedFromCacheRef.current = seedFromCache;
@@ -169,7 +217,8 @@ export function useAndroidNotifications() {
       permitted.current = ok;
     });
 
-    // Handle taps on JS-side local notifications (app alive/backgrounded)
+    // Handle taps on JS-side local notifications (app alive/backgrounded). These
+    // are only ever scheduled for the active profile, so no account switch here.
     const tapSub = LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
       const extra = action.notification.extra as NotifExtra | undefined;
       if (!extra) return;
@@ -190,13 +239,15 @@ export function useAndroidNotifications() {
     const drainAndDeepLink = async () => {
       const events = await drainPendingPayloads();
       if (events.length) {
-        seedFromCacheRef.current(events);
         // Suppress duplicate JS-side OS notifications for events already shown
-        // by the Worker.
+        // by the Worker — for every account, not just the active one.
         for (const ev of events) firedEventIds.current.add(ev.id);
+        // Only seed the active profile's events into the in-app list.
+        const mine = events.filter((ev) => eventTargetsPubkey(ev, userPubkeyRef.current));
+        if (mine.length) seedFromCacheRef.current(mine);
       }
       const launch = await App.getLaunchUrl();
-      if (launch?.url) handleDeepLink(launch.url, navigateRef.current);
+      if (launch?.url) handleDeepLink(launch.url, navigateRef.current, switchAccountRef.current);
     };
     drainAndDeepLink();
 
@@ -205,10 +256,11 @@ export function useAndroidNotifications() {
       // where the user tapped a second notification).
       const events = await drainPendingPayloads();
       if (events.length) {
-        seedFromCacheRef.current(events);
         for (const ev of events) firedEventIds.current.add(ev.id);
+        const mine = events.filter((ev) => eventTargetsPubkey(ev, userPubkeyRef.current));
+        if (mine.length) seedFromCacheRef.current(mine);
       }
-      handleDeepLink(url, navigateRef.current);
+      handleDeepLink(url, navigateRef.current, switchAccountRef.current);
     });
 
     return () => {
@@ -217,19 +269,55 @@ export function useAndroidNotifications() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Bridge: save pubkey for WorkManager Worker
+  // Bridge: save all logged-in pubkeys for the WorkManager Worker so background
+  // push notifications cover every account, not just the active one. We also
+  // keep `worker_pubkey` (active account) for backward compatibility.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    if (!user?.pubkey) return;
-    Preferences.set({ key: 'worker_pubkey', value: user.pubkey });
-  }, [user?.pubkey]);
+    const pubkeys = accounts.map((a) => a.pubkey);
+    if (pubkeys.length === 0) return;
+    Preferences.set({ key: 'worker_pubkeys', value: JSON.stringify(pubkeys) });
+    if (user?.pubkey) Preferences.set({ key: 'worker_pubkey', value: user.pubkey });
+  }, [accounts, user?.pubkey]);
 
-  // Bridge: save first relay for WorkManager Worker
+  // Bridge: save the relays the WorkManager Worker should poll. We use the
+  // union of every logged-in account's NIP-65 read (inbox) relays — that's where
+  // notifications tagging them are expected to land (outbox model). Falls back to
+  // the active read-relay set when no NIP-65 list is cached/discoverable.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    if (!relays?.length) return;
-    Preferences.set({ key: 'worker_relay', value: relays[0] });
-  }, [relays]);
+    const pubkeys = accounts.map((a) => a.pubkey);
+    if (pubkeys.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const union = new Set<string>();
+      await Promise.all(
+        pubkeys.map(async (pk) => {
+          try {
+            // persist=true seeds localStorage + warms the cache for every account.
+            const inbox = await getNip65InboxRelays(pk, true);
+            inbox.forEach((r) => union.add(r));
+          } catch (e) {
+            console.warn('[useAndroidNotifications] inbox relays fetch failed:', pk, e);
+          }
+        })
+      );
+      // Fall back to the active read-relay set if nobody published a NIP-65 list.
+      if (union.size === 0) relays.forEach((r) => union.add(r));
+      if (cancelled || union.size === 0) return;
+
+      // Cap to keep the background job light — it opens one socket per relay.
+      const list = Array.from(union).slice(0, MAX_WORKER_RELAYS);
+      Preferences.set({ key: 'worker_relays', value: JSON.stringify(list) });
+      // Keep the single-relay key for backward compatibility with older worker builds.
+      Preferences.set({ key: 'worker_relay', value: list[0] });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts, relays]);
 
   // Fire one notification per new unread event while the app is backgrounded
   useEffect(() => {
@@ -282,7 +370,7 @@ export function useAndroidNotifications() {
       }
 
       const notifId = eventIdToNotifId(ev.id);
-      const { title, body, extra } = buildEventNotification(ev, pollMap);
+      const { title, body, extra } = buildEventNotification(ev);
       fireNotification(notifId, title, body, extra);
     }
   }, [unreadCount, notifications, lastSeen, pollMap]);

@@ -93,10 +93,18 @@ async function fetchFromNetwork(
 /**
  * Populate the cache from an already-fetched kind:10002 event.
  * Call this when you fetch a user's relay list so future lookups are free.
+ *
+ * Pass persist=true for the logged-in user(s) so the relay list survives a
+ * reload and is available to background consumers (e.g. the Android worker
+ * bridge, which reads it back via getNip65InboxRelays).
  */
-export function cacheNip65Event(event: Event): void {
+export function cacheNip65Event(event: Event, persist = false): void {
+  const existing = cache.get(event.pubkey);
+  // Ignore an older event than what we already have cached.
+  if (existing && event.created_at < existing.created_at) return;
   const relayList = parseNip65(event);
   cache.set(event.pubkey, relayList);
+  if (persist) writeToStorage(event.pubkey, relayList);
 }
 
 /**

@@ -55,8 +55,9 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       if (results && results.length > 0) {
         const event = results[0];
 
-        // Seed the OutboxService cache so future lookups for this user are free
-        cacheNip65Event(event);
+        // Seed the OutboxService cache so future lookups for this user are free,
+        // and persist it so the Android notification worker can poll these relays.
+        cacheNip65Event(event, true);
 
         // Parse NIP-65 markers:
         //   no marker  → both read and write

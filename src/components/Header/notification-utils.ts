@@ -106,12 +106,19 @@ export function parseNotification(ev: Event): ParsedNotification {
       }
     }
 
+    // The zapped note is carried as an "e" tag on the receipt. Fall back to the
+    // embedded zap request's "e" tag if the receipt didn't copy it through.
+    let postId: string | undefined = pickETag("e")?.[1];
+
     // Get sender pubkey from the zap request
     let senderPubkey = fromPubkey;
     if (requestEvent) {
       try {
         const reqObj = JSON.parse(requestEvent) as Event;
         senderPubkey = reqObj.pubkey;
+        if (!postId) {
+          postId = reqObj.tags?.find((t) => t[0] === "e")?.[1];
+        }
       } catch (e) {
         console.error("Failed to parse zap request event", e, ev);
       }
@@ -120,6 +127,7 @@ export function parseNotification(ev: Event): ParsedNotification {
     return {
       type: "zap",
       sats,
+      postId: postId ?? undefined,
       fromPubkey: senderPubkey,
     };
   }

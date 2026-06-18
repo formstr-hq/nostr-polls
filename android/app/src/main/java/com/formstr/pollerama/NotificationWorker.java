@@ -16,6 +16,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -35,13 +37,16 @@ public class NotificationWorker extends Worker {
     private static final String CHANNEL_ID    = "pollerama_notifs";
     private static final String PREFS_CAP     = "CapacitorStorage";
     private static final String KEY_PUBKEY    = "worker_pubkey";
+    private static final String KEY_PUBKEYS   = "worker_pubkeys";
     private static final String KEY_RELAY     = "worker_relay";
+    private static final String KEY_RELAYS    = "worker_relays";
     private static final String KEY_LAST      = "worker_last_check";
     private static final String KEY_PENDING   = "notif_pending_ids";
     private static final String EVENT_KEY_PREFIX = "notif_event_";
     private static final int    NOTIF_DMS     = 1002;
     private static final long   TIMEOUT_SEC   = 15;
     private static final int    MAX_PER_RUN   = 20;
+    private static final int    MAX_RELAYS    = 6;
 
     public NotificationWorker(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
@@ -53,16 +58,45 @@ public class NotificationWorker extends Worker {
         SharedPreferences prefs = getApplicationContext()
                 .getSharedPreferences(PREFS_CAP, Context.MODE_PRIVATE);
 
-        String pubkey = prefs.getString(KEY_PUBKEY, null);
-        String relay  = prefs.getString(KEY_RELAY, null);
-        if (pubkey == null || relay == null) return Result.success();
+        // All logged-in account pubkeys. Prefer the multi-account list; fall back
+        // to the single active pubkey for older installs that haven't written it.
+        final Set<String> myPubkeys = new HashSet<>();
+        JSONArray pubkeysArr = parseJsonArray(prefs.getString(KEY_PUBKEYS, "[]"));
+        for (int i = 0; i < pubkeysArr.length(); i++) {
+            String pk = pubkeysArr.optString(i, null);
+            if (pk != null && !pk.isEmpty()) myPubkeys.add(pk);
+        }
+        if (myPubkeys.isEmpty()) {
+            String single = prefs.getString(KEY_PUBKEY, null);
+            if (single != null && !single.isEmpty()) myPubkeys.add(single);
+        }
+
+        // Relays to poll: the union of every account's NIP-65 read (inbox) relays,
+        // written by the JS bridge. Fall back to the single active relay for older
+        // installs that haven't written the list yet.
+        final List<String> relayUrls = new ArrayList<>();
+        JSONArray relaysArr = parseJsonArray(prefs.getString(KEY_RELAYS, "[]"));
+        for (int i = 0; i < relaysArr.length() && relayUrls.size() < MAX_RELAYS; i++) {
+            String url = relaysArr.optString(i, null);
+            if (url != null && !url.isEmpty() && !relayUrls.contains(url)) relayUrls.add(url);
+        }
+        if (relayUrls.isEmpty()) {
+            String single = prefs.getString(KEY_RELAY, null);
+            if (single != null && !single.isEmpty()) relayUrls.add(single);
+        }
+
+        if (myPubkeys.isEmpty() || relayUrls.isEmpty()) return Result.success();
 
         long lastCheck = prefs.getLong(KEY_LAST, System.currentTimeMillis() / 1000 - 3600);
         long nowSec    = System.currentTimeMillis() / 1000;
 
-        final List<JSONObject> events = new ArrayList<>();
-        final List<JSONObject> dms    = new ArrayList<>();
-        CountDownLatch latch          = new CountDownLatch(1);
+        // Shared across all relay sockets. Lists are synchronized for concurrent
+        // appends; seenIds dedupes events that arrive from more than one relay.
+        final List<JSONObject> events = Collections.synchronizedList(new ArrayList<>());
+        final List<JSONObject> dms    = Collections.synchronizedList(new ArrayList<>());
+        final Set<String> seenIds     = Collections.synchronizedSet(new HashSet<>());
+        // One countdown per relay; await proceeds once every relay finished (or timed out).
+        final CountDownLatch latch    = new CountDownLatch(relayUrls.size());
 
         OkHttpClient client = new OkHttpClient.Builder()
                 .readTimeout(TIMEOUT_SEC + 2, TimeUnit.SECONDS)
@@ -76,7 +110,7 @@ public class NotificationWorker extends Worker {
             kinds.put(1); kinds.put(7); kinds.put(9735); kinds.put(1018); kinds.put(1059);
             filter.put("kinds", kinds);
             JSONArray pArr = new JSONArray();
-            pArr.put(pubkey);
+            for (String pk : myPubkeys) pArr.put(pk);
             filter.put("#p", pArr);
             filter.put("since", lastCheck);
 
@@ -91,56 +125,79 @@ public class NotificationWorker extends Worker {
 
         final String finalReqMsg = reqMsg;
 
-        Request wsRequest = new Request.Builder().url(relay).build();
-        WebSocket ws = client.newWebSocket(wsRequest, new WebSocketListener() {
-            @Override
-            public void onOpen(@NonNull WebSocket webSocket, @NonNull Response response) {
-                webSocket.send(finalReqMsg);
+        // Fan out: open one socket per relay. Each counts the latch down exactly
+        // once (on EOSE, failure, or close), guarded by its own `done` flag.
+        final List<WebSocket> sockets = new ArrayList<>();
+        for (String url : relayUrls) {
+            final AtomicBoolean done = new AtomicBoolean(false);
+            Request wsRequest;
+            try {
+                wsRequest = new Request.Builder().url(url).build();
+            } catch (Exception e) {
+                latch.countDown(); // malformed URL — don't wait on it
+                continue;
             }
-
-            @Override
-            public void onMessage(@NonNull WebSocket webSocket, @NonNull String text) {
-                try {
-                    JSONArray msg = new JSONArray(text);
-                    String type = msg.getString(0);
-                    if ("EVENT".equals(type) && msg.length() >= 3) {
-                        JSONObject event = msg.getJSONObject(2);
-                        int kind = event.getInt("kind");
-                        // Skip events authored by the user (won't notify yourself)
-                        if (pubkey.equals(event.optString("pubkey"))) return;
-                        if (kind == 1059) {
-                            dms.add(event);
-                        } else {
-                            events.add(event);
-                        }
-                    } else if ("EOSE".equals(type)) {
-                        JSONArray close = new JSONArray();
-                        close.put("CLOSE");
-                        close.put("notif-check");
-                        webSocket.send(close.toString());
-                        webSocket.close(1000, null);
+            WebSocket ws = client.newWebSocket(wsRequest, new WebSocketListener() {
+                private void finish(WebSocket webSocket) {
+                    if (done.compareAndSet(false, true)) {
+                        webSocket.cancel();
                         latch.countDown();
                     }
-                } catch (Exception ignored) {}
-            }
+                }
 
-            @Override
-            public void onFailure(@NonNull WebSocket webSocket, @NonNull Throwable t, Response response) {
-                latch.countDown();
-            }
+                @Override
+                public void onOpen(@NonNull WebSocket webSocket, @NonNull Response response) {
+                    webSocket.send(finalReqMsg);
+                }
 
-            @Override
-            public void onClosed(@NonNull WebSocket webSocket, int code, @NonNull String reason) {
-                latch.countDown();
-            }
-        });
+                @Override
+                public void onMessage(@NonNull WebSocket webSocket, @NonNull String text) {
+                    try {
+                        JSONArray msg = new JSONArray(text);
+                        String type = msg.getString(0);
+                        if ("EVENT".equals(type) && msg.length() >= 3) {
+                            JSONObject event = msg.getJSONObject(2);
+                            String id = event.optString("id", null);
+                            // Dedupe across relays.
+                            if (id == null || id.isEmpty() || !seenIds.add(id)) return;
+                            int kind = event.getInt("kind");
+                            // Skip events authored by any of my accounts (won't notify yourself)
+                            if (myPubkeys.contains(event.optString("pubkey"))) return;
+                            if (kind == 1059) {
+                                dms.add(event);
+                            } else {
+                                events.add(event);
+                            }
+                        } else if ("EOSE".equals(type)) {
+                            JSONArray close = new JSONArray();
+                            close.put("CLOSE");
+                            close.put("notif-check");
+                            webSocket.send(close.toString());
+                            webSocket.close(1000, null);
+                            finish(webSocket);
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                @Override
+                public void onFailure(@NonNull WebSocket webSocket, @NonNull Throwable t, Response response) {
+                    finish(webSocket);
+                }
+
+                @Override
+                public void onClosed(@NonNull WebSocket webSocket, int code, @NonNull String reason) {
+                    finish(webSocket);
+                }
+            });
+            sockets.add(ws);
+        }
 
         try {
             latch.await(TIMEOUT_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        ws.cancel();
+        for (WebSocket ws : sockets) ws.cancel();
         client.dispatcher().executorService().shutdown();
 
         // Save last check timestamp
@@ -164,6 +221,9 @@ public class NotificationWorker extends Worker {
         // Group high-volume kinds so one popular target = one notification.
         Map<String, Integer> pollResponseCounts = new HashMap<>();
         Map<String, Integer> reactionCounts = new HashMap<>();
+        // Target account (one of my pubkeys) per grouped target, so the grouped
+        // notification's deep link can switch to the right account on tap.
+        Map<String, String> targetAcct = new HashMap<>();
 
         int posted = 0;
         for (JSONObject ev : events) {
@@ -183,6 +243,9 @@ public class NotificationWorker extends Worker {
                 if (pollId != null) {
                     Integer prev = pollResponseCounts.get(pollId);
                     pollResponseCounts.put(pollId, prev == null ? 1 : prev + 1);
+                    if (!targetAcct.containsKey(pollId)) {
+                        targetAcct.put(pollId, findMyPubkey(ev, myPubkeys));
+                    }
                 }
                 continue;
             }
@@ -191,6 +254,9 @@ public class NotificationWorker extends Worker {
                 if (postId != null) {
                     Integer prev = reactionCounts.get(postId);
                     reactionCounts.put(postId, prev == null ? 1 : prev + 1);
+                    if (!targetAcct.containsKey(postId)) {
+                        targetAcct.put(postId, findMyPubkey(ev, myPubkeys));
+                    }
                 }
                 continue;
             }
@@ -211,6 +277,8 @@ public class NotificationWorker extends Worker {
                 deepLink = "nostr-polls://app/note-hex/" + eventId;
             } else if (kind == 9735) {
                 title = shortAuthor + " zapped you ⚡";
+                String postId = findFirstTagValue(ev, "e");
+                if (postId != null) deepLink = "nostr-polls://app/note-hex/" + postId;
             } else if (kind == 6 || kind == 16) {
                 title = shortAuthor + " reposted you";
                 String postId = findFirstTagValue(ev, "e");
@@ -218,6 +286,10 @@ public class NotificationWorker extends Worker {
             } else {
                 title = "New notification";
             }
+
+            // Tag the deep link with the account this notification is for so a tap
+            // switches to it before navigating.
+            deepLink = appendAcct(deepLink, findMyPubkey(ev, myPubkeys));
 
             int notifId = eventIdToNotifId(eventId);
             Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(deepLink));
@@ -252,6 +324,7 @@ public class NotificationWorker extends Worker {
                         " new poll response",
                         " new poll responses",
                         "respond-hex",
+                        targetAcct.get(entry.getKey()),
                         piFlags,
                         nm);
             }
@@ -262,6 +335,7 @@ public class NotificationWorker extends Worker {
                         " new reaction to your post",
                         " new reactions to your post",
                         "note-hex",
+                        targetAcct.get(entry.getKey()),
                         piFlags,
                         nm);
             }
@@ -298,12 +372,13 @@ public class NotificationWorker extends Worker {
 
     private void postGroupedNotification(String targetHex, int count,
                                          String singularSuffix, String pluralSuffix,
-                                         String deepLinkType, int piFlags,
+                                         String deepLinkType, String acct, int piFlags,
                                          NotificationManager nm) {
         String title = count == 1
                 ? "1" + singularSuffix
                 : count + pluralSuffix;
-        String deepLink = "nostr-polls://app/" + deepLinkType + "/" + targetHex;
+        String deepLink = appendAcct(
+                "nostr-polls://app/" + deepLinkType + "/" + targetHex, acct);
         int notifId = eventIdToNotifId(targetHex);
 
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(deepLink));
@@ -329,6 +404,28 @@ public class NotificationWorker extends Worker {
         } catch (Exception e) {
             return Math.abs(eventId.hashCode()) | 1;
         }
+    }
+
+    /** Return the first "p" tag value that is one of my logged-in pubkeys, else null. */
+    private static String findMyPubkey(JSONObject event, Set<String> myPubkeys) {
+        try {
+            JSONArray tags = event.optJSONArray("tags");
+            if (tags == null) return null;
+            for (int i = 0; i < tags.length(); i++) {
+                JSONArray tag = tags.optJSONArray(i);
+                if (tag != null && tag.length() >= 2 && "p".equals(tag.optString(0))) {
+                    String val = tag.optString(1, null);
+                    if (val != null && myPubkeys.contains(val)) return val;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** Append the target account as an `acct` query param so taps switch accounts. */
+    private static String appendAcct(String deepLink, String acct) {
+        if (acct == null || acct.isEmpty()) return deepLink;
+        return deepLink + (deepLink.contains("?") ? "&" : "?") + "acct=" + acct;
     }
 
     private static String findFirstTagValue(JSONObject event, String tagName) {
