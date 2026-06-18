@@ -10,13 +10,19 @@ import { parseNotification } from '../components/Header/notification-utils';
 import { Conversation } from '../contexts/dm-context';
 import { useDMContext } from './useDMContext';
 import { useUserContext } from './useUserContext';
+import { useAppContext } from './useAppContext';
 import { useRelays } from './useRelays';
 import { initLocalNotifications, fireNotification, NotifExtra } from '../services/localNotificationService';
 import { getNip65InboxRelays } from '../nostr/OutboxService';
+import { getCachedProfiles } from '../utils/localStorage';
 
 const NOTIF_ID_DMS = 1002;
 // Cap how many relays the background worker polls — it opens one socket per relay.
 const MAX_WORKER_RELAYS = 6;
+// Cap how many profile names we bridge to the worker so the SharedPreferences
+// blob stays small. The cache is dominated by follows / web-of-trust — exactly
+// the people most likely to show up in notifications.
+const MAX_WORKER_PROFILES = 1000;
 const PENDING_IDS_KEY = 'notif_pending_ids';
 const EVENT_KEY_PREFIX = 'notif_event_';
 
@@ -62,12 +68,13 @@ function eventTargetsPubkey(ev: Event, pubkey: string | undefined): boolean {
 }
 
 function buildEventNotification(
-  ev: Event
+  ev: Event,
+  nameOf: (pubkey: string) => string
 ): { title: string; body: string; extra: NotifExtra } {
   if (ev.kind === 1) {
     const nevent = (() => { try { return nip19.neventEncode({ id: ev.id }); } catch { return undefined; } })();
     return {
-      title: 'New mention',
+      title: `${nameOf(ev.pubkey)} mentioned you`,
       body: ev.content ? `"${ev.content.slice(0, 80)}"` : '',
       extra: nevent ? { target: 'note', nevent } : { target: 'notifications' },
     };
@@ -76,8 +83,9 @@ function buildEventNotification(
   if (ev.kind === 7) {
     const postId = ev.tags.find((t) => t[0] === 'e')?.[1];
     const nevent = postId ? (() => { try { return nip19.neventEncode({ id: postId }); } catch { return undefined; } })() : undefined;
+    const reaction = ev.content && ev.content !== '+' ? ` ${ev.content}` : '';
     return {
-      title: `New reaction ${ev.content || ''}`.trim(),
+      title: `${nameOf(ev.pubkey)} reacted${reaction}`.trim(),
       body: '',
       extra: nevent ? { target: 'note', nevent } : { target: 'notifications' },
     };
@@ -88,8 +96,11 @@ function buildEventNotification(
     const nevent = parsed.postId
       ? (() => { try { return nip19.neventEncode({ id: parsed.postId! }); } catch { return undefined; } })()
       : undefined;
+    // Zaps are wrapped: the real sender is the zap-request author (parsed.fromPubkey),
+    // not the 9735 receipt author (the zapper's wallet/LNURL service).
+    const sender = parsed.fromPubkey || ev.pubkey;
     return {
-      title: 'New zap ⚡',
+      title: `${nameOf(sender)} zapped you ⚡`,
       body: parsed.sats ? `${parsed.sats} sats` : '',
       extra: nevent ? { target: 'note', nevent } : { target: 'notifications' },
     };
@@ -129,6 +140,17 @@ function getSingleDMNpub(conversations: Map<string, Conversation>, userPubkey: s
 
 function encodeHexToNevent(hex: string): string | undefined {
   try { return nip19.neventEncode({ id: hex }); } catch { return undefined; }
+}
+
+/** Pull a human-readable name out of a kind:0 content blob. */
+function profileName(content: string): string | undefined {
+  try {
+    const meta = JSON.parse(content) as { display_name?: string; name?: string };
+    const name = (meta.display_name || meta.name || '').trim();
+    return name || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Pull the `acct` (hex pubkey) query param a notification deep link may carry. */
@@ -186,6 +208,7 @@ export function useAndroidNotifications() {
   const { unreadCount, notifications, lastSeen, pollMap, seedFromCache } = useNostrNotifications();
   const { unreadTotal: dmUnread, conversations } = useDMContext();
   const { user, accounts, switchAccount } = useUserContext();
+  const { getProfile } = useAppContext();
   const { relays } = useRelays();
   const permitted = useRef(false);
   const prevDMs    = useRef(0);
@@ -210,6 +233,18 @@ export function useAndroidNotifications() {
   // per target rather than one per fan-out event.
   const pollResponseCounts = useRef(new Map<string, number>());
   const reactionCounts = useRef(new Map<string, number>());
+
+  // Resolve a display name from the live kind:0 profile cache, falling back to a
+  // short pubkey. Kept in a ref so the notification effect can use the latest
+  // resolver without listing it as a dependency.
+  const nameOf = (pubkey: string): string => {
+    const p = getProfile(pubkey);
+    const n = ((p?.display_name as string) || (p?.name as string) || '').trim();
+    if (n) return n;
+    return pubkey ? `${pubkey.slice(0, 8)}…` : 'Someone';
+  };
+  const nameOfRef = useRef(nameOf);
+  nameOfRef.current = nameOf;
 
   // Request permission + register listeners once
   useEffect(() => {
@@ -279,6 +314,26 @@ export function useAndroidNotifications() {
     Preferences.set({ key: 'worker_pubkeys', value: JSON.stringify(pubkeys) });
     if (user?.pubkey) Preferences.set({ key: 'worker_pubkey', value: user.pubkey });
   }, [accounts, user?.pubkey]);
+
+  // Bridge: save a pubkey -> display-name map from the cached kind:0 profiles so
+  // the background worker can show "Alice zapped you" instead of a raw pubkey.
+  // Re-runs whenever the notification set changes, which is when the cache is most
+  // likely to have been freshly warmed with the relevant authors' profiles.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const cached = getCachedProfiles();
+    if (cached.length === 0) return;
+
+    // Newest profiles first, then cap, so we keep the freshest names within budget.
+    const sorted = [...cached].sort((a, b) => b.created_at - a.created_at);
+    const nameMap: Record<string, string> = {};
+    for (const ev of sorted) {
+      if (Object.keys(nameMap).length >= MAX_WORKER_PROFILES) break;
+      const name = profileName(ev.content);
+      if (name) nameMap[ev.pubkey] = name;
+    }
+    Preferences.set({ key: 'worker_profiles', value: JSON.stringify(nameMap) });
+  }, [notifications]);
 
   // Bridge: save the relays the WorkManager Worker should poll. We use the
   // union of every logged-in account's NIP-65 read (inbox) relays — that's where
@@ -358,7 +413,9 @@ export function useAndroidNotifications() {
         if (!postId) continue;
         const next = (reactionCounts.current.get(postId) ?? 0) + 1;
         reactionCounts.current.set(postId, next);
-        const title = next === 1 ? 'New reaction to your post' : `${next} new reactions to your post`;
+        const title = next === 1
+          ? `${nameOfRef.current(ev.pubkey)} reacted to your post`
+          : `${next} new reactions`;
         const nevent = encodeHexToNevent(postId);
         fireNotification(
           eventIdToNotifId(postId),
@@ -370,7 +427,7 @@ export function useAndroidNotifications() {
       }
 
       const notifId = eventIdToNotifId(ev.id);
-      const { title, body, extra } = buildEventNotification(ev);
+      const { title, body, extra } = buildEventNotification(ev, nameOfRef.current);
       fireNotification(notifId, title, body, extra);
     }
   }, [unreadCount, notifications, lastSeen, pollMap]);

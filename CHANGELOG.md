@@ -1,3 +1,10 @@
+# 1.8.21
+
+- Zap notifications: you now get a push when someone zaps you, with the sats amount, on Android.
+- Hold-to-zap: press and hold the zap icon to ramp the amount up — release to open the zap dialog preloaded with that amount (a quick tap still opens it at the default).
+- Notifications now use people's names instead of raw keys — "Alice mentioned you", "Alice zapped you ⚡", "Alice reacted to your post" — falling back to a short key only when the profile isn't cached yet.
+- Grouped reactions read more naturally: a single reactor is named ("Alice reacted to your post"), while several collapse into one "5 new reactions".
+
 # 1.8.20
 
 - New unified Home feed — notes, polls, and articles in a single stream — is now the default landing screen. Scope it to people you Follow or your wider Network (web of trust); replies are filtered out so it stays a feed of top-level posts.

@@ -40,6 +40,7 @@ public class NotificationWorker extends Worker {
     private static final String KEY_PUBKEYS   = "worker_pubkeys";
     private static final String KEY_RELAY     = "worker_relay";
     private static final String KEY_RELAYS    = "worker_relays";
+    private static final String KEY_PROFILES  = "worker_profiles";
     private static final String KEY_LAST      = "worker_last_check";
     private static final String KEY_PENDING   = "notif_pending_ids";
     private static final String EVENT_KEY_PREFIX = "notif_event_";
@@ -86,6 +87,17 @@ public class NotificationWorker extends Worker {
         }
 
         if (myPubkeys.isEmpty() || relayUrls.isEmpty()) return Result.success();
+
+        // pubkey -> display name, bridged from the JS kind:0 profile cache. Lets us
+        // show "Alice zapped you" instead of a truncated pubkey. Best-effort: any
+        // author missing here falls back to a shortened pubkey.
+        final Map<String, String> profileNames = new HashMap<>();
+        JSONObject profilesObj = parseJsonObject(prefs.getString(KEY_PROFILES, "{}"));
+        for (java.util.Iterator<String> it = profilesObj.keys(); it.hasNext(); ) {
+            String pk = it.next();
+            String name = profilesObj.optString(pk, null);
+            if (name != null && !name.isEmpty()) profileNames.put(pk, name);
+        }
 
         long lastCheck = prefs.getLong(KEY_LAST, System.currentTimeMillis() / 1000 - 3600);
         long nowSec    = System.currentTimeMillis() / 1000;
@@ -221,6 +233,9 @@ public class NotificationWorker extends Worker {
         // Group high-volume kinds so one popular target = one notification.
         Map<String, Integer> pollResponseCounts = new HashMap<>();
         Map<String, Integer> reactionCounts = new HashMap<>();
+        // Reactor pubkey per post, used to name the notification when a post has
+        // exactly one reaction ("Alice reacted to your post").
+        Map<String, String> reactionAuthor = new HashMap<>();
         // Target account (one of my pubkeys) per grouped target, so the grouped
         // notification's deep link can switch to the right account on tap.
         Map<String, String> targetAcct = new HashMap<>();
@@ -254,6 +269,7 @@ public class NotificationWorker extends Worker {
                 if (postId != null) {
                     Integer prev = reactionCounts.get(postId);
                     reactionCounts.put(postId, prev == null ? 1 : prev + 1);
+                    reactionAuthor.put(postId, ev.optString("pubkey"));
                     if (!targetAcct.containsKey(postId)) {
                         targetAcct.put(postId, findMyPubkey(ev, myPubkeys));
                     }
@@ -265,7 +281,7 @@ public class NotificationWorker extends Worker {
 
             String pub = ev.optString("pubkey", "");
             String content = ev.optString("content", "");
-            String shortAuthor = pub.length() >= 8 ? pub.substring(0, 8) + "…" : "Someone";
+            String shortAuthor = displayName(pub, profileNames);
 
             String title;
             String body = "";
@@ -326,18 +342,26 @@ public class NotificationWorker extends Worker {
                         "respond-hex",
                         targetAcct.get(entry.getKey()),
                         piFlags,
-                        nm);
+                        nm,
+                        null);
             }
             for (Map.Entry<String, Integer> entry : reactionCounts.entrySet()) {
+                String postId = entry.getKey();
+                int count = entry.getValue();
+                // With a single reactor, name them; otherwise summarize the count.
+                String singleName = count == 1
+                        ? displayName(reactionAuthor.get(postId), profileNames) + " reacted to your post"
+                        : null;
                 postGroupedNotification(
-                        entry.getKey(),
-                        entry.getValue(),
-                        " new reaction to your post",
-                        " new reactions to your post",
+                        postId,
+                        count,
+                        " reacted to your post", // unused when singleName is provided
+                        " new reactions",
                         "note-hex",
-                        targetAcct.get(entry.getKey()),
+                        targetAcct.get(postId),
                         piFlags,
-                        nm);
+                        nm,
+                        singleName);
             }
         }
 
@@ -373,10 +397,15 @@ public class NotificationWorker extends Worker {
     private void postGroupedNotification(String targetHex, int count,
                                          String singularSuffix, String pluralSuffix,
                                          String deepLinkType, String acct, int piFlags,
-                                         NotificationManager nm) {
-        String title = count == 1
-                ? "1" + singularSuffix
-                : count + pluralSuffix;
+                                         NotificationManager nm, String singleTitle) {
+        String title;
+        if (count == 1) {
+            // singleTitle, when supplied, is a fully-formed title (e.g. naming the
+            // single actor). Otherwise fall back to the "1" + suffix form.
+            title = singleTitle != null ? singleTitle : "1" + singularSuffix;
+        } else {
+            title = count + pluralSuffix;
+        }
         String deepLink = appendAcct(
                 "nostr-polls://app/" + deepLinkType + "/" + targetHex, acct);
         int notifId = eventIdToNotifId(targetHex);
@@ -450,5 +479,16 @@ public class NotificationWorker extends Worker {
 
     private static JSONArray parseJsonArray(String s) {
         try { return new JSONArray(s); } catch (Exception e) { return new JSONArray(); }
+    }
+
+    private static JSONObject parseJsonObject(String s) {
+        try { return new JSONObject(s); } catch (Exception e) { return new JSONObject(); }
+    }
+
+    /** Resolve a human-readable name for an author, falling back to a short pubkey. */
+    private static String displayName(String pubkey, Map<String, String> profileNames) {
+        String name = profileNames.get(pubkey);
+        if (name != null && !name.isEmpty()) return name;
+        return pubkey != null && pubkey.length() >= 8 ? pubkey.substring(0, 8) + "…" : "Someone";
     }
 }
