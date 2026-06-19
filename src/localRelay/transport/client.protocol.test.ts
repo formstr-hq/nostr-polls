@@ -17,23 +17,15 @@ function wire(opts?: LocalRelayClientOptions, hooks?: WorkerHostHooks) {
 }
 
 describe("LocalRelayClient ↔ WorkerHost protocol", () => {
-  it("query returns cached events through the channel", async () => {
-    const { db, client } = wire();
-    db.add(makeEvent({ id: "a".repeat(64), created_at: 200 }));
-    db.add(makeEvent({ id: "b".repeat(64), created_at: 100 }));
-    const events = await client.query({ kinds: [1] });
-    expect(events.map((e) => e.id)).toEqual(["a".repeat(64), "b".repeat(64)]);
-  });
-
-  it("subscribe replays, EOSEs, then streams live events", async () => {
+  it("observe replays cached matches, EOSEs, then streams live events", async () => {
     const { db, client } = wire();
     db.add(makeEvent({ id: "old".padEnd(64, "0") }));
     const got: string[] = [];
     let eosed = false;
-    client.subscribe([{ kinds: [1] }], {
+    client.observe([{ kinds: [1] }], {
       onEvent: (e) => got.push(e.id),
       onEose: () => (eosed = true),
-    });
+    }, { localOnly: true });
     await tick();
     expect(got).toEqual(["old".padEnd(64, "0")]);
     expect(eosed).toBe(true);

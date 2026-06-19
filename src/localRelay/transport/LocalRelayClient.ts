@@ -1,15 +1,18 @@
 /**
- * LocalRelayClient — the main-thread handle to the Worker relay. Relay/pool-
- * shaped API (subscribe / query / publish) that the data-layer facade and the
- * useEvents hook sit on. It owns subscription ids and routes incoming frames to
- * the right callbacks. It also answers the Worker's NIP-42 sign requests via an
- * injected signer (the SignerBridge).
+ * LocalRelayClient — the main-thread handle to the Worker relay.
+ *
+ * The API is deliberately interest-only: the app can DECLARE INTERESTS
+ * (`observe` / `observeOnce`) and PUBLISH, and nothing else. There is no verb
+ * that opens a connection, fetches, reconnects, or resets — the worker owns all
+ * of that. This is what lets presentation scale independently of the network.
+ *
+ * It owns subscription ids, routes incoming frames to callbacks, and answers the
+ * worker's NIP-42 sign requests via an injected signer.
  */
 import type { Event, Filter } from "../core/types";
 import type { EventTemplate } from "nostr-tools";
 import { Channel } from "./channel";
 import { FromWorker, ToWorker, RelayPublishOutcome, RelayHealth } from "./frames";
-import { generateFilterHash } from "../core/matchFilter";
 
 export interface SubscribeHandlers {
   onEvent: (event: Event) => void;
@@ -30,52 +33,50 @@ export class LocalRelayClient {
   private pendingPublishes = new Map<string, (results: RelayPublishOutcome[]) => void>();
   private pendingHealth = new Map<string, (relays: RelayHealth[]) => void>();
   private pendingQueries = new Map<string, (events: Event[]) => void>();
-  private syncRefs = new Map<string, number>();
   private counter = 0;
 
   constructor(private channel: Channel, private opts: LocalRelayClientOptions = {}) {
     channel.onMessage((m) => this.onMessage(m as FromWorker));
   }
 
-  /** Reactive subscription: replays cached matches, EOSE, then live updates. */
-  subscribe(filters: Filter[], handlers: SubscribeHandlers): { id: string; unsubscribe: () => void } {
+  /**
+   * Declare a standing interest: the worker replays cache, EOSEs, then streams
+   * live updates, and — unless `sync` is false — autonomously keeps the scope
+   * warm from relays (its decision, not ours). Re-`observe` the same handle with
+   * a wider window to paginate. `localOnly` (sync:false) is a pure store read
+   * that triggers no network.
+   */
+  observe(
+    filters: Filter[],
+    handlers: SubscribeHandlers,
+    options: { localOnly?: boolean } = {}
+  ): { id: string; update: (filters: Filter[]) => void; unobserve: () => void } {
     const id = `c${this.counter++}`;
+    const sync = !options.localOnly;
     this.subs.set(id, { handlers });
-    this.send({ kind: "nostr", msg: ["REQ", id, ...filters] });
-    return { id, unsubscribe: () => this.unsubscribe(id) };
+    this.send({ kind: "observe", subId: id, filters, sync });
+    return {
+      id,
+      update: (next) => this.send({ kind: "observe", subId: id, filters: next, sync }),
+      unobserve: () => this.unobserve(id),
+    };
   }
 
-  unsubscribe(id: string): void {
+  private unobserve(id: string): void {
     if (!this.subs.delete(id)) return;
-    this.send({ kind: "nostr", msg: ["CLOSE", id] });
-  }
-
-  /** One-shot LOCAL read: collect cached matches until EOSE, then close. No network. */
-  query(filters: Filter[] | Filter): Promise<Event[]> {
-    const list = Array.isArray(filters) ? filters : [filters];
-    return new Promise((resolve) => {
-      const collected: Event[] = [];
-      const { id } = this.subscribe(list, {
-        onEvent: (e) => collected.push(e),
-        onEose: () => {
-          this.unsubscribe(id);
-          resolve(collected);
-        },
-      });
-    });
+    this.send({ kind: "unobserve", subId: id });
   }
 
   /**
-   * One-shot read INCLUDING a bounded upstream fetch: the worker fetches from
-   * relays (outbox-routed), ingests, and resolves with the store's matches once
-   * the network is done (or the deadline elapses). Backs the imperative reads.
+   * One-shot interest: the worker satisfies it (cache + a bounded upstream fetch
+   * it decides on) and resolves with the matches. For non-React reference
+   * resolution; components should use the reactive hooks instead.
    */
-  fetch(filters: Filter[] | Filter): Promise<Event[]> {
-    const list = Array.isArray(filters) ? filters : [filters];
+  observeOnce(filters: Filter[]): Promise<Event[]> {
     const reqId = `q${this.counter++}`;
     return new Promise((resolve) => {
       this.pendingQueries.set(reqId, resolve);
-      this.send({ kind: "query", reqId, filters: list });
+      this.send({ kind: "observeOnce", reqId, filters });
     });
   }
 
@@ -85,24 +86,19 @@ export class LocalRelayClient {
   }
 
   /**
-   * Publish an already-signed event. The worker stores it locally and sends it
-   * upstream; this resolves with each relay's outcome (for publish diagnostics).
-   * Pass `relays` to target a specific set (retry); omit for default routing.
+   * Publish an already-signed event; resolves with each relay's outcome (for
+   * publish diagnostics). Retry is just another publish — the worker, not the
+   * app, decides how to reach dead relays.
    */
-  publish(event: Event, relays?: string[]): Promise<RelayPublishOutcome[]> {
+  publish(event: Event): Promise<RelayPublishOutcome[]> {
     const pubId = `p${this.counter++}`;
     return new Promise((resolve) => {
       this.pendingPublishes.set(pubId, resolve);
-      this.send({ kind: "publish", pubId, event, relays });
+      this.send({ kind: "publish", pubId, event });
     });
   }
 
-  /** Drop + rebuild specific relay connections (force-reset before a retry). */
-  resetRelays(relays: string[]): void {
-    this.send({ kind: "resetRelays", relays });
-  }
-
-  /** Live connection health of the user's relays. */
+  /** Live connection health of the user's relays (read-only observation). */
   relayHealth(): Promise<RelayHealth[]> {
     const reqId = `h${this.counter++}`;
     return new Promise((resolve) => {
@@ -115,46 +111,17 @@ export class LocalRelayClient {
     this.send({ kind: "setAccount", pubkey });
   }
 
-  /** Tell the worker which relays the user reads from (sync fallback + targets). */
+  /** The user's configured relays — a routing-policy input, not a command. */
   setUserRelays(relays: string[]): void {
     this.send({ kind: "setUserRelays", relays });
   }
 
-  /**
-   * Keep a scope warm from upstream relays — DECOUPLED from local `subscribe`.
-   * Ref-counted by filter-hash: many components syncing the same scope share a
-   * single upstream subscription, so presentation volume/churn doesn't multiply
-   * network load. Returns an `unsync` that drops the ref (stops upstream when the
-   * last consumer leaves).
-   */
-  sync(filters: Filter[]): { unsync: () => void } {
-    const key = generateFilterHash(filters, []);
-    this.syncRefs.set(key, (this.syncRefs.get(key) ?? 0) + 1);
-    if (this.syncRefs.get(key) === 1) this.send({ kind: "startSync", key, filters });
-    return {
-      unsync: () => {
-        const next = (this.syncRefs.get(key) ?? 1) - 1;
-        if (next <= 0) {
-          this.syncRefs.delete(key);
-          this.send({ kind: "stopSync", key });
-        } else {
-          this.syncRefs.set(key, next);
-        }
-      },
-    };
-  }
-
-  /** One-shot bounded backfill (pagination / ad-hoc). Ingests, then closes. */
-  fetchPage(filters: Filter[]): void {
-    this.send({ kind: "fetchPage", filters });
-  }
-
-  /** App backgrounded/suspended: worker closes all sockets (store kept). */
+  /** App backgrounded — a lifecycle hint; the worker decides what to do. */
   pause(): void {
     this.send({ kind: "pause" });
   }
 
-  /** App foregrounded: worker reconnects syncs + catches up. */
+  /** App foregrounded. */
   resume(): void {
     this.send({ kind: "resume" });
   }

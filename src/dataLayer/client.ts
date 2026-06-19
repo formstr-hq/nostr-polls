@@ -1,18 +1,15 @@
 /**
- * DataLayer — the thin, intent-based surface the UI talks to. It replaces
- * `nostrRuntime`: the app speaks in kinds + scope (via the hooks) and never sees
- * a relay. This class is the imperative core the hooks sit on; it wraps a
- * `LocalRelayClient` and a signer, and deliberately exposes nothing relay-shaped
- * beyond the local-reactive primitives.
+ * DataLayer — the intent-only surface the UI talks to. It replaces `nostrRuntime`.
  *
- * It is dependency-injected (client + sign), so the whole thing is testable in
- * jsdom over an in-memory channel — no Worker, no signerManager. The browser
- * wiring (spawn the worker, wire signerManager + lifecycle) lives in
- * `bootstrap.ts`.
+ * Load-bearing invariant: the app can only DECLARE INTERESTS (`observe` /
+ * `observeOnce`, and the `useEvents`/`useEvent` hooks built on them) and PUBLISH.
+ * There is no `fetch`/`sync`/`reconnect`/`resetRelays` — nothing here can cause
+ * the worker to open a connection on demand. The worker owns every connection
+ * decision from the union of active interests, so presentation scales
+ * independently of the network.
  *
- * NOTE: there is intentionally no generic `query(filters)` — see the design doc
- * §9. Reads are reactive (`subscribe` / the hooks); the only imperative read is
- * the id-addressed `fetchById`, which is unambiguous (an event exists or not).
+ * Dependency-injected (client + sign), so it's testable in jsdom over an
+ * in-memory channel. Browser wiring lives in `bootstrap.ts`.
  */
 import type { Event, Filter } from "../localRelay/core/types";
 import type { EventTemplate } from "nostr-tools";
@@ -44,176 +41,77 @@ export interface DataLayerDeps {
   sign: (template: EventTemplate) => Promise<Event>;
 }
 
+export interface ObserveOptions {
+  /** Pure store read — no network. The worker syncs upstream when false (default). */
+  localOnly?: boolean;
+}
+
+export interface ObserveHandle {
+  id: string;
+  /** Re-declare this interest with new filters (e.g. a wider window for paging). */
+  update: (filters: Filter[]) => void;
+  unobserve: () => void;
+}
+
 export class DataLayer {
   constructor(private deps: DataLayerDeps) {}
 
-  /** Local reactive read: cached replay → EOSE → live tail. Touches no network. */
-  subscribe(filters: Filter[], handlers: SubscribeHandlers): { id: string; unsubscribe: () => void } {
-    return this.deps.client.subscribe(filters, handlers);
+  /**
+   * Declare a standing interest: cache replay → EOSE → live tail via `handlers`,
+   * and (unless `localOnly`) the worker autonomously keeps the scope warm. This
+   * is the imperative form of `useEvents`, for non-React code (contexts). It does
+   * NOT command a fetch — it states what the app cares about; the worker decides
+   * the network. `update` re-declares with a wider window to paginate.
+   */
+  observe(filters: Filter[], handlers: SubscribeHandlers, options: ObserveOptions = {}): ObserveHandle {
+    return this.deps.client.observe(filters, handlers, options);
   }
 
   /**
-   * Declare that a scope should be kept warm from upstream relays — decoupled
-   * from `subscribe` and ref-counted by the worker, so presentation churn does
-   * not multiply network load. Returns `{ unsync }`.
+   * One-shot interest: resolve with the worker's matches once it has satisfied
+   * the scope (cache + whatever it chose to fetch). For non-React reference
+   * resolution; components use the reactive hooks. Not a network command.
    */
-  sync(filters: Filter[]): { unsync: () => void } {
-    return this.deps.client.sync(filters);
+  observeOnce(filters: Filter[]): Promise<Event[]> {
+    return this.deps.client.observeOnce(filters);
   }
 
-  /** One-shot bounded backfill (pagination); ingests upstream results, then closes. */
-  fetchPage(filters: Filter[]): void {
-    this.deps.client.fetchPage(filters);
-  }
-
-  /**
-   * Resolve a single event by id — local store first, then a bounded upstream
-   * fetch. Resolves `null` if nothing arrives before the deadline. The only
-   * imperative read on the surface (reactive twin: `useEvent`).
-   */
-  fetchById(id: string, deadlineMs = 8000): Promise<Event | null> {
-    return new Promise((resolve) => {
-      const filters: Filter[] = [{ ids: [id], limit: 1 }];
-      let settled = false;
-      let fetched = false;
-      let unsubscribe = () => {};
-      let timer: ReturnType<typeof setTimeout>;
-      const finish = (e: Event | null) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        unsubscribe();
-        resolve(e);
-      };
-      // Cached events replay BEFORE EOSE → resolve without ever touching the
-      // network. Only a genuine miss (empty EOSE) triggers the bounded upstream
-      // fetch, with the same subscription left open to catch the arrival.
-      unsubscribe = this.deps.client.subscribe(filters, {
-        onEvent: finish,
-        onEose: () => {
-          if (settled || fetched) return;
-          fetched = true;
-          this.deps.client.fetchPage(filters);
-        },
-      }).unsubscribe;
-      timer = setTimeout(() => finish(null), deadlineMs);
-    });
+  /** Resolve a single event by id (reactive twin: `useEvent`). */
+  async fetchById(id: string): Promise<Event | null> {
+    const events = await this.deps.client.observeOnce([{ ids: [id], limit: 1 }]);
+    return events[0] ?? null;
   }
 
   /**
-   * Sign a template, store it locally (so local subs see it instantly), and send
-   * it upstream — the one mutation entry point. Returns the signed event plus the
-   * per-relay publish outcome that feeds the diagnostics modal.
+   * Sign a template, store it locally (so local interests see it instantly), and
+   * send it upstream — the one mutation entry point. Returns the signed event plus
+   * the per-relay publish outcome that feeds the diagnostics modal. Retry is just
+   * another `publishEvent` — the worker, not the app, reaches dead relays.
    */
-  async publish(
-    template: EventTemplate
-  ): Promise<{ event: Event; result: PublishResult }> {
+  async publish(template: EventTemplate): Promise<{ event: Event; result: PublishResult }> {
     const event = await this.deps.sign(template);
     const outcomes = await this.deps.client.publish(event);
     return { event, result: toPublishResult(outcomes) };
   }
 
-  /**
-   * Re-send an already-signed event (publish-diagnostics "retry"). Pass the
-   * specific relays to retry; omit to use default routing.
-   */
-  async republish(event: Event, relays?: string[]): Promise<PublishResult> {
-    return toPublishResult(await this.deps.client.publish(event, relays));
+  /** Publish an already-signed event (used by nip17/lists + diagnostics retry). */
+  async publishEvent(event: Event): Promise<PublishResult> {
+    return toPublishResult(await this.deps.client.publish(event));
   }
 
-  /** Force-reset relay connections before retrying (clears stale sockets). */
-  resetRelays(relays: string[]): void {
-    this.deps.client.resetRelays(relays);
-  }
-
-  /** Live connection health of the user's relays (for a relay-health view). */
-  relayHealth(): Promise<RelayHealth[]> {
-    return this.deps.client.relayHealth();
-  }
-
-  /** Force a full reconnect of all upstream relays (drop sockets, re-sync). */
-  reconnect(): void {
-    this.deps.client.pause();
-    this.deps.client.resume();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Imperative escape hatch for NON-React code (contexts, helpers, nip17, etc.).
-  // Components should use the reactive hooks (useEvents/useEvent), not these.
-  // The `relays` args are accepted for drop-in compatibility but ignored — the
-  // worker owns relay routing (outbox).
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Watch events (cache + live + upstream) — the imperative form of `useEvents`,
-   * a drop-in for the old `nostrRuntime.subscribe`. `localOnly` skips the network;
-   * `fresh` forces an immediate upstream pull.
-   */
-  watch(
-    _relays: string[],
-    filters: Filter[],
-    options: { onEvent?: (e: Event) => void; onEose?: () => void; localOnly?: boolean; fresh?: boolean } = {}
-  ): { id: string; unsubscribe: () => void } {
-    const sub = this.deps.client.subscribe(filters, {
-      onEvent: options.onEvent ?? (() => {}),
-      onEose: options.onEose,
-    });
-    if (options.localOnly) return sub; // cache-only, no upstream
-    const warm = this.deps.client.sync(filters);
-    if (options.fresh) this.deps.client.fetchPage(filters);
-    return {
-      id: sub.id,
-      unsubscribe: () => {
-        sub.unsubscribe();
-        warm.unsync();
-      },
-    };
-  }
-
-  /** One-shot LOCAL snapshot (was the synchronous `nostrRuntime.query`; now async). */
-  query(filter: Filter | Filter[]): Promise<Event[]> {
-    return this.deps.client.query(filter);
-  }
-
-  /** One-shot read WITH a bounded upstream fetch (was `querySync`). */
-  querySync(_relays: string[], filter: Filter): Promise<Event[]> {
-    return this.deps.client.fetch([filter]);
-  }
-
-  /** First match from cache + a bounded upstream fetch (was `fetchOne`). */
-  async fetchOne(_relays: string[], filter: Filter): Promise<Event | null> {
-    const events = await this.deps.client.fetch([{ ...filter, limit: 1 }]);
-    return events[0] ?? null;
-  }
-
-  /** Resolve one event by id from cache + upstream (was `fetchBatched`). */
-  async fetchBatched(_relays: string[], id: string): Promise<Event | null> {
-    const events = await this.deps.client.fetch([{ ids: [id], limit: 1 }]);
-    return events[0] ?? null;
-  }
-
-  /** Local-store lookup by id (was the synchronous `nostrRuntime.get`; now async). */
-  async get(id: string): Promise<Event | undefined> {
-    const events = await this.deps.client.query([{ ids: [id], limit: 1 }]);
-    return events[0];
-  }
-
-  /** Add an event to the local store (optimistic / received-out-of-band). */
+  /** Add an event to the local store (optimistic / received out-of-band). No network. */
   addEvent(event: Event): void {
     this.deps.client.ingest([event]);
   }
 
-  /** Batch-add events to the local store. */
+  /** Batch-add events to the local store. No network. */
   addEvents(events: Event[]): void {
     this.deps.client.ingest(events);
   }
 
-  /**
-   * Publish an already-signed event and get per-relay outcomes (was
-   * `nostrRuntime.publish`). Use `publish(template)` for the sign+publish flow.
-   */
-  publishEvent(event: Event, relays?: string[]): Promise<RelayPublishOutcome[]> {
-    return this.deps.client.publish(event, relays);
+  /** Live connection health of the user's relays (read-only observation). */
+  relayHealth(): Promise<RelayHealth[]> {
+    return this.deps.client.relayHealth();
   }
 
   /** Active-account change: retarget scope (does NOT rehydrate the shared store). */
@@ -221,17 +119,17 @@ export class DataLayer {
     this.deps.client.setActiveAccount(pubkey);
   }
 
-  /** Relays the user reads from (upstream sync fallback + publish floor). */
+  /** Relays the user reads from — a routing-policy input, not a command. */
   setUserRelays(relays: string[]): void {
     this.deps.client.setUserRelays(relays);
   }
 
-  /** App backgrounded: worker closes all sockets, keeps the store + sync specs. */
+  /** App backgrounded — lifecycle hint; the worker decides what to do. */
   pause(): void {
     this.deps.client.pause();
   }
 
-  /** App foregrounded: worker reconnects the syncs. */
+  /** App foregrounded. */
   resume(): void {
     this.deps.client.resume();
   }

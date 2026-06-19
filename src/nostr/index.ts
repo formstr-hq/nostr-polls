@@ -1,8 +1,7 @@
 import { Event, EventTemplate, Filter, finalizeEvent, SimplePool } from "nostr-tools";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { nostrRuntime } from "../singletons";
+import { dataLayer } from "../dataLayer/client";
 import { signerManager } from "../singletons/Signer/SignerManager";
-import { getCachedOutboxRelays, getOutboxRelays } from "./OutboxService";
 import { withClientTag } from "../services/clientTagSettings";
 
 export const defaultRelays = [
@@ -30,20 +29,11 @@ export const profileSearchRelays = [
 
 export const fetchUserProfile = async (
   pubkey: string,
-  relays: string[] = defaultRelays
+  _relays: string[] = defaultRelays
 ) => {
-  // Use cached outbox relays if available (no extra round-trip on cache hit)
-  const cachedOutbox = getCachedOutboxRelays(pubkey);
-  const fetchRelays = cachedOutbox.length > 0
-    ? Array.from(new Set([...cachedOutbox, ...relays]))
-    : relays;
-
-  // Trigger background fetch of outbox relays so future calls benefit
-  if (cachedOutbox.length === 0) {
-    getOutboxRelays(pubkey); // fire-and-forget
-  }
-
-  return nostrRuntime.fetchOne(fetchRelays, { kinds: [0], authors: [pubkey] });
+  // Outbox routing now lives in the worker; just ask for the profile.
+  const profiles = await dataLayer.observeOnce([{ kinds: [0], authors: [pubkey] }]);
+  return profiles[0] ?? null;
 };
 
 export async function parseContacts(contactList: Event) {
@@ -63,10 +53,10 @@ export const fetchUserProfiles = async (
   _pool: SimplePool,
   relays: string[] = defaultRelays
 ) => {
-  let result = await nostrRuntime.querySync(relays, {
+  let result = await dataLayer.observeOnce([{
     kinds: [0],
     authors: pubkeys,
-  });
+  }]);
   return result;
 };
 
@@ -81,7 +71,7 @@ export const fetchReposts = async (
   }
 
   try {
-    const events = await nostrRuntime.querySync(relays, filters);
+    const events = await dataLayer.observeOnce([filters]);
     return events;
   } catch (err) {
     console.error("Error fetching reposts", err);
@@ -94,10 +84,10 @@ export const fetchEdits = async (
   _pool: SimplePool,
   relays: string[] = defaultRelays
 ) => {
-  const result = await nostrRuntime.querySync(relays, {
+  const result = await dataLayer.observeOnce([{
     kinds: [1010],
     "#e": eventIds,
-  });
+  }]);
   return result;
 };
 
@@ -107,9 +97,9 @@ export const fetchComments = async (
   relays: string[] = defaultRelays
 ) => {
   const [kind1, kind1111e, kind1111E] = await Promise.all([
-    nostrRuntime.querySync(relays, { kinds: [1], "#e": eventIds }),
-    nostrRuntime.querySync(relays, { kinds: [1111], "#e": eventIds } as any),
-    nostrRuntime.querySync(relays, { kinds: [1111], "#E": eventIds } as any),
+    dataLayer.observeOnce([{ kinds: [1], "#e": eventIds }]),
+    dataLayer.observeOnce([{ kinds: [1111], "#e": eventIds } as any]),
+    dataLayer.observeOnce([{ kinds: [1111], "#E": eventIds } as any]),
   ]);
   return [...kind1, ...kind1111e, ...kind1111E];
 };
@@ -119,10 +109,10 @@ export const fetchLikes = async (
   _pool: SimplePool,
   relays: string[] = defaultRelays
 ) => {
-  let result = await nostrRuntime.querySync(relays, {
+  let result = await dataLayer.observeOnce([{
     kinds: [7],
     "#e": eventIds,
-  });
+  }]);
   return result;
 };
 
@@ -131,10 +121,10 @@ export const fetchZaps = async (
   _pool: SimplePool,
   relays: string[] = defaultRelays
 ) => {
-  let result = await nostrRuntime.querySync(relays, {
+  let result = await dataLayer.observeOnce([{
     kinds: [9735],
     "#e": eventIds,
-  });
+  }]);
   return result;
 };
 

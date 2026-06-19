@@ -1,21 +1,20 @@
 /**
  * RelayService — the worker-side assembly of the entire local relay. Wires
- * EventDB + RelayCore (via WorkerHost) + Persistence + RelayPool + SyncEngine,
- * and implements the core policy:
+ * EventDB + RelayCore (via WorkerHost) + Persistence + RelayPool + SyncEngine.
  *
- *   A client REQ is served from the local store immediately (RelayCore replay +
- *   live tail) AND triggers an outbox-partitioned upstream fetch (SyncEngine)
- *   that streams verified events back into the store — which then flow to the
- *   live subscription. So one `subscribe` gives cache + network with no extra
- *   API surface.
+ * Core invariant: the main thread only DECLARES INTERESTS (observe/observeOnce)
+ * and PUBLISHES. This service owns every connection decision. It holds the set
+ * of standing interests and *reconciles* its upstream subscriptions from their
+ * union (deduped by filter-hash, outbox-routed) — so presentation churn never
+ * opens/closes sockets directly: adding/removing an interest is the only input,
+ * and the worker decides if/when/how to touch relays.
  *
- * It's platform-agnostic: Channel, SocketFactory, StorageAdapter, verify, and
- * clock are all injected, so the whole service is tested end-to-end over a fake
- * channel + FakeSocket. The actual Worker entry file (relay.worker.ts) is a thin
- * shell that constructs this with real platform pieces.
+ * Platform-agnostic: Channel, SocketFactory, StorageAdapter, verify, and clock
+ * are injected, so it's tested end-to-end over a fake channel + FakeSocket.
  */
 import type { Event, Filter } from "./core/types";
 import { EventDB } from "./core/EventDB";
+import { generateFilterHash } from "./core/matchFilter";
 import { Channel } from "./transport/channel";
 import { WorkerHost } from "./transport/WorkerHost";
 import { RelayPool } from "./sync/RelayPool";
@@ -40,8 +39,10 @@ export class RelayService {
   private sync: SyncEngine;
   private persistence: Persistence | null;
   private userRelays: string[] = [];
-  /** Deduped long-lived upstream subscriptions, keyed by filter-hash. */
-  private syncs = new Map<string, { filters: Filter[]; handle: SyncHandle | null }>();
+  /** Standing interests by subscription id (the worker's only network input). */
+  private interests = new Map<string, { filters: Filter[]; sync: boolean }>();
+  /** Live upstream subscriptions, deduped by filter-hash across interests. */
+  private upstream = new Map<string, { filters: Filter[]; handle: SyncHandle | null }>();
   private paused = false;
   private verify: (event: Event) => boolean;
   private now: () => number;
@@ -54,15 +55,13 @@ export class RelayService {
     this.host = new WorkerHost(opts.channel, this.db, {
       onSetUserRelays: (relays) => {
         this.userRelays = relays;
+        this.reconcile(); // new relays may let pending interests find a home
       },
-      // Local REQ does NOT touch the network — upstream sync is decoupled.
-      onStartSync: (key, filters) => this.startSync(key, filters),
-      onStopSync: (key) => this.stopSync(key),
-      onFetchPage: (filters) => this.fetchPage(filters),
-      onPublish: (pubId, event, relays) => this.publishUpstream(pubId, event, relays),
-      onResetRelays: (relays) => this.pool.resetRelays(relays),
+      onObserve: (subId, filters, sync) => this.observe(subId, filters, sync),
+      onUnobserve: (subId) => this.unobserve(subId),
+      onObserveOnce: (reqId, filters) => this.observeOnce(reqId, filters),
+      onPublish: (pubId, event) => this.publishUpstream(pubId, event),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
-      onQuery: (reqId, filters) => this.runQuery(reqId, filters),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
       // onSetAccount handled by the cutover wiring (retarget feeds); the shared
@@ -85,90 +84,108 @@ export class RelayService {
   }
 
   async stop(): Promise<void> {
-    for (const s of Array.from(this.syncs.values())) s.handle?.close();
-    this.syncs.clear();
+    for (const u of Array.from(this.upstream.values())) u.handle?.close();
+    this.upstream.clear();
+    this.interests.clear();
     this.pool.closeAll();
     await this.persistence?.stop();
   }
 
-  /** Outbox cache IS the store: parse the latest kind-10002 for this pubkey. */
-  private getWriteRelays(pubkey: string): string[] {
-    return this.relaysFromNip65(pubkey, "write");
+  // --- interests → autonomous upstream reconciliation -----------------------
+
+  /** Register/replace a standing interest, then reconcile upstream subscriptions. */
+  private observe(subId: string, filters: Filter[], sync: boolean): void {
+    this.interests.set(subId, { filters, sync });
+    this.reconcile();
   }
 
-  /** Inbox relays — where a recipient reads — for gossip delivery of mentions. */
-  private getReadRelays(pubkey: string): string[] {
-    return this.relaysFromNip65(pubkey, "read");
-  }
-
-  /** Parse a pubkey's latest kind-10002, returning the relays for one direction. */
-  private relaysFromNip65(pubkey: string, dir: "read" | "write"): string[] {
-    const [event] = this.db.query({ kinds: [10002], authors: [pubkey], limit: 1 });
-    if (!event) return [];
-    const out: string[] = [];
-    for (const tag of event.tags) {
-      if (tag[0] !== "r" || !tag[1]) continue;
-      // An unmarked "r" tag is both read and write.
-      if (!tag[2] || tag[2] === dir) out.push(tag[1]);
-    }
-    return out;
+  private unobserve(subId: string): void {
+    if (this.interests.delete(subId)) this.reconcile();
   }
 
   /**
-   * Publish a client event upstream with per-relay tracking. Targets are the
-   * author's write relays (outbox) ∪ the user's relays, plus the inbox relays of
-   * any p-tagged pubkey (gossip — so mentions/DMs actually reach recipients).
-   * An explicit `relays` list (retry) overrides routing. Always reports a result
-   * so the diagnostics UI never hangs.
+   * Bring live upstream subscriptions in line with the union of sync-interests,
+   * deduped by filter-hash so N components on the same scope share ONE upstream.
+   * The worker — not the app — decides what to open and close here.
    */
-  private publishUpstream(pubId: string, event: Event, explicitRelays?: string[]): void {
-    const targets = explicitRelays?.length
-      ? Array.from(new Set(explicitRelays))
-      : this.publishTargets(event);
-    this.pool.publish(targets, event, {
-      now: this.now,
-      onResult: (results) => this.host.postPublishResult(pubId, results),
-    });
-  }
-
-  private publishTargets(event: Event): string[] {
-    const targets = new Set<string>([...this.getWriteRelays(event.pubkey), ...this.userRelays]);
-    for (const tag of event.tags) {
-      if (tag[0] === "p" && tag[1]) {
-        for (const relay of this.getReadRelays(tag[1])) targets.add(relay);
+  private reconcile(): void {
+    if (this.paused) return;
+    const desired = new Map<string, Filter[]>();
+    for (const { filters, sync } of Array.from(this.interests.values())) {
+      if (!sync) continue;
+      const key = generateFilterHash(filters, []);
+      if (!desired.has(key)) desired.set(key, filters);
+    }
+    // Open newly-wanted scopes.
+    for (const [key, filters] of Array.from(desired.entries())) {
+      if (!this.upstream.has(key)) {
+        this.upstream.set(key, { filters, handle: this.openSync(filters) });
       }
     }
-    return Array.from(targets);
-  }
-
-  /** Live connection health for the user's relays (configured + any connected). */
-  private relayHealth() {
-    const known = Array.from(new Set([...this.userRelays]));
-    const fromPool = this.pool.relayHealth();
-    const seen = new Set(fromPool.map((h) => h.relay));
-    // Include configured relays we haven't opened yet, so the user sees them all.
-    const missing = known
-      .filter((r) => !seen.has(r))
-      .map((relay) => ({ relay, connected: false, connecting: false, reconnecting: false }));
-    return [...fromPool, ...missing];
+    // Drop scopes no interest wants anymore.
+    for (const [key, entry] of Array.from(this.upstream.entries())) {
+      if (!desired.has(key)) {
+        entry.handle?.close();
+        this.upstream.delete(key);
+      }
+    }
   }
 
   /**
-   * One-shot read: fire a bounded upstream fetch for each filter (verified events
-   * stream into the store), wait for all to reach EOSE, then return the store's
-   * matches — local cache ∪ freshly-fetched, deduped by the store. Backs the
-   * imperative reads (query / fetchOne / fetchBatched / get).
+   * Open a standing upstream subscription for a scope. Author-scoped filters are
+   * outbox-partitioned via SyncEngine; author-less ones hit the user's relays.
    */
-  private async runQuery(reqId: string, filters: Filter[]): Promise<void> {
-    await Promise.all(filters.map((filter) => this.fetchOnce(filter)));
+  private openSync(filters: Filter[]): SyncHandle {
+    const handles: SyncHandle[] = [];
+    for (const filter of filters) {
+      const kinds = filter.kinds ?? [];
+      if (filter.authors && filter.authors.length) {
+        handles.push(
+          this.sync.fetch({
+            kinds,
+            authors: filter.authors,
+            userRelays: this.userRelays,
+            since: filter.since,
+            until: filter.until,
+            limit: filter.limit,
+          })
+        );
+      } else if (this.userRelays.length) {
+        const id = this.pool.subscribe(this.userRelays, [filter], {
+          onEvent: (event) => {
+            if (this.verify(event)) this.host.ingest([event]);
+          },
+        });
+        handles.push({ close: () => this.pool.unsubscribe(id) });
+      }
+    }
+    return { close: () => handles.forEach((h) => h.close()) };
+  }
+
+  /**
+   * One-shot interest: satisfy it from cache + a bounded upstream fetch (the
+   * worker decides routing), then reply with the store's matches. Used for
+   * non-React reference resolution; not an app-controlled network command.
+   */
+  private async observeOnce(reqId: string, filters: Filter[]): Promise<void> {
+    // Worker policy: if the store already satisfies the interest, answer from
+    // cache without touching the network. Otherwise do a bounded fetch.
+    const cached = this.collect(filters);
+    if (cached.length === 0) {
+      await Promise.all(filters.map((filter) => this.fetchOnce(filter)));
+    }
+    this.host.postQueryResult(reqId, this.collect(filters));
+  }
+
+  private collect(filters: Filter[]): Event[] {
     const collected = new Map<string, Event>();
     for (const filter of filters) {
       for (const event of this.db.query(filter)) collected.set(event.id, event);
     }
-    this.host.postQueryResult(reqId, Array.from(collected.values()));
+    return Array.from(collected.values());
   }
 
-  /** Upstream fetch for one filter that resolves on its combined EOSE (or deadline). */
+  /** Bounded upstream fetch for one filter, resolving on its combined EOSE. */
   private fetchOnce(filter: Filter): Promise<void> {
     return new Promise((resolve) => {
       if (this.paused) return resolve();
@@ -204,81 +221,83 @@ export class RelayService {
     });
   }
 
-  /** Start (or no-op if already running) a deduped upstream sync for a scope. */
-  private startSync(key: string, filters: Filter[]): void {
-    if (this.syncs.has(key)) return; // already syncing this scope
-    const handle = this.paused ? null : this.openFetch(filters, false);
-    this.syncs.set(key, { filters, handle });
+  // --- writes ---------------------------------------------------------------
+
+  /**
+   * Publish a client event upstream with per-relay tracking. Targets are the
+   * author's write relays (outbox) ∪ the user's relays, plus the inbox relays of
+   * any p-tagged pubkey (gossip). The worker owns routing; retry is just another
+   * publish. Always reports a result so the diagnostics UI never hangs.
+   */
+  private publishUpstream(pubId: string, event: Event): void {
+    this.pool.publish(this.publishTargets(event), event, {
+      now: this.now,
+      onResult: (results) => this.host.postPublishResult(pubId, results),
+    });
   }
 
-  private stopSync(key: string): void {
-    const entry = this.syncs.get(key);
-    if (!entry) return;
-    entry.handle?.close();
-    this.syncs.delete(key);
+  private publishTargets(event: Event): string[] {
+    const targets = new Set<string>([...this.getWriteRelays(event.pubkey), ...this.userRelays]);
+    for (const tag of event.tags) {
+      if (tag[0] === "p" && tag[1]) {
+        for (const relay of this.getReadRelays(tag[1])) targets.add(relay);
+      }
+    }
+    return Array.from(targets);
   }
 
-  /** One-shot bounded backfill: closes each bucket after its EOSE. */
-  private fetchPage(filters: Filter[]): void {
-    if (this.paused) return;
-    this.openFetch(filters, true);
-  }
+  // --- lifecycle ------------------------------------------------------------
 
-  /** App suspended: close every socket but keep the store + sync specs. */
+  /** App backgrounded: close every socket, keep the store + interests. */
   private pause(): void {
     this.paused = true;
-    for (const entry of Array.from(this.syncs.values())) {
+    for (const entry of Array.from(this.upstream.values())) {
       entry.handle?.close();
       entry.handle = null;
     }
+    this.upstream.clear();
     this.pool.closeAll();
   }
 
-  /** App resumed: reconnect each sync from its stored spec. */
+  /** App foregrounded: reconcile reopens the upstream from standing interests. */
   private resume(): void {
     if (!this.paused) return;
     this.paused = false;
-    for (const entry of Array.from(this.syncs.values())) {
-      entry.handle = this.openFetch(entry.filters, false);
-    }
+    this.reconcile();
   }
 
-  /**
-   * Open upstream fetches for a set of filters. Author-scoped filters are
-   * outbox-partitioned via SyncEngine; author-less ones (ids/tags/global) hit
-   * the user's relays directly. When `oneShot`, each bucket closes on its EOSE.
-   */
-  private openFetch(filters: Filter[], oneShot: boolean): SyncHandle {
-    const handles: SyncHandle[] = [];
-    for (const filter of filters) {
-      const kinds = filter.kinds ?? [];
-      if (filter.authors && filter.authors.length) {
-        const handle: SyncHandle = this.sync.fetch(
-          {
-            kinds,
-            authors: filter.authors,
-            userRelays: this.userRelays,
-            since: filter.since,
-            until: filter.until,
-            limit: filter.limit,
-          },
-          oneShot ? () => handle.close() : undefined
-        );
-        handles.push(handle);
-      } else if (this.userRelays.length) {
-        const id = this.pool.subscribe(
-          this.userRelays,
-          [filter],
-          {
-            onEvent: (event) => {
-              if (this.verify(event)) this.host.ingest([event]);
-            },
-            onEose: oneShot ? () => this.pool.unsubscribe(id) : undefined,
-          }
-        );
-        handles.push({ close: () => this.pool.unsubscribe(id) });
-      }
+  // --- helpers --------------------------------------------------------------
+
+  /** Outbox cache IS the store: parse the latest kind-10002 for this pubkey. */
+  private getWriteRelays(pubkey: string): string[] {
+    return this.relaysFromNip65(pubkey, "write");
+  }
+
+  /** Inbox relays — where a recipient reads — for gossip delivery of mentions. */
+  private getReadRelays(pubkey: string): string[] {
+    return this.relaysFromNip65(pubkey, "read");
+  }
+
+  /** Parse a pubkey's latest kind-10002, returning the relays for one direction. */
+  private relaysFromNip65(pubkey: string, dir: "read" | "write"): string[] {
+    const [event] = this.db.query({ kinds: [10002], authors: [pubkey], limit: 1 });
+    if (!event) return [];
+    const out: string[] = [];
+    for (const tag of event.tags) {
+      if (tag[0] !== "r" || !tag[1]) continue;
+      // An unmarked "r" tag is both read and write.
+      if (!tag[2] || tag[2] === dir) out.push(tag[1]);
     }
-    return { close: () => handles.forEach((h) => h.close()) };
+    return out;
+  }
+
+  /** Live connection health for the user's relays (configured + any connected). */
+  private relayHealth() {
+    const fromPool = this.pool.relayHealth();
+    const seen = new Set(fromPool.map((h) => h.relay));
+    const missing = Array.from(new Set(this.userRelays))
+      .filter((r) => !seen.has(r))
+      .map((relay) => ({ relay, connected: false, connecting: false, reconnecting: false }));
+    return [...fromPool, ...missing];
   }
 }

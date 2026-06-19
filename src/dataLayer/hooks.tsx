@@ -4,21 +4,20 @@
  * deduped, newest-first list with pagination + a "new items" buffer — they never
  * build a filter or name a relay.
  *
- * How it maps to the worker relay:
- *   - `subscribe(baseFilters)` → cached replay + EOSE + live tail (no network).
- *   - `sync(syncFilters)`      → keep the scope warm upstream (deduped, ref-counted).
- *   - `fetchPage(window)`      → bounded older backfill on loadOlder().
- * Events ingested upstream flow back through the same local subscription.
+ * How it maps to the worker relay: each hook declares a single `observe`
+ * interest (cache replay + live tail + the worker's autonomous upstream sync).
+ * Pagination ("load older") just re-declares the same interest with a larger
+ * window — still declarative; the worker decides if/when to fetch more. Nothing
+ * here commands the network.
  */
 import React from "react";
 import type { Event } from "../localRelay/core/types";
-import { DataLayer, getDataLayer } from "./client";
+import { DataLayer, ObserveHandle, getDataLayer } from "./client";
 import { Scope, ScopeUser, buildFilters, scopeHasInput } from "./scope";
 import { assembleFeed } from "./feed";
 import { isFeedRoot } from "./kinds";
 
-const WARM_LIMIT = 200; // initial upstream window kept warm per scope
-const PAGE_LIMIT = 100; // older backfill page size
+const PAGE = 100; // window grows by this many events per "load older"
 
 interface DataLayerContextValue {
   dataLayer: DataLayer;
@@ -90,6 +89,8 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
   const pendingRef = React.useRef(new Map<string, Event>());
   const eosedRef = React.useRef(false);
   const topRef = React.useRef(0); // created_at of the newest currently-displayed item
+  const handleRef = React.useRef<ObserveHandle | null>(null);
+  const limitRef = React.useRef(PAGE); // current window size (grows on loadOlder)
 
   // Stable key so the effect re-runs only on a real scope/kinds change.
   const kindsKey = kinds.join(",");
@@ -127,17 +128,16 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
     pendingRef.current = new Map();
     eosedRef.current = false;
     topRef.current = 0;
+    limitRef.current = PAGE;
     setItems([]);
     setNewCount(0);
     setLoading(true);
 
     if (!scopeHasInput(scope, user)) {
       setLoading(false);
+      handleRef.current = null;
       return; // nothing to show (e.g. logged out / empty follows)
     }
-
-    const baseFilters = buildFilters(kinds, scope, user); // local: everything in store
-    const warmFilters = buildFilters(kinds, scope, user, { limit: WARM_LIMIT }); // upstream
 
     const onEvent = (e: Event) => {
       allRef.current.set(e.id, e);
@@ -153,7 +153,8 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
       }
     };
 
-    const sub = dataLayer.subscribe(baseFilters, {
+    // One declarative interest: cache + live + the worker's autonomous sync.
+    const handle = dataLayer.observe(buildFilters(kinds, scope, user, { limit: limitRef.current }), {
       onEvent,
       onEose: () => {
         eosedRef.current = true;
@@ -161,11 +162,11 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
         setLoading(false);
       },
     });
-    const warm = dataLayer.sync(warmFilters);
+    handleRef.current = handle;
 
     return () => {
-      sub.unsubscribe();
-      warm.unsync();
+      handle.unobserve();
+      handleRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataLayer, kindsKey, scopeKey, follows, wot, feedRootsOnly]);
@@ -177,12 +178,12 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
   }, [recompute]);
 
   const loadOlder = React.useCallback(() => {
-    const oldest = items[items.length - 1]?.created_at;
-    const window = oldest ? { until: oldest - 1, limit: PAGE_LIMIT } : { limit: PAGE_LIMIT };
-    const page = buildFilters(kinds, scope, user, window);
-    if (page.length) dataLayer.fetchPage(page);
+    // Widen the interest's window — declarative; the worker fetches more if it
+    // sees fit. Re-replays cached matches (deduped) + extends the upstream sync.
+    limitRef.current += PAGE;
+    handleRef.current?.update(buildFilters(kinds, scope, user, { limit: limitRef.current }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataLayer, items, kindsKey, scopeKey, follows, wot]);
+  }, [kindsKey, scopeKey, follows, wot]);
 
   return { items, newCount, showNew, loadOlder, loading };
 }
@@ -201,15 +202,16 @@ export function useEvent(id?: string): Event | undefined {
       return;
     }
     let alive = true;
-    const sub = dataLayer.subscribe([{ ids: [id], limit: 1 }], {
+    // One interest by id: cache hit replays immediately; if missing, the worker
+    // fetches it and the value updates when it arrives.
+    const handle = dataLayer.observe([{ ids: [id], limit: 1 }], {
       onEvent: (e) => {
         if (alive) setEvent(e);
       },
     });
-    dataLayer.fetchPage([{ ids: [id], limit: 1 }]); // pull from upstream if not cached
     return () => {
       alive = false;
-      sub.unsubscribe();
+      handle.unobserve();
     };
   }, [id, dataLayer]);
 

@@ -53,11 +53,11 @@ describe("DataLayer", () => {
     ]);
   });
 
-  it("republish reports a rejection reason from the relay", async () => {
+  it("publishEvent reports a rejection reason from the relay", async () => {
     const { f, dataLayer } = await wire();
     const ev = makeEvent({ id: "r".repeat(64), kind: 1, pubkey: "me" });
 
-    const pending = dataLayer.republish(ev, ["wss://u1"]);
+    const pending = dataLayer.publishEvent(ev);
     await settle();
     const sock = f.last("wss://u1");
     sock.open();
@@ -70,8 +70,8 @@ describe("DataLayer", () => {
 
   it("relayHealth reports configured + connected relays", async () => {
     const { f, dataLayer } = await wire();
-    // Open a sync so a connection exists for wss://u1.
-    dataLayer.sync([{ kinds: [1], authors: ["alice"] }]);
+    // An interest gives the worker a reason to connect to wss://u1.
+    dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });
     await settle();
     f.last("wss://u1").open();
 
@@ -92,20 +92,25 @@ describe("DataLayer", () => {
   it("fetchById fills a cold miss from upstream, then resolves", async () => {
     const { f, dataLayer } = await wire();
 
-    const promise = dataLayer.fetchById("m".repeat(64), 5000);
+    const promise = dataLayer.fetchById("m".repeat(64));
     await settle();
 
-    const sock = f.last("wss://u1"); // fetchPage opened an upstream read
+    const sock = f.last("wss://u1"); // the worker opened an upstream read
     sock.open();
     const subId = reqOn(sock)[0][1];
     sock.emit(["EVENT", subId, makeEvent({ id: "m".repeat(64), kind: 1, pubkey: "bob" })]);
+    sock.emit(["EOSE", subId]);
 
     expect((await promise)?.id).toBe("m".repeat(64));
   });
 
-  it("fetchById resolves null when nothing arrives before the deadline", async () => {
-    const { dataLayer } = await wire();
-    const result = await dataLayer.fetchById("z".repeat(64), 30);
-    expect(result).toBeNull();
+  it("fetchById resolves null when the upstream returns nothing", async () => {
+    const { f, dataLayer } = await wire();
+    const promise = dataLayer.fetchById("z".repeat(64));
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    sock.emit(["EOSE", reqOn(sock)[0][1]]); // relay has it not
+    expect(await promise).toBeNull();
   });
 });

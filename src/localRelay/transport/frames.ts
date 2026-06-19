@@ -1,47 +1,53 @@
 /**
- * Envelope types for the Worker boundary. The payload is literal NIP-01
- * (`ClientMessage`/`RelayMessage`) so RelayCore stays reusable behind a real
- * WebSocket; control frames (account switch, NIP-42 sign RPC) ride alongside in
- * a tagged envelope so they never collide with NIP-01 messages.
+ * Envelope types for the Worker boundary.
+ *
+ * Architectural invariant (load-bearing): the main thread can only DECLARE
+ * INTERESTS and PUBLISH. It has no verb that means "fetch / open / reconnect /
+ * reset" — the worker owns every connection decision based on the union of
+ * active interests and its own affordances. So presentation scales independently
+ * of the network: registering/dropping interests is the only input, and the
+ * worker decides if/when/how to touch relays.
+ *
+ * The FromWorker `nostr` payload is literal NIP-01 (`RelayMessage`) so the same
+ * client code could front a real relay; control frames ride alongside in a
+ * tagged envelope.
  */
 import type { EventTemplate } from "nostr-tools";
-import type { Event } from "../core/types";
+import type { Event, Filter } from "../core/types";
 import type { ClientMessage, RelayMessage } from "../core/protocol";
 import type { RelayPublishOutcome, RelayHealth } from "../sync/RelayPool";
 
-import type { Filter } from "../core/types";
-
-/** Main thread → Worker. */
+/** Main thread → Worker. Interests + publish + config/lifecycle only. */
 export type ToWorker =
-  | { kind: "nostr"; msg: ClientMessage }
+  // --- declarative interests (the ONLY way the app influences reads) ---
+  /**
+   * Register/replace a standing interest. The worker serves cache + live tail
+   * for `subId`, and — unless `sync` is false — autonomously keeps the scope
+   * warm from relays (it decides which/when). Re-sending the same `subId` with
+   * a wider window is how pagination ("load older") works: still declarative.
+   */
+  | { kind: "observe"; subId: string; filters: Filter[]; sync: boolean }
+  /** Drop a standing interest (worker reconciles its connections). */
+  | { kind: "unobserve"; subId: string }
+  /**
+   * One-shot interest: the worker satisfies it per its own policy and replies
+   * with the store matches (queryResult). For non-React reference resolution.
+   */
+  | { kind: "observeOnce"; reqId: string; filters: Filter[] }
+  // --- writes ---
+  /** Publish a signed event; worker routes + tracks per-relay outcome. Retry =
+   *  publish again (the worker, not the app, handles dead relays). */
+  | { kind: "publish"; pubId: string; event: Event }
+  /** Add events to the local store without publishing upstream (optimistic). */
+  | { kind: "ingest"; events: Event[] }
+  // --- config / observation / lifecycle (not network commands) ---
   | { kind: "setAccount"; pubkey: string | null }
   | { kind: "setUserRelays"; relays: string[] }
   | { kind: "signResult"; reqId: string; event: Event | null }
-  // --- publish with diagnostics ---
-  /**
-   * Publish a signed event: store locally AND send upstream, tracking each
-   * relay's outcome. `relays` overrides the default outbox∪user routing (used by
-   * retry to hit specific relays). Worker replies with a `publishResult`.
-   */
-  | { kind: "publish"; pubId: string; event: Event; relays?: string[] }
-  /** Drop + rebuild specific relay connections (force-reset before a retry). */
-  | { kind: "resetRelays"; relays: string[] }
-  /** Request the live connection health of the user's relays. */
   | { kind: "relayHealth"; reqId: string }
-  /** One-shot read: local matches + a bounded upstream fetch, returns when done. */
-  | { kind: "query"; reqId: string; filters: Filter[] }
-  /** Add events to the local store without publishing upstream (optimistic/import). */
-  | { kind: "ingest"; events: Event[] }
-  // --- upstream sync (decoupled from local REQs) ---
-  /** Maintain a deduped, long-lived upstream subscription for a scope. */
-  | { kind: "startSync"; key: string; filters: Filter[] }
-  | { kind: "stopSync"; key: string }
-  /** One-shot bounded backfill (pagination / ad-hoc); ingests, then closes. */
-  | { kind: "fetchPage"; filters: Filter[] }
-  // --- lifecycle ---
-  /** App backgrounded/suspended: close all sockets, keep the store + sync specs. */
+  /** App backgrounded/foregrounded — a lifecycle hint; the worker decides what
+   *  to do (it cannot observe page visibility itself). */
   | { kind: "pause" }
-  /** App foregrounded: reconnect syncs + bounded catch-up. */
   | { kind: "resume" };
 
 /** Worker → main thread. */
