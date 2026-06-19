@@ -239,15 +239,94 @@ Migrating ~114 sites is mechanical but wide: each `subscribe(relays, filters, �
 ### Cutover steps (one branch)
 1. Build `src/localRelay/` (core + storage + sync + transport + worker) with full tests — green before wiring. **Done.**
 2. Build `src/dataLayer/` — kind registry (`kinds.ts`), scope→filters (`scope.ts`), feed assembly (`feed.ts`), all unit-tested. **Done.**
-3. `src/dataLayer/client.ts`: bootstrap singleton — spawn the worker, construct `LocalRelayClient` + `SignerBridge` (answers worker sign-RPC via `signerManager`), wire `setUserRelays` / `setActiveAccount`, and pause/resume on app visibility/suspend.
-4. `DataLayerProvider` + `useEvents` / `useEvent` hooks over the client (reactive snapshot + live tail + `loadOlder`/`newCount`).
-5. Migrate the call sites: feeds → `useEvents`; targeted reads → `dataLayer.subscribe`; imperative reads → `await dataLayer.query()` / `fetchById`. Rewrite the 4 feed hooks (`useFollowingNotes`, `useDiscoverNotes`, `HomeFeed`, `PollFeed`) and delete their merge state.
-6. Move `OutboxService` / WoT / nip17 relay caches off `localStorage` (outbox now lives in the worker store as kind-10002; WoT/cursors move to a small per-account IDB namespace) with one-time migration-on-first-run.
-7. Delete `nostrRuntime`, `SubscriptionManager`, and the old in-memory `EventStore`.
-8. Move WoT aggregation into a worker + add the `subscribeToContacts` timeout.
+3. `src/dataLayer/client.ts` + `bootstrap.ts`: bootstrap singleton — spawn the worker, construct `LocalRelayClient` + signer bridge (answers worker sign-RPC via `signerManager`), wire `setUserRelays` / `setActiveAccount`, and pause/resume on app visibility/suspend. **Done.**
+4. `DataLayerProvider` + `useEvents` / `useEvent` hooks over the client (reactive snapshot + live tail + `loadOlder`/`newCount`). **Done.**
+5. Per-relay publish diagnostics + relay health surfaced from the worker. **Done.**
+6. **Delete the shadow layer (see §9a):** `nostrRuntime/` (incl. `EventStore`, `SubscriptionManager`, dup utils) and `nostr/requestThrottler.ts`, plus the throttle/batch/merge wirings that fed them. Mostly red diff.
+7. Migrate the survivors: feeds → `useEvents`; targeted reads → `dataLayer.subscribe`; imperative reference resolution → `dataLayer.fetchById`; publishes → `dataLayer.publish` (rewire `usePublishDiagnostic`); `RelayHealthContext` → `dataLayer.relayHealth()`. Rewrite the 4 feed hooks and delete their merge state.
+8. Move `OutboxService` routing into the worker; drop `dm_cache_*` localStorage of decrypted rumors; one-time migration-on-first-run for any caches we keep.
+
+**Post-cutover fast-follow (separate change):** WoT aggregation → its own worker as a relay client (see §9b) + the `subscribeToContacts` timeout. Requires the relay worker to become multi-client.
 
 ### Risk of big-bang (acknowledged)
 One large branch touching ~62 files with no facade cushion — every `nostrRuntime` site is rewritten, not preserved. Mitigations: the worker relay + data layer are fully unit-tested *before* any wiring; the migration is mechanical and uniform (kinds+scope or `await`); and the thin surface is small enough to review exhaustively. The payoff for the higher churn is that no NIP-01/relay concepts survive into the UI, so the class of bugs we're fixing can't reappear.
+
+---
+
+## 9a. Cutover inventory — what dies / changes / stays
+
+The introspection reframes the cutover: it is **mostly deletion**. `src/nostrRuntime/`
+is a main-thread reimplementation of what `src/localRelay/` already does (tested),
+and a layer of throttle/batch/merge machinery exists *only* because there was no
+real store or pool. Deleting `nostrRuntime` is what forces that machinery to die
+with it — a reason **not** to preserve a facade.
+
+### DIES (replaced by the tested worker; net ~1,900+ lines removed)
+| Old (main thread) | Lines | Replaced by |
+|---|---|---|
+| `nostrRuntime/index.ts` | 642 | `RelayService` + `LocalRelayClient` + `DataLayer` |
+| `nostrRuntime/EventStore.ts` | 384 | `localRelay/core/EventDB.ts` |
+| `nostrRuntime/SubscriptionManager.ts` | 484 | `RelayPool` + `RelayConnection` + `SyncEngine` |
+| `nostrRuntime/utils/filterUtils.ts` | 173 | `core/matchFilter.ts` |
+| `nostrRuntime/utils/eventValidation.ts` | 74 | `core/eventValidation.ts` |
+| `nostrRuntime/EventRelayMap.ts` + `types.ts` | 146 | worker-side tracking + `frames` |
+| `nostr/requestThrottler.ts` (`Throttler`) | ~ | worker filter-hash dedup + reactive store + ref-counted `sync` |
+
+- **Throttled queues are obsolete.** `Throttler` (batching profiles/comments/likes/
+  zaps on a `setInterval`, wired in `CommentSection`, `Notes`, `app-context`,
+  `App.tsx`) and `MetadataProvider`'s `setInterval` batch loop hand-roll dedup +
+  batching the worker now does natively. They become plain `useEvent`/`useEvents`.
+- **Feed merge bookkeeping collapses.** `displayedIdsRef` / `knownIdsRef` /
+  `version` in `useFollowingNotes`, `useDiscoverNotes`, `HomeFeed`, `PollFeed` is
+  owned by `useEvents` (assembleFeed + new-items buffer). Those hooks shrink to a
+  few lines.
+
+### CHANGES (re-point, keep behaviour)
+- **RelayHealthContext** → `getActiveRelays()` ⇒ `dataLayer.relayHealth()`;
+  `reconnect()` ⇒ resume/reconnect frame. Its "auto-reconnect on tab return" is
+  already covered by the bootstrap's visibility pause/resume, so it simplifies.
+  `RelayAnalytics`/`RelaySettings` keep working, now fed by real worker state.
+- **OutboxService** (295 lines, localStorage cache) → routing moves into the
+  worker (reads kind-10002 from the store; `getNip65InboxRelays` ⇒ `publishTargets`).
+  The main-thread copy largely dies.
+- **Publish diagnostics** (`utils/publish.ts`, `usePublishDiagnostic`, 12 publish
+  sites) → `dataLayer.publish` / `republish` / `resetRelays` (already built;
+  returns the same `PublishResult` shape `PublishDiagnosticModal` consumes).
+- **DM context** → encrypted gift wraps (1059) from the worker store; decrypt to
+  memory only; drop the `dm_cache_*` localStorage of decrypted rumors.
+
+### STAYS (genuinely presentation / keys)
+`SignerManager` (signs; NIP-42 bridge to worker), NIP-17 decrypt-to-memory, WoT
+aggregation logic (see §9b — moves off main thread but stays app-side), and all
+UI/render/scroll/search.
+
+## 9b. WoT aggregation → its own worker (post-cutover fast-follow)
+
+WoT is a *consumer* of the relay, not part of it: it reads kind-3 and produces a
+derived `Set<pubkey>` (+ scores) used for app-specific things (network scope in the
+feeds, moderation in `reports-context`). Today it's aggregated on the main thread in
+`lists-context.tsx` (`subscribeToContacts` → union, localStorage-cached) and exposed
+as `user.webOfTrust` — and that main-thread union is a known initial-load lag source.
+
+**Target design:**
+- A **dedicated WoT worker**, kept *out* of the portable relay core (other apps may
+  not want WoT).
+- It is **just another client of the relay worker**, speaking the `LocalRelayClient`
+  protocol over a `MessageChannel` port the main thread brokers between the two
+  workers. It subscribes to `{kinds:[3], authors: follows}`, computes the union +
+  follower-count scores, and posts only the **compact Set/score-map** to the main
+  thread → `user.webOfTrust` → `scope`. **Kind-3 events never touch the main thread**,
+  and the relay stays WoT-agnostic.
+- **Prerequisite:** the relay worker becomes **multi-client** — per-connection session
+  state (each its own REQ/sub registry) over the shared `EventDB` + sync. A clean,
+  general capability (a relay serves many clients), not WoT-specific glue.
+
+**Sequencing:** *after* the nostrRuntime cutover, as a focused, independently-verifiable
+change. During the cutover, `lists-context` keeps producing `webOfTrust` as today
+(sourcing kind-3 through the new layer, union still on main thread); consumers are
+unchanged because it stays a `Set` on `user`. Then extract — the lag fix lands without
+entangling it in ~1,900 lines of deletion. Also add the `subscribeToContacts` timeout
+in this step.
 
 ---
 
