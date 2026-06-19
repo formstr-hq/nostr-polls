@@ -29,6 +29,7 @@ export class LocalRelayClient {
   private subs = new Map<string, Sub>();
   private pendingPublishes = new Map<string, (results: RelayPublishOutcome[]) => void>();
   private pendingHealth = new Map<string, (relays: RelayHealth[]) => void>();
+  private pendingQueries = new Map<string, (events: Event[]) => void>();
   private syncRefs = new Map<string, number>();
   private counter = 0;
 
@@ -49,7 +50,7 @@ export class LocalRelayClient {
     this.send({ kind: "nostr", msg: ["CLOSE", id] });
   }
 
-  /** One-shot read: collect cached + streamed matches until EOSE, then close. */
+  /** One-shot LOCAL read: collect cached matches until EOSE, then close. No network. */
   query(filters: Filter[] | Filter): Promise<Event[]> {
     const list = Array.isArray(filters) ? filters : [filters];
     return new Promise((resolve) => {
@@ -62,6 +63,25 @@ export class LocalRelayClient {
         },
       });
     });
+  }
+
+  /**
+   * One-shot read INCLUDING a bounded upstream fetch: the worker fetches from
+   * relays (outbox-routed), ingests, and resolves with the store's matches once
+   * the network is done (or the deadline elapses). Backs the imperative reads.
+   */
+  fetch(filters: Filter[] | Filter): Promise<Event[]> {
+    const list = Array.isArray(filters) ? filters : [filters];
+    const reqId = `q${this.counter++}`;
+    return new Promise((resolve) => {
+      this.pendingQueries.set(reqId, resolve);
+      this.send({ kind: "query", reqId, filters: list });
+    });
+  }
+
+  /** Add events to the local store without publishing upstream (optimistic/import). */
+  ingest(events: Event[]): void {
+    if (events.length) this.send({ kind: "ingest", events });
   }
 
   /**
@@ -180,6 +200,15 @@ export class LocalRelayClient {
       if (resolve) {
         this.pendingHealth.delete(m.reqId);
         resolve(m.relays);
+      }
+      return;
+    }
+
+    if (m.kind === "queryResult") {
+      const resolve = this.pendingQueries.get(m.reqId);
+      if (resolve) {
+        this.pendingQueries.delete(m.reqId);
+        resolve(m.events);
       }
       return;
     }

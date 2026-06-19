@@ -28,6 +28,10 @@ export type ToWorker =
   | { kind: "resetRelays"; relays: string[] }
   /** Request the live connection health of the user's relays. */
   | { kind: "relayHealth"; reqId: string }
+  /** One-shot read: local matches + a bounded upstream fetch, returns when done. */
+  | { kind: "query"; reqId: string; filters: Filter[] }
+  /** Add events to the local store without publishing upstream (optimistic/import). */
+  | { kind: "ingest"; events: Event[] }
   // --- upstream sync (decoupled from local REQs) ---
   /** Maintain a deduped, long-lived upstream subscription for a scope. */
   | { kind: "startSync"; key: string; filters: Filter[] }
@@ -46,6 +50,7 @@ export type FromWorker =
   | { kind: "signRequest"; reqId: string; template: EventTemplate }
   | { kind: "publishResult"; pubId: string; results: RelayPublishOutcome[] }
   | { kind: "relayHealth"; reqId: string; relays: RelayHealth[] }
+  | { kind: "queryResult"; reqId: string; events: Event[] }
   | { kind: "ready" };
 
 export type { ClientMessage, RelayMessage };

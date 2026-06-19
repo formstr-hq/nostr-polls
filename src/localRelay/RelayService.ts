@@ -62,6 +62,7 @@ export class RelayService {
       onPublish: (pubId, event, relays) => this.publishUpstream(pubId, event, relays),
       onResetRelays: (relays) => this.pool.resetRelays(relays),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
+      onQuery: (reqId, filters) => this.runQuery(reqId, filters),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
       // onSetAccount handled by the cutover wiring (retarget feeds); the shared
@@ -150,6 +151,57 @@ export class RelayService {
       .filter((r) => !seen.has(r))
       .map((relay) => ({ relay, connected: false, connecting: false, reconnecting: false }));
     return [...fromPool, ...missing];
+  }
+
+  /**
+   * One-shot read: fire a bounded upstream fetch for each filter (verified events
+   * stream into the store), wait for all to reach EOSE, then return the store's
+   * matches — local cache ∪ freshly-fetched, deduped by the store. Backs the
+   * imperative reads (query / fetchOne / fetchBatched / get).
+   */
+  private async runQuery(reqId: string, filters: Filter[]): Promise<void> {
+    await Promise.all(filters.map((filter) => this.fetchOnce(filter)));
+    const collected = new Map<string, Event>();
+    for (const filter of filters) {
+      for (const event of this.db.query(filter)) collected.set(event.id, event);
+    }
+    this.host.postQueryResult(reqId, Array.from(collected.values()));
+  }
+
+  /** Upstream fetch for one filter that resolves on its combined EOSE (or deadline). */
+  private fetchOnce(filter: Filter): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.paused) return resolve();
+      const kinds = filter.kinds ?? [];
+      if (filter.authors && filter.authors.length) {
+        const handle = this.sync.fetch(
+          {
+            kinds,
+            authors: filter.authors,
+            userRelays: this.userRelays,
+            since: filter.since,
+            until: filter.until,
+            limit: filter.limit,
+          },
+          () => {
+            handle.close();
+            resolve();
+          }
+        );
+      } else if (this.userRelays.length) {
+        const id = this.pool.subscribe(this.userRelays, [filter], {
+          onEvent: (event) => {
+            if (this.verify(event)) this.host.ingest([event]);
+          },
+          onEose: () => {
+            this.pool.unsubscribe(id);
+            resolve();
+          },
+        });
+      } else {
+        resolve();
+      }
+    });
   }
 
   /** Start (or no-op if already running) a deduped upstream sync for a scope. */

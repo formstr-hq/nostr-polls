@@ -131,6 +131,91 @@ export class DataLayer {
     return this.deps.client.relayHealth();
   }
 
+  /** Force a full reconnect of all upstream relays (drop sockets, re-sync). */
+  reconnect(): void {
+    this.deps.client.pause();
+    this.deps.client.resume();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Imperative escape hatch for NON-React code (contexts, helpers, nip17, etc.).
+  // Components should use the reactive hooks (useEvents/useEvent), not these.
+  // The `relays` args are accepted for drop-in compatibility but ignored — the
+  // worker owns relay routing (outbox).
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Watch events (cache + live + upstream) — the imperative form of `useEvents`,
+   * a drop-in for the old `nostrRuntime.subscribe`. `localOnly` skips the network;
+   * `fresh` forces an immediate upstream pull.
+   */
+  watch(
+    _relays: string[],
+    filters: Filter[],
+    options: { onEvent?: (e: Event) => void; onEose?: () => void; localOnly?: boolean; fresh?: boolean } = {}
+  ): { id: string; unsubscribe: () => void } {
+    const sub = this.deps.client.subscribe(filters, {
+      onEvent: options.onEvent ?? (() => {}),
+      onEose: options.onEose,
+    });
+    if (options.localOnly) return sub; // cache-only, no upstream
+    const warm = this.deps.client.sync(filters);
+    if (options.fresh) this.deps.client.fetchPage(filters);
+    return {
+      id: sub.id,
+      unsubscribe: () => {
+        sub.unsubscribe();
+        warm.unsync();
+      },
+    };
+  }
+
+  /** One-shot LOCAL snapshot (was the synchronous `nostrRuntime.query`; now async). */
+  query(filter: Filter | Filter[]): Promise<Event[]> {
+    return this.deps.client.query(filter);
+  }
+
+  /** One-shot read WITH a bounded upstream fetch (was `querySync`). */
+  querySync(_relays: string[], filter: Filter): Promise<Event[]> {
+    return this.deps.client.fetch([filter]);
+  }
+
+  /** First match from cache + a bounded upstream fetch (was `fetchOne`). */
+  async fetchOne(_relays: string[], filter: Filter): Promise<Event | null> {
+    const events = await this.deps.client.fetch([{ ...filter, limit: 1 }]);
+    return events[0] ?? null;
+  }
+
+  /** Resolve one event by id from cache + upstream (was `fetchBatched`). */
+  async fetchBatched(_relays: string[], id: string): Promise<Event | null> {
+    const events = await this.deps.client.fetch([{ ids: [id], limit: 1 }]);
+    return events[0] ?? null;
+  }
+
+  /** Local-store lookup by id (was the synchronous `nostrRuntime.get`; now async). */
+  async get(id: string): Promise<Event | undefined> {
+    const events = await this.deps.client.query([{ ids: [id], limit: 1 }]);
+    return events[0];
+  }
+
+  /** Add an event to the local store (optimistic / received-out-of-band). */
+  addEvent(event: Event): void {
+    this.deps.client.ingest([event]);
+  }
+
+  /** Batch-add events to the local store. */
+  addEvents(events: Event[]): void {
+    this.deps.client.ingest(events);
+  }
+
+  /**
+   * Publish an already-signed event and get per-relay outcomes (was
+   * `nostrRuntime.publish`). Use `publish(template)` for the sign+publish flow.
+   */
+  publishEvent(event: Event, relays?: string[]): Promise<RelayPublishOutcome[]> {
+    return this.deps.client.publish(event, relays);
+  }
+
   /** Active-account change: retarget scope (does NOT rehydrate the shared store). */
   setActiveAccount(pubkey: string | null): void {
     this.deps.client.setActiveAccount(pubkey);
@@ -167,3 +252,16 @@ export function getDataLayer(): DataLayer {
   }
   return instance;
 }
+
+/**
+ * Ambient handle for non-React code (contexts, helpers, nip17). Resolves the
+ * bootstrapped singleton lazily per call, so `import { dataLayer }` works at
+ * module scope. React components should prefer the hooks.
+ */
+export const dataLayer: DataLayer = new Proxy({} as DataLayer, {
+  get(_target, prop) {
+    const dl = getDataLayer();
+    const value = (dl as unknown as Record<string | symbol, unknown>)[prop];
+    return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(dl) : value;
+  },
+});

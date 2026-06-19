@@ -27,6 +27,8 @@ export interface WorkerHostHooks {
   onResetRelays?: (relays: string[]) => void;
   /** Report live relay connection health. */
   onRelayHealth?: (reqId: string) => void;
+  /** One-shot read: local + bounded upstream, then reply with queryResult. */
+  onQuery?: (reqId: string, filters: Filter[]) => void;
   /** One-shot bounded backfill. */
   onFetchPage?: (filters: Filter[]) => void;
   /** Lifecycle: close all sockets / reconnect. */
@@ -64,6 +66,11 @@ export class WorkerHost {
     this.emit({ kind: "relayHealth", reqId, relays });
   }
 
+  /** Send a one-shot query's results back to the client. */
+  postQueryResult(reqId: string, events: Event[]): void {
+    this.emit({ kind: "queryResult", reqId, events });
+  }
+
   private emit(m: FromWorker): void {
     this.channel.post(m);
   }
@@ -87,6 +94,13 @@ export class WorkerHost {
         break;
       case "relayHealth":
         this.hooks.onRelayHealth?.(m.reqId);
+        break;
+      case "query":
+        this.hooks.onQuery?.(m.reqId, m.filters);
+        break;
+      case "ingest":
+        // Local store only (no OK, no upstream) — optimistic adds / imports.
+        this.relayCore.handle(["INGEST", m.events]);
         break;
       case "setAccount":
         this.hooks.onSetAccount?.(m.pubkey);
