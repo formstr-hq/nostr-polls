@@ -65,6 +65,8 @@ import MoviePage from "./components/Movies/MoviePage";
 import { Nip89Provider } from "./contexts/Nip89Context";
 import { useUserContext } from "./hooks/useUserContext";
 import { useAppContext } from "./hooks/useAppContext";
+import { DataLayerProvider } from "./dataLayer/hooks";
+import { getDataLayer } from "./dataLayer/client";
 import TopicsFeed from "./components/Feed/TopicsFeed";
 import TopicExplorer from "./components/Feed/TopicsFeed/TopicsExplorerFeed";
 import FeedsLayout from "./components/Feed/FeedsLayout";
@@ -108,6 +110,22 @@ function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
     <ThemeProvider theme={theme} modeStorageKey="pollerama-color-scheme">
       {children}
     </ThemeProvider>
+  );
+}
+
+// Feeds the current account's scope inputs (pubkey / follows / web-of-trust) to
+// the data layer, so useEvents({ scope }) can resolve author-based feeds. Lives
+// inside UserProvider; the worker itself is bootstrapped in index.tsx.
+function DataLayerScopeBridge({ children }: { children: React.ReactNode }) {
+  const { user } = useUserContext();
+  const scopeUser = React.useMemo(
+    () => ({ pubkey: user?.pubkey, follows: user?.follows, webOfTrust: user?.webOfTrust }),
+    [user?.pubkey, user?.follows, user?.webOfTrust]
+  );
+  return (
+    <DataLayerProvider user={scopeUser} dataLayer={getDataLayer()}>
+      {children}
+    </DataLayerProvider>
   );
 }
 
@@ -287,6 +305,7 @@ const App: React.FC = () => {
         <DynamicThemeWrapper>
           <AppContextProvider>
             <UserProvider>
+              <DataLayerScopeBridge>
               <RelayProvider>
                 <RelayHealthProvider>
                 <GossipProvider>
@@ -323,6 +342,7 @@ const App: React.FC = () => {
                 </GossipProvider>
                 </RelayHealthProvider>
               </RelayProvider>
+              </DataLayerScopeBridge>
             </UserProvider>
           </AppContextProvider>
         </DynamicThemeWrapper>
