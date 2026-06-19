@@ -68,18 +68,53 @@ export class DataLayer {
   }
 
   /**
-   * One-shot interest: resolve with the worker's matches once it has satisfied
-   * the scope (cache + whatever it chose to fetch). For non-React reference
-   * resolution; components use the reactive hooks. Not a network command.
+   * Resolve a single event by id — the one place a Promise is right, because an
+   * id-addressed read has a real terminal state (the event exists, or after a
+   * bounded look it doesn't). Composed entirely from `observe`: try the cache
+   * (localOnly) first, and only on a miss declare a sync interest so the worker
+   * fetches it. Resolves `null` if nothing arrives before the deadline. The
+   * reactive twin is `useEvent`. Everything else is a streaming `observe`.
    */
-  observeOnce(filters: Filter[]): Promise<Event[]> {
-    return this.deps.client.observeOnce(filters);
+  fetchById(id: string, deadlineMs = 8000): Promise<Event | null> {
+    return this.resolveOne([{ ids: [id], limit: 1 }], deadlineMs);
   }
 
-  /** Resolve a single event by id (reactive twin: `useEvent`). */
-  async fetchById(id: string): Promise<Event | null> {
-    const events = await this.deps.client.observeOnce([{ ids: [id], limit: 1 }]);
-    return events[0] ?? null;
+  /**
+   * Resolve the current value of a REPLACEABLE event (profile/relay-list/etc.) —
+   * also a legitimate Promise, because a replaceable (kind, pubkey) has one
+   * current value, a real terminal state like an id read. Growing sets (notes,
+   * reactions) are NOT this — those must be a streaming `observe`/`useEvents`.
+   */
+  fetchReplaceable(kind: number, pubkey: string, deadlineMs = 8000): Promise<Event | null> {
+    return this.resolveOne([{ kinds: [kind], authors: [pubkey], limit: 1 }], deadlineMs);
+  }
+
+  /** Cache-first single-value resolve, composed entirely from `observe`. */
+  private resolveOne(filters: Filter[], deadlineMs: number): Promise<Event | null> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let fetched = false;
+      let handle: ObserveHandle;
+      let timer: ReturnType<typeof setTimeout>;
+
+      const finish = (e: Event | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        handle.unobserve();
+        resolve(e);
+      };
+      const onMiss = () => {
+        // Not in cache → declare a sync interest so the worker fetches it.
+        if (settled || fetched) return;
+        fetched = true;
+        handle.unobserve();
+        handle = this.deps.client.observe(filters, { onEvent: finish });
+      };
+
+      handle = this.deps.client.observe(filters, { onEvent: finish, onEose: onMiss }, { localOnly: true });
+      timer = setTimeout(() => finish(null), deadlineMs);
+    });
   }
 
   /**

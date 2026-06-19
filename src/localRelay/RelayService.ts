@@ -59,7 +59,6 @@ export class RelayService {
       },
       onObserve: (subId, filters, sync) => this.observe(subId, filters, sync),
       onUnobserve: (subId) => this.unobserve(subId),
-      onObserveOnce: (reqId, filters) => this.observeOnce(reqId, filters),
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
       onPause: () => this.pause(),
@@ -160,72 +159,6 @@ export class RelayService {
       }
     }
     return { close: () => handles.forEach((h) => h.close()) };
-  }
-
-  /**
-   * One-shot interest: satisfy it from cache + a bounded upstream fetch (the
-   * worker decides routing), then reply with the store's matches. Used for
-   * non-React reference resolution; not an app-controlled network command.
-   */
-  private async observeOnce(reqId: string, filters: Filter[]): Promise<void> {
-    // Worker policy: an id-addressed read the cache already holds is answered
-    // without networking (events are immutable). Anything else does a bounded
-    // fetch — author/kind one-shots must actually reach relays.
-    if (!this.cacheSatisfies(filters)) {
-      await Promise.all(filters.map((filter) => this.fetchOnce(filter)));
-    }
-    this.host.postQueryResult(reqId, this.collect(filters));
-  }
-
-  /** True only when every filter is id-based and all those ids are in the store. */
-  private cacheSatisfies(filters: Filter[]): boolean {
-    return filters.every(
-      (f) => !!f.ids && f.ids.length > 0 && f.ids.every((id) => this.db.getById(id))
-    );
-  }
-
-  private collect(filters: Filter[]): Event[] {
-    const collected = new Map<string, Event>();
-    for (const filter of filters) {
-      for (const event of this.db.query(filter)) collected.set(event.id, event);
-    }
-    return Array.from(collected.values());
-  }
-
-  /** Bounded upstream fetch for one filter, resolving on its combined EOSE. */
-  private fetchOnce(filter: Filter): Promise<void> {
-    return new Promise((resolve) => {
-      if (this.paused) return resolve();
-      const kinds = filter.kinds ?? [];
-      if (filter.authors && filter.authors.length) {
-        const handle = this.sync.fetch(
-          {
-            kinds,
-            authors: filter.authors,
-            userRelays: this.userRelays,
-            since: filter.since,
-            until: filter.until,
-            limit: filter.limit,
-          },
-          () => {
-            handle.close();
-            resolve();
-          }
-        );
-      } else if (this.userRelays.length) {
-        const id = this.pool.subscribe(this.userRelays, [filter], {
-          onEvent: (event) => {
-            if (this.verify(event)) this.host.ingest([event]);
-          },
-          onEose: () => {
-            this.pool.unsubscribe(id);
-            resolve();
-          },
-        });
-      } else {
-        resolve();
-      }
-    });
   }
 
   // --- writes ---------------------------------------------------------------

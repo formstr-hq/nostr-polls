@@ -2,10 +2,13 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
 } from "react";
+import type { Event } from "nostr-tools";
 import { dataLayer } from "../dataLayer/client";
+import type { ObserveHandle } from "../dataLayer/client";
 
 export interface HandlerApp {
   name: string;
@@ -38,8 +41,9 @@ export const Nip89Provider: React.FC<{
   const fetchedKinds = useRef<Set<number>>(new Set());
   const pendingKinds = useRef<Set<number>>(new Set());
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlesRef = useRef<ObserveHandle[]>([]);
 
-  const flushPending = useCallback(async () => {
+  const flushPending = useCallback(() => {
     const kinds = Array.from(pendingKinds.current);
     pendingKinds.current.clear();
     if (kinds.length === 0) return;
@@ -47,39 +51,31 @@ export const Nip89Provider: React.FC<{
     // Mark in-flight immediately so concurrent registerKind calls don't duplicate
     kinds.forEach((k) => fetchedKinds.current.add(k));
 
-    // One-shot interest: the worker fetches the NIP-89 handlers and returns them.
-    const events = await dataLayer.observeOnce([
-      { kinds: [31990], "#k": kinds.map(String) },
-    ]);
+    // Standing interest: handlers stream in (cache + whatever the worker fetches)
+    // and the map updates reactively — no awaited snapshot.
+    const ingest = (event: Event) => {
+      // Only handle web/naddr tags — skip iOS/Android-only handlers
+      const webTag = event.tags.find((t) => t[0] === "web" && (!t[2] || t[2] === "naddr"));
+      if (!webTag?.[1]) return;
+      const urlTemplate = webTag[1];
 
-    setHandlersMap((prev) => {
-      const next = new Map(prev);
+      const coveredKinds = event.tags
+        .filter((t) => t[0] === "k")
+        .map((t) => parseInt(t[1], 10))
+        .filter((k) => !isNaN(k) && kinds.includes(k));
+      if (coveredKinds.length === 0) return;
 
-      for (const event of events) {
-        // Only handle web/naddr tags — skip iOS/Android-only handlers
-        const webTag = event.tags.find(
-          (t) => t[0] === "web" && (!t[2] || t[2] === "naddr")
-        );
-        if (!webTag?.[1]) continue;
-        const urlTemplate = webTag[1];
+      let meta: Record<string, string> = {};
+      try {
+        meta = JSON.parse(event.content);
+      } catch {}
+      const name = meta.name || meta.display_name || "Unknown App";
 
-        // Which of our requested kinds does this handler cover?
-        const coveredKinds = event.tags
-          .filter((t) => t[0] === "k")
-          .map((t) => parseInt(t[1], 10))
-          .filter((k) => !isNaN(k) && kinds.includes(k));
-        if (coveredKinds.length === 0) continue;
-
-        let meta: Record<string, string> = {};
-        try {
-          meta = JSON.parse(event.content);
-        } catch {}
-        const name = meta.name || meta.display_name || "Unknown App";
-
+      setHandlersMap((prev) => {
+        const next = new Map(prev);
         for (const kind of coveredKinds) {
           const existing = next.get(kind) ?? [];
           const appIdx = existing.findIndex((a) => a.urlTemplate === urlTemplate);
-
           if (appIdx !== -1) {
             if (existing[appIdx].publishers.includes(event.pubkey)) continue;
             const updated = [...existing];
@@ -95,16 +91,30 @@ export const Nip89Provider: React.FC<{
             ]);
           }
         }
-      }
+        return next;
+      });
+    };
 
-      // Ensure every requested kind has an entry so consumers can distinguish
-      // "still loading" (undefined) from "no results" ([]).
-      for (const kind of kinds) {
-        if (!next.has(kind)) next.set(kind, []);
+    const handle = dataLayer.observe(
+      [{ kinds: [31990], "#k": kinds.map(String) }],
+      {
+        onEvent: ingest,
+        onEose: () => {
+          // Cache pass done: mark requested kinds with no handlers yet as [] so
+          // consumers can tell "loaded, none" from "still loading" (undefined).
+          setHandlersMap((prev) => {
+            const next = new Map(prev);
+            for (const kind of kinds) if (!next.has(kind)) next.set(kind, []);
+            return next;
+          });
+        },
       }
-      return next;
-    });
+    );
+    handlesRef.current.push(handle);
   }, []);
+
+  // Drop all standing handler interests when the provider unmounts.
+  useEffect(() => () => handlesRef.current.forEach((h) => h.unobserve()), []);
 
   const registerKind = useCallback(
     (kind: number) => {

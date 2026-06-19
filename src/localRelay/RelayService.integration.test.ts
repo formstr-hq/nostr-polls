@@ -98,20 +98,6 @@ describe("RelayService — interests drive the network (app cannot)", () => {
     expect(sock.sent.some((m) => m[0] === "EVENT" && m[1].id === "p".repeat(64))).toBe(true);
   });
 
-  it("observeOnce returns cache ∪ a bounded upstream fetch", async () => {
-    const { f, client } = await wire();
-    const promise = client.observeOnce([{ kinds: [1], authors: ["bob"] }]);
-    await settle();
-
-    const sock = f.last("wss://u1");
-    sock.open();
-    const subId = reqOn(sock)[0][1];
-    sock.emit(["EVENT", subId, makeEvent({ id: "b".repeat(64), kind: 1, pubkey: "bob" })]);
-    sock.emit(["EOSE", subId]);
-
-    const events = await promise;
-    expect(events.map((e) => e.id)).toEqual(["b".repeat(64)]);
-  });
 });
 
 describe("RelayService — lifecycle", () => {

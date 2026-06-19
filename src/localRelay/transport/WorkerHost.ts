@@ -22,8 +22,6 @@ export interface WorkerHostHooks {
   onObserve?: (subId: string, filters: Filter[], sync: boolean) => void;
   /** A standing interest was dropped — the worker reconciles its connections. */
   onUnobserve?: (subId: string) => void;
-  /** A one-shot interest — worker satisfies it, then replies via queryResult. */
-  onObserveOnce?: (reqId: string, filters: Filter[]) => void;
   /** A client published an event: store it locally + send upstream with tracking. */
   onPublish?: (pubId: string, event: Event) => void;
   /** Report live relay connection health (read-only observation). */
@@ -63,11 +61,6 @@ export class WorkerHost {
     this.emit({ kind: "relayHealth", reqId, relays });
   }
 
-  /** Send a one-shot query's results back to the client. */
-  postQueryResult(reqId: string, events: Event[]): void {
-    this.emit({ kind: "queryResult", reqId, events });
-  }
-
   private emit(m: FromWorker): void {
     this.channel.post(m);
   }
@@ -83,9 +76,6 @@ export class WorkerHost {
       case "unobserve":
         this.relayCore.handle(["CLOSE", m.subId]);
         this.hooks.onUnobserve?.(m.subId);
-        break;
-      case "observeOnce":
-        this.hooks.onObserveOnce?.(m.reqId, m.filters);
         break;
       case "publish":
         // Store + OK locally (so local subs see it instantly), then send upstream

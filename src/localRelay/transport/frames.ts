@@ -29,11 +29,6 @@ export type ToWorker =
   | { kind: "observe"; subId: string; filters: Filter[]; sync: boolean }
   /** Drop a standing interest (worker reconciles its connections). */
   | { kind: "unobserve"; subId: string }
-  /**
-   * One-shot interest: the worker satisfies it per its own policy and replies
-   * with the store matches (queryResult). For non-React reference resolution.
-   */
-  | { kind: "observeOnce"; reqId: string; filters: Filter[] }
   // --- writes ---
   /** Publish a signed event; worker routes + tracks per-relay outcome. Retry =
    *  publish again (the worker, not the app, handles dead relays). */
@@ -56,7 +51,6 @@ export type FromWorker =
   | { kind: "signRequest"; reqId: string; template: EventTemplate }
   | { kind: "publishResult"; pubId: string; results: RelayPublishOutcome[] }
   | { kind: "relayHealth"; reqId: string; relays: RelayHealth[] }
-  | { kind: "queryResult"; reqId: string; events: Event[] }
   | { kind: "ready" };
 
 export type { ClientMessage, RelayMessage };

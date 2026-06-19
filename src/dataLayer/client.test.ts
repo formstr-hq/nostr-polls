@@ -104,13 +104,9 @@ describe("DataLayer", () => {
     expect((await promise)?.id).toBe("m".repeat(64));
   });
 
-  it("fetchById resolves null when the upstream returns nothing", async () => {
-    const { f, dataLayer } = await wire();
-    const promise = dataLayer.fetchById("z".repeat(64));
-    await settle();
-    const sock = f.last("wss://u1");
-    sock.open();
-    sock.emit(["EOSE", reqOn(sock)[0][1]]); // relay has it not
-    expect(await promise).toBeNull();
+  it("fetchById resolves null when the event is never found (bounded)", async () => {
+    const { dataLayer } = await wire();
+    // Cache miss + no relay delivers it → resolves null at the deadline.
+    expect(await dataLayer.fetchById("z".repeat(64), 40)).toBeNull();
   });
 });

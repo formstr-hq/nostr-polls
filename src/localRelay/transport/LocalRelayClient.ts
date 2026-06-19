@@ -32,7 +32,6 @@ export class LocalRelayClient {
   private subs = new Map<string, Sub>();
   private pendingPublishes = new Map<string, (results: RelayPublishOutcome[]) => void>();
   private pendingHealth = new Map<string, (relays: RelayHealth[]) => void>();
-  private pendingQueries = new Map<string, (events: Event[]) => void>();
   private counter = 0;
 
   constructor(private channel: Channel, private opts: LocalRelayClientOptions = {}) {
@@ -65,19 +64,6 @@ export class LocalRelayClient {
   private unobserve(id: string): void {
     if (!this.subs.delete(id)) return;
     this.send({ kind: "unobserve", subId: id });
-  }
-
-  /**
-   * One-shot interest: the worker satisfies it (cache + a bounded upstream fetch
-   * it decides on) and resolves with the matches. For non-React reference
-   * resolution; components should use the reactive hooks instead.
-   */
-  observeOnce(filters: Filter[]): Promise<Event[]> {
-    const reqId = `q${this.counter++}`;
-    return new Promise((resolve) => {
-      this.pendingQueries.set(reqId, resolve);
-      this.send({ kind: "observeOnce", reqId, filters });
-    });
   }
 
   /** Add events to the local store without publishing upstream (optimistic/import). */
@@ -167,15 +153,6 @@ export class LocalRelayClient {
       if (resolve) {
         this.pendingHealth.delete(m.reqId);
         resolve(m.relays);
-      }
-      return;
-    }
-
-    if (m.kind === "queryResult") {
-      const resolve = this.pendingQueries.get(m.reqId);
-      if (resolve) {
-        this.pendingQueries.delete(m.reqId);
-        resolve(m.events);
       }
       return;
     }
