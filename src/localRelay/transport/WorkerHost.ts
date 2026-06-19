@@ -20,6 +20,8 @@ export interface WorkerHostHooks {
   /** Maintain a deduped upstream sync for a scope (decoupled from local REQs). */
   onStartSync?: (key: string, filters: Filter[]) => void;
   onStopSync?: (key: string) => void;
+  /** A client published an EVENT: store happens in RelayCore; this sends it upstream. */
+  onPublish?: (event: Event) => void;
   /** One-shot bounded backfill. */
   onFetchPage?: (filters: Filter[]) => void;
   /** Lifecycle: close all sockets / reconnect. */
@@ -57,6 +59,9 @@ export class WorkerHost {
         // REQ is LOCAL ONLY — RelayCore replays the store + keeps a live tail.
         // Upstream sync is driven separately via startSync (decoupled).
         this.relayCore.handle(m.msg);
+        // A published EVENT is stored + OK'd locally by RelayCore above; it also
+        // needs to reach the network. (REQ/CLOSE stay local.)
+        if (m.msg[0] === "EVENT") this.hooks.onPublish?.(m.msg[1]);
         break;
       case "setAccount":
         this.hooks.onSetAccount?.(m.pubkey);

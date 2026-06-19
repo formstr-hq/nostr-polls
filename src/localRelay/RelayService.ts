@@ -57,6 +57,7 @@ export class RelayService {
       onStartSync: (key, filters) => this.startSync(key, filters),
       onStopSync: (key) => this.stopSync(key),
       onFetchPage: (filters) => this.fetchPage(filters),
+      onPublish: (event) => this.publishUpstream(event),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
       // onSetAccount handled by the cutover wiring (retarget feeds); the shared
@@ -95,6 +96,18 @@ export class RelayService {
       if (!tag[2] || tag[2] === "write") write.push(tag[1]);
     }
     return write;
+  }
+
+  /**
+   * Send a client-published event to the network: the author's own write relays
+   * (outbox) unioned with the user's relays as a floor, so a published note
+   * always lands somewhere even before the author's kind-10002 is known.
+   */
+  private publishUpstream(event: Event): void {
+    const targets = Array.from(
+      new Set([...this.getWriteRelays(event.pubkey), ...this.userRelays])
+    );
+    if (targets.length) this.pool.publish(targets, event);
   }
 
   /** Start (or no-op if already running) a deduped upstream sync for a scope. */

@@ -55,6 +55,19 @@ describe("RelayService — local/upstream decoupling", () => {
     expect(service.db.getById("a".repeat(64))).toBeDefined();
   });
 
+  it("publish stores locally AND sends the event to the user's relays", async () => {
+    const { f, service, client } = await wire();
+    const ev = makeEvent({ id: "p".repeat(64), kind: 1, pubkey: "me" });
+
+    client.publish(ev);
+    await settle();
+
+    expect(service.db.getById("p".repeat(64))).toBeDefined(); // stored locally
+    const sock = f.last("wss://u1");
+    sock.open(); // flush the queued publish
+    expect(sock.sent.some((m) => m[0] === "EVENT" && m[1].id === "p".repeat(64))).toBe(true);
+  });
+
   it("routes via outbox when the author's kind-10002 is in the store", async () => {
     const { f, service, client } = await wire();
     service.db.add(
