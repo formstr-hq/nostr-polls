@@ -80,17 +80,22 @@ export class RelayConnection {
   }
 
   req(subId: string, filters: Filter[]): void {
+    // REQs live in activeReqs and are (re)sent on open/reconnect from there —
+    // never via the send queue, or they'd be transmitted twice.
     this.activeReqs.set(subId, filters);
-    this.send(["REQ", subId, ...filters]);
+    if (this.connected) this.write(["REQ", subId, ...filters]);
+    else this.connect();
   }
 
   close(subId: string): void {
-    this.activeReqs.delete(subId);
-    this.send(["CLOSE", subId]);
+    const existed = this.activeReqs.delete(subId);
+    // Only emit CLOSE if the REQ was actually on the wire; if we never opened,
+    // dropping it from activeReqs is enough (open won't resubscribe it).
+    if (existed && this.connected) this.write(["CLOSE", subId]);
   }
 
   publish(event: Event): void {
-    this.send(["EVENT", event]);
+    this.enqueue(["EVENT", event]);
   }
 
   /** Permanently close this connection (no reconnect). */
@@ -109,8 +114,10 @@ export class RelayConnection {
     this.socket = null;
   }
 
-  private send(msg: unknown): void {
-    if (this.socket?.readyState === 1) {
+  /** Queue non-REQ messages (publishes) until the socket is open. REQs do NOT
+   * use this path — they're resent from activeReqs on open. */
+  private enqueue(msg: unknown): void {
+    if (this.connected) {
       this.write(msg);
     } else {
       this.sendQueue.push(msg);

@@ -40,7 +40,9 @@ export class RelayService {
   private sync: SyncEngine;
   private persistence: Persistence | null;
   private userRelays: string[] = [];
-  private fetches = new Map<string, SyncHandle>();
+  /** Deduped long-lived upstream subscriptions, keyed by filter-hash. */
+  private syncs = new Map<string, { filters: Filter[]; handle: SyncHandle | null }>();
+  private paused = false;
   private verify: (event: Event) => boolean;
 
   constructor(opts: RelayServiceOptions) {
@@ -51,8 +53,12 @@ export class RelayService {
       onSetUserRelays: (relays) => {
         this.userRelays = relays;
       },
-      onReq: (subId, filters) => this.startFetch(subId, filters),
-      onClose: (subId) => this.stopFetch(subId),
+      // Local REQ does NOT touch the network — upstream sync is decoupled.
+      onStartSync: (key, filters) => this.startSync(key, filters),
+      onStopSync: (key) => this.stopSync(key),
+      onFetchPage: (filters) => this.fetchPage(filters),
+      onPause: () => this.pause(),
+      onResume: () => this.resume(),
       // onSetAccount handled by the cutover wiring (retarget feeds); the shared
       // public store does not need a swap.
     });
@@ -73,8 +79,8 @@ export class RelayService {
   }
 
   async stop(): Promise<void> {
-    for (const h of Array.from(this.fetches.values())) h.close();
-    this.fetches.clear();
+    for (const s of Array.from(this.syncs.values())) s.handle?.close();
+    this.syncs.clear();
     this.pool.closeAll();
     await this.persistence?.stop();
   }
@@ -91,43 +97,81 @@ export class RelayService {
     return write;
   }
 
-  private startFetch(subId: string, filters: Filter[]): void {
-    this.stopFetch(subId); // replace any prior fetch for this sub id
+  /** Start (or no-op if already running) a deduped upstream sync for a scope. */
+  private startSync(key: string, filters: Filter[]): void {
+    if (this.syncs.has(key)) return; // already syncing this scope
+    const handle = this.paused ? null : this.openFetch(filters, false);
+    this.syncs.set(key, { filters, handle });
+  }
+
+  private stopSync(key: string): void {
+    const entry = this.syncs.get(key);
+    if (!entry) return;
+    entry.handle?.close();
+    this.syncs.delete(key);
+  }
+
+  /** One-shot bounded backfill: closes each bucket after its EOSE. */
+  private fetchPage(filters: Filter[]): void {
+    if (this.paused) return;
+    this.openFetch(filters, true);
+  }
+
+  /** App suspended: close every socket but keep the store + sync specs. */
+  private pause(): void {
+    this.paused = true;
+    for (const entry of Array.from(this.syncs.values())) {
+      entry.handle?.close();
+      entry.handle = null;
+    }
+    this.pool.closeAll();
+  }
+
+  /** App resumed: reconnect each sync from its stored spec. */
+  private resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    for (const entry of Array.from(this.syncs.values())) {
+      entry.handle = this.openFetch(entry.filters, false);
+    }
+  }
+
+  /**
+   * Open upstream fetches for a set of filters. Author-scoped filters are
+   * outbox-partitioned via SyncEngine; author-less ones (ids/tags/global) hit
+   * the user's relays directly. When `oneShot`, each bucket closes on its EOSE.
+   */
+  private openFetch(filters: Filter[], oneShot: boolean): SyncHandle {
     const handles: SyncHandle[] = [];
     for (const filter of filters) {
       const kinds = filter.kinds ?? [];
       if (filter.authors && filter.authors.length) {
-        // Author-scoped: outbox-partition the fetch.
-        handles.push(
-          this.sync.fetch({
+        const handle: SyncHandle = this.sync.fetch(
+          {
             kinds,
             authors: filter.authors,
             userRelays: this.userRelays,
             since: filter.since,
             until: filter.until,
             limit: filter.limit,
-          })
-        );
-      } else if (this.userRelays.length) {
-        // Author-less (ids/tags/global): fetch raw from the user's relays.
-        const id = this.pool.subscribe(this.userRelays, [filter], {
-          onEvent: (event) => {
-            if (this.verify(event)) this.host.ingest([event]);
           },
-        });
+          oneShot ? () => handle.close() : undefined
+        );
+        handles.push(handle);
+      } else if (this.userRelays.length) {
+        const id = this.pool.subscribe(
+          this.userRelays,
+          [filter],
+          {
+            onEvent: (event) => {
+              if (this.verify(event)) this.host.ingest([event]);
+            },
+            onEose: oneShot ? () => this.pool.unsubscribe(id) : undefined,
+          }
+        );
         handles.push({ close: () => this.pool.unsubscribe(id) });
       }
     }
-    if (handles.length) {
-      this.fetches.set(subId, { close: () => handles.forEach((h) => h.close()) });
-    }
-  }
-
-  private stopFetch(subId: string): void {
-    const handle = this.fetches.get(subId);
-    if (handle) {
-      handle.close();
-      this.fetches.delete(subId);
-    }
+    return { close: () => handles.forEach((h) => h.close()) };
   }
 }

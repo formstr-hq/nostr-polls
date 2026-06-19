@@ -215,44 +215,53 @@ No feature flag, no parallel path. One branch swaps the whole data layer.
 ### Surface area (measured)
 62 files import `nostrRuntime`: **64** `subscribe()` sites, **26** `querySync/fetchOne/fetchBatched/get()` sites, **24** synchronous `query()` sites.
 
-### Strategy: preserve the facade, break only synchronous reads
-We keep the `nostrRuntime` object and its method **signatures**, re-implemented over `LocalRelayClient` + `SyncEngine`. This means the vast majority of call sites compile and behave unchanged:
+### Strategy: replace `nostrRuntime` with a thin, intent-based data layer
+We do **not** preserve the `nostrRuntime` facade. The whole point of the rebuild is that the UI should know as little about relays as possible — exposing a relay-shaped, NIP-01-leaking API to ~114 call sites just re-creates the avenues for bugs we're trying to kill. Instead `nostrRuntime` is **deleted** and replaced by a small, deliberate surface that the UI speaks in terms of **event kinds + scope**, not relays:
 
-- `subscribe(relays, filters, {onEvent,onEose,fresh,localOnly})` — **unchanged signature.** Internally: (a) open a `REQ` to the worker relay → instant cached replay + live updates via the same callbacks; (b) hand `relays`+`filters` to the `SyncEngine`, which outbox-partitions authors, windows the fetch, and `ingest()`s results into the worker (which then fan-out to the same REQ). All 64 sites keep working; they just get *better* data. `relays` becomes a hint the SyncEngine may override via outbox.
-- `querySync / fetchOne / fetchBatched` — already `Promise`-returning. Signatures unchanged; re-pointed at worker query + sync. 26 sites unchanged.
-- `publish / addEvent / addEvents / isDeleted` — unchanged (publish → worker store + upstream).
+```ts
+useEvents({ kinds, scope })   // reactive feed: { items, loadOlder, newCount, showNew }
+useEvent(id)                  // reactive single event → Event | undefined
+dataLayer.subscribe(filters, { onEvent, onEose })  // local reactive primitive the hooks sit on
+dataLayer.sync(filters)                            // keep a scope warm upstream (deduped, ref-counted)
+dataLayer.fetchById(id): Promise<Event | null>     // lone imperative escape hatch (provisional, lint-fenced)
+dataLayer.publish(template): Promise<Event>        // sign + publish + ingest
+```
 
-**The one breaking change: synchronous `query()` and `get()` become async** (worker round-trip). These **24 + a few** sites are converted in the same PR:
-- Feed `useMemo(() => nostrRuntime.query(...))` patterns → the new **`useQuery(filter)`** reactive hook (snapshot + live). This also deletes the `displayedIdsRef`/`knownIdsRef`/`version` bookkeeping.
-- One-shot reads → `await client.query(...)`.
-- Rare "must paint synchronously" spots → optional main-thread last-snapshot LRU (kept tiny; not a second store).
+**No generic `query(filters)`.** A filter-shaped one-shot read is an antipattern here: it returns a point-in-time snapshot of an *evolving, asynchronously-populated* set (cold-cache → wrong `[]`; or it silently becomes a deadline-gated network fetch — the SimplePool "fake loaded" behavior we removed), it re-leaks the relay/filter model into call sites that should think in kinds+scope, and it's a back-door around reactivity that re-creates the `useMemo(() => query())` + `displayedIdsRef` mess. Everything it pretended to do is covered: feeds → `useEvents`, single render → `useEvent`, pagination → `loadOlder`/`fetchPage`, idempotency checks reuse data the component already subscribes to. The sole imperative read is `fetchById` — id-addressed reads are immutable and unambiguous (exists or not), unlike a snapshot of a moving set — kept only for genuine *non-React* reference resolution and dropped if migration finds no such caller.
+
+Key properties:
+- **Kinds + scope, not relays.** The UI never names a relay or builds a raw filter for a feed; it asks for kinds within a scope (following / network / author / thread / mentions / global). Relay selection, outbox routing, and windowing live entirely in the worker. New kinds become renderable by registering them in `dataLayer/kinds.ts` — no new hooks or query plumbing (see §8 intent model).
+- **Local read ≠ upstream fetch.** `subscribe` serves the cache + live tail and touches no network; `sync` is the separate, ref-counted declaration that a scope should be kept warm from relays. Presentation churn (mount/unmount, scroll) therefore does not multiply upstream load.
+- **Reads are async and reactive by construction.** There is no synchronous `query()`/`get()` and no generic async `query()` either; feeds are reactive via `useEvents`, single events via `useEvent`, and the rare imperative reference resolution uses `dataLayer.fetchById()`. The old `displayedIdsRef`/`knownIdsRef`/`version` merge bookkeeping is deleted — the worker store is the single source of truth.
+
+Migrating ~114 sites is mechanical but wide: each `subscribe(relays, filters, …)` becomes either a `useEvents({kinds, scope})` (feeds) or a `dataLayer.subscribe(filters, …)` (targeted local reads), and each `querySync/fetchOne/query()/get()` becomes a `useEvent`, a reactive `useEvents`, or — only for genuine non-component reference resolution — `await dataLayer.fetchById()`.
 
 ### Cutover steps (one branch)
-1. Build `src/localRelay/` (core + storage + transport + worker) with full tests — green before wiring.
-2. In `singletons`: spawn the worker (it hosts `RelayCore` + `SyncEngine` + IndexedDB); create `LocalRelayClient` + `SignerBridge` (answers worker sign-RPC via `signerManager`) + visibility relay on the main thread.
-2a. Move `OutboxService` / WoT / nip17 relay caches from `localStorage` to IndexedDB, with a one-time migration-on-first-run that imports any existing `localStorage` values.
-3. Re-implement `nostrRuntime` as the facade over the client (signatures preserved). `subscribe(relays, …)` now forwards to the worker, which runs the SyncEngine internally.
-4. Convert the 24 sync `query()`/`get()` sites to `useQuery`/`await`. Rewrite the 4 feed hooks (`useFollowingNotes`, `useDiscoverNotes`, `HomeFeed`, `PollFeed`) onto `useQuery` and delete their merge state.
-5. Add outbox author→relay **partitioning** + windowed pagination in `SyncEngine` (the actual gap fix).
-6. Delete the old in-memory `EventStore` usage (the class moves into `localRelay/core` as `MemoryEventDB`).
-7. Move WoT aggregation into a worker (own worker or the relay worker) + add the `subscribeToContacts` timeout.
+1. Build `src/localRelay/` (core + storage + sync + transport + worker) with full tests — green before wiring. **Done.**
+2. Build `src/dataLayer/` — kind registry (`kinds.ts`), scope→filters (`scope.ts`), feed assembly (`feed.ts`), all unit-tested. **Done.**
+3. `src/dataLayer/client.ts`: bootstrap singleton — spawn the worker, construct `LocalRelayClient` + `SignerBridge` (answers worker sign-RPC via `signerManager`), wire `setUserRelays` / `setActiveAccount`, and pause/resume on app visibility/suspend.
+4. `DataLayerProvider` + `useEvents` / `useEvent` hooks over the client (reactive snapshot + live tail + `loadOlder`/`newCount`).
+5. Migrate the call sites: feeds → `useEvents`; targeted reads → `dataLayer.subscribe`; imperative reads → `await dataLayer.query()` / `fetchById`. Rewrite the 4 feed hooks (`useFollowingNotes`, `useDiscoverNotes`, `HomeFeed`, `PollFeed`) and delete their merge state.
+6. Move `OutboxService` / WoT / nip17 relay caches off `localStorage` (outbox now lives in the worker store as kind-10002; WoT/cursors move to a small per-account IDB namespace) with one-time migration-on-first-run.
+7. Delete `nostrRuntime`, `SubscriptionManager`, and the old in-memory `EventStore`.
+8. Move WoT aggregation into a worker + add the `subscribeToContacts` timeout.
 
 ### Risk of big-bang (acknowledged)
-One large PR touching ~62 files; no gradual validation. Mitigations: facade preservation keeps ~90 of ~114 call sites mechanically unchanged; the module is fully unit-tested before wiring; the 24 async conversions are mostly the 4 feed hooks plus simple `await`s.
+One large branch touching ~62 files with no facade cushion — every `nostrRuntime` site is rewritten, not preserved. Mitigations: the worker relay + data layer are fully unit-tested *before* any wiring; the migration is mechanical and uniform (kinds+scope or `await`); and the thin surface is small enough to review exhaustively. The payoff for the higher churn is that no NIP-01/relay concepts survive into the UI, so the class of bugs we're fixing can't reappear.
 
 ---
 
 ## 10. ESSENTIALS TO SIGN OFF
 
 1. **Entire data layer (incl. sync engine + network) in the Worker** — so `JSON.parse` + `verifyEvent` go off the main thread (the real jank). Requires the SignerBridge RPC (NIP-42 AUTH), localStorage→IndexedDB for caches, and a visibility relay. Confirm.
-2. **Synchronous `query()`/`get()` become async** — the one breaking change of the cutover. Feeds move to a reactive `useQuery` hook; one-shot reads become `await`. ~24 sites. OK?
-3. **Facade preserved:** `subscribe/querySync/fetchOne/publish` keep their signatures so ~90 of ~114 call sites are unchanged. OK?
+2. **`nostrRuntime` is deleted, not preserved** — replaced by a thin, intent-based data layer the UI speaks in kinds+scope: `useEvents`/`useEvent`/`publish` (+ `subscribe`/`sync`/`fetchById` primitives). No relay/filter concepts survive into components. All ~114 sites are rewritten (mechanical), not facade-wrapped. OK?
+3. **No generic `query()`** — feeds are reactive (`useEvents`), single render reactive (`useEvent`), pagination `loadOlder`, and the lone imperative read is the (provisional) id-addressed `fetchById`. A filter-shaped one-shot read is an antipattern (snapshot of an evolving set + relay-model leak + reactivity back-door). OK?
 4. **Protocol = literal NIP-01 over postMessage** + one `INGEST` batch extension. OK?
 5. **IndexedDB: hand-rolled dependency-free wrapper** (behind `StorageAdapter`, with memory fallback for Capacitor/WKWebView) vs adding `idb` (~1KB). Recommend hand-rolled.
 6. **Pruning knobs:** confirm per-kind TTLs, hard cap (proposed 50k), cadence (5 min).
 7. **Hydration:** serve-immediately-and-backfill (recommended) vs block REQs until hydrated.
 8. **`localStorage`→IndexedDB migration** for OutboxService, WoT cache, and nip17 relay cache (forced by the Worker move). Confirm one-time migration-on-first-run.
-9. **Single cutover, whole app** (per your call) — one branch, all feeds migrated, old `EventStore` removed. Acknowledged higher-risk than phased; mitigated by facade preservation + fully-tested module before wiring.
+9. **Single cutover, whole app** (per your call) — one branch, all feeds migrated, `nostrRuntime` + old `EventStore` removed. Acknowledged higher-risk than phased (no facade cushion); mitigated by a fully-tested worker relay + data layer before any wiring, and a uniform/mechanical migration onto a small reviewable surface.
 
 ---
 
@@ -291,6 +300,34 @@ The app has multiple accounts and users switch often. The key insight: **the rel
 - **`setActiveAccount(pubkey)`** therefore does NOT re-hydrate the event store. It: (1) swaps the small per-account context (WoT, cursors, DM layer), (2) restarts the SyncEngine for the new account's follows/WoT, (3) lets active `useEvents` queries re-run against the same shared store with the new scope → feeds repaint instantly.
 - **Isolation guarantee:** decrypted/private content never lives in the shared store, so sharing it cannot leak anything (public events are public on relays anyway).
 - **`IndexedDBStorage(namespace)`** defaults to the shared store; the optional namespace is reserved for a per-account *private* store should we ever persist decrypted data via the relay (we don't in v1). `destroy()` exists for a full clear.
+
+---
+
+## 11c. Adapters & native storage (future)
+
+`StorageAdapter` is a port precisely so the backend can change without touching
+core/sync/transport. A Worker cannot call Capacitor plugins (bridge is
+main-thread only), so native SQLite is reached one of two ways:
+
+- **Option A — native SQLite via a main-thread `StorageBridge` (true durability).**
+  The worker holds a thin proxy `StorageAdapter` that posts ops to the main
+  thread; a `StorageBridge` calls `@capacitor-community/sqlite` and replies.
+  Same pattern as `SignerPort`/`SignerBridge`. Not chatty: writes are already
+  debounced into ~1s batches, so it's ~1 `batchPut`/s + one `loadAll` on boot.
+  **This survives WebKit storage eviction** (writes to the app sandbox, not
+  WebKit-managed storage) — the real durability hedge for iOS.
+- **Option B — WASM SQLite (wa-sqlite) on OPFS, fully in-worker (no bridge).**
+  Cleaner wiring, unified web+native, but OPFS is still WebKit-managed storage,
+  so durability is the SAME as IndexedDB (no eviction protection).
+
+| Goal | Adapter |
+|---|---|
+| Survive iOS eviction (true durability) | Native SQLite via `StorageBridge` (Option A) |
+| SQL ergonomics, no plugin | wa-sqlite + OPFS in worker (Option B) |
+| Default, best-effort | `IndexedDBStorage` (built) |
+
+Different adapters per platform are fine (IndexedDB on web, native on Capacitor).
+Build deferred to post-cutover; no changes to core/sync/transport required.
 
 ---
 

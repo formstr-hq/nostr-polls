@@ -5,8 +5,10 @@ import { MemoryStorage } from "./storage/MemoryStorage";
 import { fakeSocketFactory, makeEvent } from "./testkit";
 
 const NOW = 1_000_000;
-// Must exceed SyncEngine's 50ms ingest flush; also lets channel microtasks run.
+// Exceeds SyncEngine's 50ms ingest flush and lets channel microtasks run.
 const settle = () => new Promise((r) => setTimeout(r, 80));
+
+const reqOn = (sock: { sent: any[] }) => sock.sent.filter((m) => m[0] === "REQ");
 
 async function wire() {
   const { client: clientCh, worker: workerCh } = createChannelPair();
@@ -25,52 +27,80 @@ async function wire() {
   return { f, service, client };
 }
 
-describe("RelayService end-to-end", () => {
-  it("a single subscribe serves cache AND pulls from upstream into the live feed", async () => {
+describe("RelayService — local/upstream decoupling", () => {
+  it("local subscribe hits no network; sync drives upstream and events flow back", async () => {
     const { f, service, client } = await wire();
+    const filters = [{ kinds: [1], authors: ["alice"] }];
 
     const got: string[] = [];
     let eosed = false;
-    client.subscribe([{ kinds: [1], authors: ["alice"] }], {
-      onEvent: (e) => got.push(e.id),
-      onEose: () => (eosed = true),
-    });
+    client.subscribe(filters, { onEvent: (e) => got.push(e.id), onEose: () => (eosed = true) });
     await settle();
 
-    // Local EOSE arrives immediately (empty cache), proving cache-first behaviour.
-    expect(eosed).toBe(true);
-    expect(got).toEqual([]);
+    expect(eosed).toBe(true); // local EOSE immediately
+    expect(f.count("wss://u1")).toBe(0); // subscribe opened NO socket
 
-    // alice has no kind-10002 cached → SyncEngine falls back to the user relay.
+    // Declaring sync is what reaches the network.
+    client.sync(filters);
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+
     const sock = f.last("wss://u1");
     sock.open();
-    const reqAuthors = sock.sent.find((m) => m[0] === "REQ")![2].authors;
-    expect(reqAuthors).toEqual(["alice"]);
-
-    // Upstream delivers an event → verify → ingest → store → live fan-out → client.
-    const subId = sock.sent.find((m) => m[0] === "REQ")![1];
+    const subId = reqOn(sock)[0][1];
     sock.emit(["EVENT", subId, makeEvent({ id: "a".repeat(64), kind: 1, pubkey: "alice" })]);
     await settle();
 
-    expect(got).toEqual(["a".repeat(64)]);
+    expect(got).toEqual(["a".repeat(64)]); // upstream → store → live local sub
     expect(service.db.getById("a".repeat(64))).toBeDefined();
   });
 
   it("routes via outbox when the author's kind-10002 is in the store", async () => {
     const { f, service, client } = await wire();
-
-    // Seed alice's relay list so the outbox cache (the store) knows her write relay.
     service.db.add(
       makeEvent({ id: "r".repeat(64), kind: 10002, pubkey: "alice", tags: [["r", "wss://alice-relay"]] })
     );
-
-    client.subscribe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });
+    client.sync([{ kinds: [1], authors: ["alice"] }]);
     await settle();
-
-    // The fetch should target alice's write relay, not just the user relay.
     expect(f.count("wss://alice-relay")).toBe(1);
-    f.last("wss://alice-relay").open(); // flush the queued REQ
-    const authors = f.last("wss://alice-relay").sent.find((m) => m[0] === "REQ")![2].authors;
-    expect(authors).toEqual(["alice"]);
+  });
+
+  it("dedupes sync by scope: N consumers share ONE upstream subscription", async () => {
+    const { f, client } = await wire();
+    const filters = [{ kinds: [1], authors: ["alice"] }];
+
+    const a = client.sync(filters);
+    const b = client.sync(filters); // same scope
+    await settle();
+    f.last("wss://u1").open();
+    expect(reqOn(f.last("wss://u1"))).toHaveLength(1); // ONE upstream REQ, not two
+
+    a.unsync();
+    await settle();
+    expect(f.last("wss://u1").sent.some((m) => m[0] === "CLOSE")).toBe(false); // still wanted
+
+    b.unsync(); // last consumer leaves
+    await settle();
+    expect(f.last("wss://u1").sent.some((m) => m[0] === "CLOSE")).toBe(true);
+  });
+});
+
+describe("RelayService — lifecycle", () => {
+  it("pause closes all sockets; resume reconnects the syncs", async () => {
+    const { f, client } = await wire();
+    client.sync([{ kinds: [1], authors: ["alice"] }]);
+    await settle();
+    f.last("wss://u1").open();
+    expect(f.last("wss://u1").readyState).toBe(1);
+
+    client.pause();
+    await settle();
+    expect(f.last("wss://u1").readyState).toBe(3); // socket closed
+
+    client.resume();
+    await settle();
+    expect(f.count("wss://u1")).toBe(2); // a fresh socket was created
+    f.last("wss://u1").open();
+    expect(reqOn(f.last("wss://u1"))).toHaveLength(1); // sync re-established
   });
 });

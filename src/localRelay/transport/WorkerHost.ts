@@ -17,10 +17,14 @@ export interface WorkerHostHooks {
   onSetAccount?: (pubkey: string | null) => void;
   /** Called when the user's relay set changes. */
   onSetUserRelays?: (relays: string[]) => void;
-  /** Called after a REQ is handled locally — lets the service start upstream sync. */
-  onReq?: (subId: string, filters: Filter[]) => void;
-  /** Called after a CLOSE — lets the service stop the matching upstream sync. */
-  onClose?: (subId: string) => void;
+  /** Maintain a deduped upstream sync for a scope (decoupled from local REQs). */
+  onStartSync?: (key: string, filters: Filter[]) => void;
+  onStopSync?: (key: string) => void;
+  /** One-shot bounded backfill. */
+  onFetchPage?: (filters: Filter[]) => void;
+  /** Lifecycle: close all sockets / reconnect. */
+  onPause?: () => void;
+  onResume?: () => void;
 }
 
 export class WorkerHost {
@@ -49,19 +53,31 @@ export class WorkerHost {
 
   private onMessage(m: ToWorker): void {
     switch (m.kind) {
-      case "nostr": {
+      case "nostr":
+        // REQ is LOCAL ONLY — RelayCore replays the store + keeps a live tail.
+        // Upstream sync is driven separately via startSync (decoupled).
         this.relayCore.handle(m.msg);
-        // Surface REQ/CLOSE so the service can drive upstream sync alongside the
-        // local replay RelayCore already performed.
-        if (m.msg[0] === "REQ") this.hooks.onReq?.(m.msg[1], m.msg.slice(2) as Filter[]);
-        else if (m.msg[0] === "CLOSE") this.hooks.onClose?.(m.msg[1]);
         break;
-      }
       case "setAccount":
         this.hooks.onSetAccount?.(m.pubkey);
         break;
       case "setUserRelays":
         this.hooks.onSetUserRelays?.(m.relays);
+        break;
+      case "startSync":
+        this.hooks.onStartSync?.(m.key, m.filters);
+        break;
+      case "stopSync":
+        this.hooks.onStopSync?.(m.key);
+        break;
+      case "fetchPage":
+        this.hooks.onFetchPage?.(m.filters);
+        break;
+      case "pause":
+        this.hooks.onPause?.();
+        break;
+      case "resume":
+        this.hooks.onResume?.();
         break;
       case "signResult":
         this.signerPort.resolve(m.reqId, m.event);

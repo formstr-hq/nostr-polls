@@ -9,6 +9,7 @@ import type { Event, Filter } from "../core/types";
 import type { EventTemplate } from "nostr-tools";
 import { Channel } from "./channel";
 import { FromWorker, ToWorker } from "./frames";
+import { generateFilterHash } from "../core/matchFilter";
 
 export interface SubscribeHandlers {
   onEvent: (event: Event) => void;
@@ -27,6 +28,7 @@ interface Sub {
 export class LocalRelayClient {
   private subs = new Map<string, Sub>();
   private pendingPublishes = new Map<string, (ok: boolean) => void>();
+  private syncRefs = new Map<string, number>();
   private counter = 0;
 
   constructor(private channel: Channel, private opts: LocalRelayClientOptions = {}) {
@@ -76,6 +78,45 @@ export class LocalRelayClient {
   /** Tell the worker which relays the user reads from (sync fallback + targets). */
   setUserRelays(relays: string[]): void {
     this.send({ kind: "setUserRelays", relays });
+  }
+
+  /**
+   * Keep a scope warm from upstream relays — DECOUPLED from local `subscribe`.
+   * Ref-counted by filter-hash: many components syncing the same scope share a
+   * single upstream subscription, so presentation volume/churn doesn't multiply
+   * network load. Returns an `unsync` that drops the ref (stops upstream when the
+   * last consumer leaves).
+   */
+  sync(filters: Filter[]): { unsync: () => void } {
+    const key = generateFilterHash(filters, []);
+    this.syncRefs.set(key, (this.syncRefs.get(key) ?? 0) + 1);
+    if (this.syncRefs.get(key) === 1) this.send({ kind: "startSync", key, filters });
+    return {
+      unsync: () => {
+        const next = (this.syncRefs.get(key) ?? 1) - 1;
+        if (next <= 0) {
+          this.syncRefs.delete(key);
+          this.send({ kind: "stopSync", key });
+        } else {
+          this.syncRefs.set(key, next);
+        }
+      },
+    };
+  }
+
+  /** One-shot bounded backfill (pagination / ad-hoc). Ingests, then closes. */
+  fetchPage(filters: Filter[]): void {
+    this.send({ kind: "fetchPage", filters });
+  }
+
+  /** App backgrounded/suspended: worker closes all sockets (store kept). */
+  pause(): void {
+    this.send({ kind: "pause" });
+  }
+
+  /** App foregrounded: worker reconnects syncs + catches up. */
+  resume(): void {
+    this.send({ kind: "resume" });
   }
 
   private send(msg: ToWorker): void {
