@@ -416,4 +416,43 @@ Build deferred to post-cutover; no changes to core/sync/transport required.
 - NIP-50 search inside the local relay (stays a passthrough to search relays).
 - Negentropy/NIP-77 set reconciliation (future optimization for backfill).
 - Multi-tab shared Worker (v1 = one DedicatedWorker per tab; IndexedDB is shared so data is consistent, sockets are not deduped across tabs).
+
+---
+
+## 13. FINAL STEP — extract to `common-packages` as an npm package
+
+Once the cutover is done and we're happy + tested, the portable relay moves *out*
+of this app and is consumed as a published package — the whole point of building it
+modular/platform-free.
+
+**Target:** the sibling pnpm-workspace monorepo `../common-packages`
+(`github.com/formstr-hq/common-packages`), which already publishes `@formstr/signer`
+(consumed here) — same pattern.
+
+**What moves:** `src/localRelay/` → `common-packages/packages/local-relay`, published
+as **`@formstr/local-relay`**. It's already designed for this (§5: platform-free core
++ adapter ports + injected Channel/Socket/Storage/verify/clock; zero app imports).
+The **conformance test suite moves with it** as the package's own tests + the
+cross-implementation spec.
+
+**What stays in the app (for now):** `src/dataLayer/` (kind registry, scope, feed
+assembly, `useEvents`/`useEvent`, bootstrap) is app-specific glue — it *consumes*
+`@formstr/local-relay`. (A later pass could extract a framework-agnostic slice, but
+not v1.)
+
+**Steps:**
+1. Scaffold `packages/local-relay` (package.json `@formstr/local-relay`, `tsconfig`
+   extending `tsconfig.base.json`, build via `pnpm -r build`), move `src/localRelay/`
+   in, port the tests.
+2. Validate on **real Capacitor** using the repo's `apps/tester` (Capacitor + Vite +
+   Android) — proves the Worker + IndexedDB story we researched in §11, on device.
+3. Publish; in nostr-polls replace `src/localRelay/*` imports with
+   `@formstr/local-relay` and add it as a dependency.
+4. CRA note: a published package ships built JS, so the `new Worker(new URL(...))`
+   bundling shifts to the consumer — verify the worker entry resolves under
+   react-scripts (may need the worker file re-exported/owned app-side, or a documented
+   consumer recipe).
+
+This is the last checklist item: do it only after the cutover is verified, so package
+extraction never blocks shipping the fix.
 ```
