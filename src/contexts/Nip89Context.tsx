@@ -5,8 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { nostrRuntime } from "../singletons";
-import { defaultRelays } from "../nostr";
+import { dataLayer } from "../dataLayer/client";
 
 export interface HandlerApp {
   name: string;
@@ -40,7 +39,7 @@ export const Nip89Provider: React.FC<{
   const pendingKinds = useRef<Set<number>>(new Set());
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const flushPending = useCallback(() => {
+  const flushPending = useCallback(async () => {
     const kinds = Array.from(pendingKinds.current);
     pendingKinds.current.clear();
     if (kinds.length === 0) return;
@@ -48,82 +47,63 @@ export const Nip89Provider: React.FC<{
     // Mark in-flight immediately so concurrent registerKind calls don't duplicate
     kinds.forEach((k) => fetchedKinds.current.add(k));
 
-    const handle = nostrRuntime.subscribe(
-      defaultRelays,
-      [{ kinds: [31990], "#k": kinds.map(String) }],
-      {
-        onEvent(event) {
-          // Only handle web/naddr tags — skip iOS/Android-only handlers
-          const webTag = event.tags.find(
-            (t) => t[0] === "web" && (!t[2] || t[2] === "naddr")
-          );
-          if (!webTag?.[1]) return;
+    // One-shot interest: the worker fetches the NIP-89 handlers and returns them.
+    const events = await dataLayer.observeOnce([
+      { kinds: [31990], "#k": kinds.map(String) },
+    ]);
 
-          const urlTemplate = webTag[1];
+    setHandlersMap((prev) => {
+      const next = new Map(prev);
 
-          // Which of our requested kinds does this handler cover?
-          const coveredKinds = event.tags
-            .filter((t) => t[0] === "k")
-            .map((t) => parseInt(t[1], 10))
-            .filter((k) => !isNaN(k) && kinds.includes(k));
+      for (const event of events) {
+        // Only handle web/naddr tags — skip iOS/Android-only handlers
+        const webTag = event.tags.find(
+          (t) => t[0] === "web" && (!t[2] || t[2] === "naddr")
+        );
+        if (!webTag?.[1]) continue;
+        const urlTemplate = webTag[1];
 
-          if (coveredKinds.length === 0) return;
+        // Which of our requested kinds does this handler cover?
+        const coveredKinds = event.tags
+          .filter((t) => t[0] === "k")
+          .map((t) => parseInt(t[1], 10))
+          .filter((k) => !isNaN(k) && kinds.includes(k));
+        if (coveredKinds.length === 0) continue;
 
-          let meta: Record<string, string> = {};
-          try {
-            meta = JSON.parse(event.content);
-          } catch {}
-          const name = meta.name || meta.display_name || "Unknown App";
+        let meta: Record<string, string> = {};
+        try {
+          meta = JSON.parse(event.content);
+        } catch {}
+        const name = meta.name || meta.display_name || "Unknown App";
 
-          setHandlersMap((prev) => {
-            const next = new Map(prev);
+        for (const kind of coveredKinds) {
+          const existing = next.get(kind) ?? [];
+          const appIdx = existing.findIndex((a) => a.urlTemplate === urlTemplate);
 
-            for (const kind of coveredKinds) {
-              const existing = next.get(kind) ?? [];
-              const appIdx = existing.findIndex(
-                (a) => a.urlTemplate === urlTemplate
-              );
-
-              if (appIdx !== -1) {
-                if (existing[appIdx].publishers.includes(event.pubkey))
-                  continue;
-                const updated = [...existing];
-                updated[appIdx] = {
-                  ...updated[appIdx],
-                  publishers: [...updated[appIdx].publishers, event.pubkey],
-                };
-                next.set(kind, updated);
-              } else {
-                next.set(kind, [
-                  ...existing,
-                  {
-                    name,
-                    picture: meta.picture,
-                    urlTemplate,
-                    publishers: [event.pubkey],
-                  },
-                ]);
-              }
-            }
-
-            return next;
-          });
-        },
-
-        onEose() {
-          // Ensure every requested kind has an entry so consumers can
-          // distinguish "still loading" (undefined) from "no results" ([])
-          setHandlersMap((prev) => {
-            const next = new Map(prev);
-            for (const kind of kinds) {
-              if (!next.has(kind)) next.set(kind, []);
-            }
-            return next;
-          });
-          handle.unsubscribe();
-        },
+          if (appIdx !== -1) {
+            if (existing[appIdx].publishers.includes(event.pubkey)) continue;
+            const updated = [...existing];
+            updated[appIdx] = {
+              ...updated[appIdx],
+              publishers: [...updated[appIdx].publishers, event.pubkey],
+            };
+            next.set(kind, updated);
+          } else {
+            next.set(kind, [
+              ...existing,
+              { name, picture: meta.picture, urlTemplate, publishers: [event.pubkey] },
+            ]);
+          }
+        }
       }
-    );
+
+      // Ensure every requested kind has an entry so consumers can distinguish
+      // "still loading" (undefined) from "no results" ([]).
+      for (const kind of kinds) {
+        if (!next.has(kind)) next.set(kind, []);
+      }
+      return next;
+    });
   }, []);
 
   const registerKind = useCallback(

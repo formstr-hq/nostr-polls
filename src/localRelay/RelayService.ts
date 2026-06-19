@@ -168,13 +168,20 @@ export class RelayService {
    * non-React reference resolution; not an app-controlled network command.
    */
   private async observeOnce(reqId: string, filters: Filter[]): Promise<void> {
-    // Worker policy: if the store already satisfies the interest, answer from
-    // cache without touching the network. Otherwise do a bounded fetch.
-    const cached = this.collect(filters);
-    if (cached.length === 0) {
+    // Worker policy: an id-addressed read the cache already holds is answered
+    // without networking (events are immutable). Anything else does a bounded
+    // fetch — author/kind one-shots must actually reach relays.
+    if (!this.cacheSatisfies(filters)) {
       await Promise.all(filters.map((filter) => this.fetchOnce(filter)));
     }
     this.host.postQueryResult(reqId, this.collect(filters));
+  }
+
+  /** True only when every filter is id-based and all those ids are in the store. */
+  private cacheSatisfies(filters: Filter[]): boolean {
+    return filters.every(
+      (f) => !!f.ids && f.ids.length > 0 && f.ids.every((id) => this.db.getById(id))
+    );
   }
 
   private collect(filters: Filter[]): Event[] {
