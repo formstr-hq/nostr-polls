@@ -11,6 +11,7 @@ import { RelayCore } from "../core/RelayCore";
 import { Channel } from "./channel";
 import { SignerPort } from "./SignerPort";
 import { FromWorker, ToWorker } from "./frames";
+import type { RelayPublishOutcome, RelayHealth } from "../sync/RelayPool";
 
 export interface WorkerHostHooks {
   /** Called when the active account changes (SyncEngine retargets, etc.). */
@@ -20,8 +21,12 @@ export interface WorkerHostHooks {
   /** Maintain a deduped upstream sync for a scope (decoupled from local REQs). */
   onStartSync?: (key: string, filters: Filter[]) => void;
   onStopSync?: (key: string) => void;
-  /** A client published an EVENT: store happens in RelayCore; this sends it upstream. */
-  onPublish?: (event: Event) => void;
+  /** A client published an event: store it locally + send upstream with tracking. */
+  onPublish?: (pubId: string, event: Event, relays?: string[]) => void;
+  /** Force-reset specific relay connections (before a retry). */
+  onResetRelays?: (relays: string[]) => void;
+  /** Report live relay connection health. */
+  onRelayHealth?: (reqId: string) => void;
   /** One-shot bounded backfill. */
   onFetchPage?: (filters: Filter[]) => void;
   /** Lifecycle: close all sockets / reconnect. */
@@ -49,6 +54,16 @@ export class WorkerHost {
     this.relayCore.handle(["INGEST", events]);
   }
 
+  /** Send a publish's per-relay outcomes back to the client. */
+  postPublishResult(pubId: string, results: RelayPublishOutcome[]): void {
+    this.emit({ kind: "publishResult", pubId, results });
+  }
+
+  /** Send relay health back to the client. */
+  postRelayHealth(reqId: string, relays: RelayHealth[]): void {
+    this.emit({ kind: "relayHealth", reqId, relays });
+  }
+
   private emit(m: FromWorker): void {
     this.channel.post(m);
   }
@@ -56,12 +71,22 @@ export class WorkerHost {
   private onMessage(m: ToWorker): void {
     switch (m.kind) {
       case "nostr":
-        // REQ is LOCAL ONLY — RelayCore replays the store + keeps a live tail.
-        // Upstream sync is driven separately via startSync (decoupled).
+        // REQ/CLOSE/EVENT are LOCAL ONLY here — RelayCore replays the store +
+        // keeps a live tail. Upstream sync is driven via startSync, and upstream
+        // publishing via the dedicated `publish` frame (both decoupled).
         this.relayCore.handle(m.msg);
-        // A published EVENT is stored + OK'd locally by RelayCore above; it also
-        // needs to reach the network. (REQ/CLOSE stay local.)
-        if (m.msg[0] === "EVENT") this.hooks.onPublish?.(m.msg[1]);
+        break;
+      case "publish":
+        // Store + OK locally (so local subs see it instantly), then send upstream
+        // with per-relay tracking that resolves into a publishResult.
+        this.relayCore.handle(["EVENT", m.event]);
+        this.hooks.onPublish?.(m.pubId, m.event, m.relays);
+        break;
+      case "resetRelays":
+        this.hooks.onResetRelays?.(m.relays);
+        break;
+      case "relayHealth":
+        this.hooks.onRelayHealth?.(m.reqId);
         break;
       case "setAccount":
         this.hooks.onSetAccount?.(m.pubkey);

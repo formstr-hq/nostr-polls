@@ -1,6 +1,6 @@
 import { createChannelPair } from "./channel";
 import { LocalRelayClient, LocalRelayClientOptions } from "./LocalRelayClient";
-import { WorkerHost } from "./WorkerHost";
+import { WorkerHost, WorkerHostHooks } from "./WorkerHost";
 import { EventDB } from "../core/EventDB";
 import { makeEvent } from "../testkit";
 import type { EventTemplate } from "nostr-tools";
@@ -8,10 +8,10 @@ import type { EventTemplate } from "nostr-tools";
 const NOW = 1_000_000;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-function wire(opts?: LocalRelayClientOptions) {
+function wire(opts?: LocalRelayClientOptions, hooks?: WorkerHostHooks) {
   const { client: clientCh, worker: workerCh } = createChannelPair();
   const db = new EventDB(() => NOW);
-  const host = new WorkerHost(workerCh, db);
+  const host = new WorkerHost(workerCh, db, hooks);
   const client = new LocalRelayClient(clientCh, opts);
   return { db, host, client };
 }
@@ -38,16 +38,26 @@ describe("LocalRelayClient ↔ WorkerHost protocol", () => {
     expect(got).toEqual(["old".padEnd(64, "0")]);
     expect(eosed).toBe(true);
 
-    await client.publish(makeEvent({ id: "live".padEnd(64, "0") }));
+    // publish stores + fans out locally regardless of upstream result.
+    client.publish(makeEvent({ id: "live".padEnd(64, "0") }));
     await tick();
     expect(got).toContain("live".padEnd(64, "0"));
   });
 
-  it("publish stores the event and resolves OK", async () => {
-    const { db, client } = wire();
-    const ok = await client.publish(makeEvent({ id: "c".repeat(64) }));
-    expect(ok).toBe(true);
-    expect(db.getById("c".repeat(64))).toBeDefined();
+  it("publish stores the event locally and resolves the upstream outcome", async () => {
+    let host: WorkerHost;
+    const hooks: WorkerHostHooks = {
+      // Stand in for RelayService: report one accepting relay.
+      onPublish: (pubId) =>
+        host.postPublishResult(pubId, [{ relay: "wss://r", status: "accepted", latencyMs: 0 }]),
+    };
+    const built = wire(undefined, hooks);
+    host = built.host;
+    const { db, client } = built;
+
+    const results = await client.publish(makeEvent({ id: "c".repeat(64) }));
+    expect(db.getById("c".repeat(64))).toBeDefined(); // stored locally
+    expect(results).toEqual([{ relay: "wss://r", status: "accepted", latencyMs: 0 }]);
   });
 
   it("routes a NIP-42 sign request to the main-thread signer and back", async () => {

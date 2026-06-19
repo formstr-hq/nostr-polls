@@ -44,9 +44,11 @@ export class RelayService {
   private syncs = new Map<string, { filters: Filter[]; handle: SyncHandle | null }>();
   private paused = false;
   private verify: (event: Event) => boolean;
+  private now: () => number;
 
   constructor(opts: RelayServiceOptions) {
     this.verify = opts.verify ?? defaultVerify;
+    this.now = opts.now ?? (() => Date.now());
     this.db = new EventDB(opts.now);
     this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory);
     this.host = new WorkerHost(opts.channel, this.db, {
@@ -57,7 +59,9 @@ export class RelayService {
       onStartSync: (key, filters) => this.startSync(key, filters),
       onStopSync: (key) => this.stopSync(key),
       onFetchPage: (filters) => this.fetchPage(filters),
-      onPublish: (event) => this.publishUpstream(event),
+      onPublish: (pubId, event, relays) => this.publishUpstream(pubId, event, relays),
+      onResetRelays: (relays) => this.pool.resetRelays(relays),
+      onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
       // onSetAccount handled by the cutover wiring (retarget feeds); the shared
@@ -88,26 +92,64 @@ export class RelayService {
 
   /** Outbox cache IS the store: parse the latest kind-10002 for this pubkey. */
   private getWriteRelays(pubkey: string): string[] {
+    return this.relaysFromNip65(pubkey, "write");
+  }
+
+  /** Inbox relays — where a recipient reads — for gossip delivery of mentions. */
+  private getReadRelays(pubkey: string): string[] {
+    return this.relaysFromNip65(pubkey, "read");
+  }
+
+  /** Parse a pubkey's latest kind-10002, returning the relays for one direction. */
+  private relaysFromNip65(pubkey: string, dir: "read" | "write"): string[] {
     const [event] = this.db.query({ kinds: [10002], authors: [pubkey], limit: 1 });
     if (!event) return [];
-    const write: string[] = [];
+    const out: string[] = [];
     for (const tag of event.tags) {
       if (tag[0] !== "r" || !tag[1]) continue;
-      if (!tag[2] || tag[2] === "write") write.push(tag[1]);
+      // An unmarked "r" tag is both read and write.
+      if (!tag[2] || tag[2] === dir) out.push(tag[1]);
     }
-    return write;
+    return out;
   }
 
   /**
-   * Send a client-published event to the network: the author's own write relays
-   * (outbox) unioned with the user's relays as a floor, so a published note
-   * always lands somewhere even before the author's kind-10002 is known.
+   * Publish a client event upstream with per-relay tracking. Targets are the
+   * author's write relays (outbox) ∪ the user's relays, plus the inbox relays of
+   * any p-tagged pubkey (gossip — so mentions/DMs actually reach recipients).
+   * An explicit `relays` list (retry) overrides routing. Always reports a result
+   * so the diagnostics UI never hangs.
    */
-  private publishUpstream(event: Event): void {
-    const targets = Array.from(
-      new Set([...this.getWriteRelays(event.pubkey), ...this.userRelays])
-    );
-    if (targets.length) this.pool.publish(targets, event);
+  private publishUpstream(pubId: string, event: Event, explicitRelays?: string[]): void {
+    const targets = explicitRelays?.length
+      ? Array.from(new Set(explicitRelays))
+      : this.publishTargets(event);
+    this.pool.publish(targets, event, {
+      now: this.now,
+      onResult: (results) => this.host.postPublishResult(pubId, results),
+    });
+  }
+
+  private publishTargets(event: Event): string[] {
+    const targets = new Set<string>([...this.getWriteRelays(event.pubkey), ...this.userRelays]);
+    for (const tag of event.tags) {
+      if (tag[0] === "p" && tag[1]) {
+        for (const relay of this.getReadRelays(tag[1])) targets.add(relay);
+      }
+    }
+    return Array.from(targets);
+  }
+
+  /** Live connection health for the user's relays (configured + any connected). */
+  private relayHealth() {
+    const known = Array.from(new Set([...this.userRelays]));
+    const fromPool = this.pool.relayHealth();
+    const seen = new Set(fromPool.map((h) => h.relay));
+    // Include configured relays we haven't opened yet, so the user sees them all.
+    const missing = known
+      .filter((r) => !seen.has(r))
+      .map((relay) => ({ relay, connected: false, connecting: false, reconnecting: false }));
+    return [...fromPool, ...missing];
   }
 
   /** Start (or no-op if already running) a deduped upstream sync for a scope. */

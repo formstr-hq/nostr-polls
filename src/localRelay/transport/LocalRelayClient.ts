@@ -8,7 +8,7 @@
 import type { Event, Filter } from "../core/types";
 import type { EventTemplate } from "nostr-tools";
 import { Channel } from "./channel";
-import { FromWorker, ToWorker } from "./frames";
+import { FromWorker, ToWorker, RelayPublishOutcome, RelayHealth } from "./frames";
 import { generateFilterHash } from "../core/matchFilter";
 
 export interface SubscribeHandlers {
@@ -27,7 +27,8 @@ interface Sub {
 
 export class LocalRelayClient {
   private subs = new Map<string, Sub>();
-  private pendingPublishes = new Map<string, (ok: boolean) => void>();
+  private pendingPublishes = new Map<string, (results: RelayPublishOutcome[]) => void>();
+  private pendingHealth = new Map<string, (relays: RelayHealth[]) => void>();
   private syncRefs = new Map<string, number>();
   private counter = 0;
 
@@ -63,11 +64,30 @@ export class LocalRelayClient {
     });
   }
 
-  /** Publish an already-signed event; resolves with the relay's OK result. */
-  publish(event: Event): Promise<boolean> {
+  /**
+   * Publish an already-signed event. The worker stores it locally and sends it
+   * upstream; this resolves with each relay's outcome (for publish diagnostics).
+   * Pass `relays` to target a specific set (retry); omit for default routing.
+   */
+  publish(event: Event, relays?: string[]): Promise<RelayPublishOutcome[]> {
+    const pubId = `p${this.counter++}`;
     return new Promise((resolve) => {
-      this.pendingPublishes.set(event.id, resolve);
-      this.send({ kind: "nostr", msg: ["EVENT", event] });
+      this.pendingPublishes.set(pubId, resolve);
+      this.send({ kind: "publish", pubId, event, relays });
+    });
+  }
+
+  /** Drop + rebuild specific relay connections (force-reset before a retry). */
+  resetRelays(relays: string[]): void {
+    this.send({ kind: "resetRelays", relays });
+  }
+
+  /** Live connection health of the user's relays. */
+  relayHealth(): Promise<RelayHealth[]> {
+    const reqId = `h${this.counter++}`;
+    return new Promise((resolve) => {
+      this.pendingHealth.set(reqId, resolve);
+      this.send({ kind: "relayHealth", reqId });
     });
   }
 
@@ -140,15 +160,26 @@ export class LocalRelayClient {
           this.subs.delete(msg[1]);
           break;
         }
-        case "OK": {
-          const resolve = this.pendingPublishes.get(msg[1]);
-          if (resolve) {
-            this.pendingPublishes.delete(msg[1]);
-            resolve(msg[2]);
-          }
-          break;
-        }
+        // OK (local store ack) is not surfaced — publish resolves via publishResult.
         // NOTICE: ignored.
+      }
+      return;
+    }
+
+    if (m.kind === "publishResult") {
+      const resolve = this.pendingPublishes.get(m.pubId);
+      if (resolve) {
+        this.pendingPublishes.delete(m.pubId);
+        resolve(m.results);
+      }
+      return;
+    }
+
+    if (m.kind === "relayHealth") {
+      const resolve = this.pendingHealth.get(m.reqId);
+      if (resolve) {
+        this.pendingHealth.delete(m.reqId);
+        resolve(m.relays);
       }
       return;
     }

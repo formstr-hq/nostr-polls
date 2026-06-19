@@ -17,6 +17,26 @@
 import type { Event, Filter } from "../localRelay/core/types";
 import type { EventTemplate } from "nostr-tools";
 import { LocalRelayClient, SubscribeHandlers } from "../localRelay/transport/LocalRelayClient";
+import type { RelayPublishOutcome, RelayHealth } from "../localRelay/transport/frames";
+
+export type { RelayPublishOutcome, RelayHealth };
+
+/**
+ * Aggregate publish outcome — same shape `PublishDiagnosticModal` already
+ * consumes (per-relay accepted/rejected/timeout/failed + a summary), so the
+ * diagnostics UI works unchanged.
+ */
+export interface PublishResult {
+  ok: boolean;
+  accepted: number;
+  total: number;
+  relayResults: RelayPublishOutcome[];
+}
+
+function toPublishResult(relayResults: RelayPublishOutcome[]): PublishResult {
+  const accepted = relayResults.filter((r) => r.status === "accepted").length;
+  return { ok: accepted > 0, accepted, total: relayResults.length, relayResults };
+}
 
 export interface DataLayerDeps {
   client: LocalRelayClient;
@@ -81,14 +101,34 @@ export class DataLayer {
   }
 
   /**
-   * Sign a template, publish it, and ingest it locally — the one mutation entry
-   * point. The worker stores it (so local subs see it instantly) AND sends it to
-   * the author's write relays. Returns the signed event.
+   * Sign a template, store it locally (so local subs see it instantly), and send
+   * it upstream — the one mutation entry point. Returns the signed event plus the
+   * per-relay publish outcome that feeds the diagnostics modal.
    */
-  async publish(template: EventTemplate): Promise<Event> {
+  async publish(
+    template: EventTemplate
+  ): Promise<{ event: Event; result: PublishResult }> {
     const event = await this.deps.sign(template);
-    void this.deps.client.publish(event);
-    return event;
+    const outcomes = await this.deps.client.publish(event);
+    return { event, result: toPublishResult(outcomes) };
+  }
+
+  /**
+   * Re-send an already-signed event (publish-diagnostics "retry"). Pass the
+   * specific relays to retry; omit to use default routing.
+   */
+  async republish(event: Event, relays?: string[]): Promise<PublishResult> {
+    return toPublishResult(await this.deps.client.publish(event, relays));
+  }
+
+  /** Force-reset relay connections before retrying (clears stale sockets). */
+  resetRelays(relays: string[]): void {
+    this.deps.client.resetRelays(relays);
+  }
+
+  /** Live connection health of the user's relays (for a relay-health view). */
+  relayHealth(): Promise<RelayHealth[]> {
+    return this.deps.client.relayHealth();
   }
 
   /** Active-account change: retarget scope (does NOT rehydrate the shared store). */

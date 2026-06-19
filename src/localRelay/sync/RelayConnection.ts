@@ -56,6 +56,16 @@ export class RelayConnection {
     return this.socket?.readyState === 1;
   }
 
+  /** Socket exists and is still in the CONNECTING handshake. */
+  get connecting(): boolean {
+    return this.socket?.readyState === 0;
+  }
+
+  /** Waiting on a backoff timer to reconnect after a drop. */
+  get reconnecting(): boolean {
+    return this.reconnectTimer !== null;
+  }
+
   connect(): void {
     if (this.socket && (this.socket.readyState === 0 || this.socket.readyState === 1)) return;
     this.closedByUs = false;

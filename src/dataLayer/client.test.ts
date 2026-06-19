@@ -32,17 +32,51 @@ async function wire() {
 }
 
 describe("DataLayer", () => {
-  it("publish signs, stores locally, and sends upstream", async () => {
+  it("publish signs, stores locally, sends upstream, and reports per-relay outcome", async () => {
     const { f, service, dataLayer } = await wire();
 
-    const event = await dataLayer.publish({ kind: 1, content: "hi", tags: [], created_at: NOW });
+    const pending = dataLayer.publish({ kind: 1, content: "hi", tags: [], created_at: NOW });
     await settle();
 
-    expect(event.id).toBe("s".repeat(64));
     expect(service.db.getById("s".repeat(64))).toBeDefined(); // stored locally
     const sock = f.last("wss://u1");
     sock.open(); // flush the queued publish
     expect(sock.sent.some((m) => m[0] === "EVENT" && m[1].id === "s".repeat(64))).toBe(true);
+
+    sock.emit(["OK", "s".repeat(64), true, ""]); // relay accepts
+    const { event, result } = await pending;
+
+    expect(event.id).toBe("s".repeat(64));
+    expect(result.ok).toBe(true);
+    expect(result.relayResults).toEqual([
+      { relay: "wss://u1", status: "accepted", message: undefined, latencyMs: expect.any(Number) },
+    ]);
+  });
+
+  it("republish reports a rejection reason from the relay", async () => {
+    const { f, dataLayer } = await wire();
+    const ev = makeEvent({ id: "r".repeat(64), kind: 1, pubkey: "me" });
+
+    const pending = dataLayer.republish(ev, ["wss://u1"]);
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    sock.emit(["OK", "r".repeat(64), false, "blocked: spam"]);
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.relayResults[0]).toMatchObject({ status: "rejected", message: "blocked: spam" });
+  });
+
+  it("relayHealth reports configured + connected relays", async () => {
+    const { f, dataLayer } = await wire();
+    // Open a sync so a connection exists for wss://u1.
+    dataLayer.sync([{ kinds: [1], authors: ["alice"] }]);
+    await settle();
+    f.last("wss://u1").open();
+
+    const health = await dataLayer.relayHealth();
+    expect(health.find((h) => h.relay === "wss://u1")?.connected).toBe(true);
   });
 
   it("fetchById returns a cached event without touching the network", async () => {

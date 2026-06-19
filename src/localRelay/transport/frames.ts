@@ -7,6 +7,7 @@
 import type { EventTemplate } from "nostr-tools";
 import type { Event } from "../core/types";
 import type { ClientMessage, RelayMessage } from "../core/protocol";
+import type { RelayPublishOutcome, RelayHealth } from "../sync/RelayPool";
 
 import type { Filter } from "../core/types";
 
@@ -16,6 +17,17 @@ export type ToWorker =
   | { kind: "setAccount"; pubkey: string | null }
   | { kind: "setUserRelays"; relays: string[] }
   | { kind: "signResult"; reqId: string; event: Event | null }
+  // --- publish with diagnostics ---
+  /**
+   * Publish a signed event: store locally AND send upstream, tracking each
+   * relay's outcome. `relays` overrides the default outbox∪user routing (used by
+   * retry to hit specific relays). Worker replies with a `publishResult`.
+   */
+  | { kind: "publish"; pubId: string; event: Event; relays?: string[] }
+  /** Drop + rebuild specific relay connections (force-reset before a retry). */
+  | { kind: "resetRelays"; relays: string[] }
+  /** Request the live connection health of the user's relays. */
+  | { kind: "relayHealth"; reqId: string }
   // --- upstream sync (decoupled from local REQs) ---
   /** Maintain a deduped, long-lived upstream subscription for a scope. */
   | { kind: "startSync"; key: string; filters: Filter[] }
@@ -32,6 +44,9 @@ export type ToWorker =
 export type FromWorker =
   | { kind: "nostr"; msg: RelayMessage }
   | { kind: "signRequest"; reqId: string; template: EventTemplate }
+  | { kind: "publishResult"; pubId: string; results: RelayPublishOutcome[] }
+  | { kind: "relayHealth"; reqId: string; relays: RelayHealth[] }
   | { kind: "ready" };
 
 export type { ClientMessage, RelayMessage };
+export type { RelayPublishOutcome, RelayHealth };
