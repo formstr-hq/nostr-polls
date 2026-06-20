@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Tooltip, Typography } from "@mui/material";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { Event } from "nostr-tools/lib/types/core";
-import { defaultRelays, signEvent } from "../../../nostr";
+import { signEvent } from "../../../nostr";
 import { useRelays } from "../../../hooks/useRelays";
 import { FlashOn } from "@mui/icons-material";
 import { nip57 } from "nostr-tools";
@@ -11,7 +11,7 @@ import { styled, keyframes } from "@mui/system";
 import { getColorsWithTheme } from "../../../styles/theme";
 import { useNotification } from "../../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../../constants/notifications";
-import { nostrRuntime } from "../../../singletons";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import ZapModal from "./ZapModal";
 import ZapDetailsModal from "./ZapDetailsModal";
 import { useZaps } from "../../../contexts/ZapProvider";
@@ -33,7 +33,7 @@ const holdPulse = keyframes`
   100% { filter: drop-shadow(0 0 1px #FAD13F); }
 `;
 
-// ── Hold-to-zap ramp tuning ──────────────────────────────────────────────────
+// ── Hold-to-zap ramp tuning ─────────────────────────────────────────────────────
 // Below ACTIVATE_MS a press is treated as a plain tap (opens the modal at the
 // default amount). Past it, sats ramp up exponentially every TICK_MS and the
 // icon grows with the (log-scaled) amount.
@@ -54,7 +54,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   const [zapConfirmed, setZapConfirmed] = useState(false);
   // Amount the modal should open at — set by the hold-to-zap ramp.
   const [pendingAmount, setPendingAmount] = useState<number | undefined>(undefined);
-  const zapSubRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const zapSubRef = useRef<ObserveHandle | null>(null);
   const { showNotification } = useNotification();
   const { relays } = useRelays();
 
@@ -204,16 +204,15 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
 
       // Subscribe for the zap receipt so we can detect confirmation
       const since = Math.floor(Date.now() / 1000);
-      zapSubRef.current?.unsubscribe();
-      const handle = nostrRuntime.subscribe(
-        defaultRelays,
+      zapSubRef.current?.unobserve();
+      const handle = dataLayer.observe(
         [{ kinds: [9735], "#e": [pollEvent.id], since }],
         {
           onEvent: (event) => {
             addEventToMap(event);
             addZapEvent(event);
             setZapConfirmed(true);
-            zapSubRef.current?.unsubscribe();
+            zapSubRef.current?.unobserve();
             zapSubRef.current = null;
           },
         }
@@ -301,7 +300,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
       <ZapModal
         open={zapModalOpen}
         onClose={() => {
-          zapSubRef.current?.unsubscribe();
+          zapSubRef.current?.unobserve();
           zapSubRef.current = null;
           setZapConfirmed(false);
           setZapModalOpen(false);

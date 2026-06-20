@@ -1,6 +1,6 @@
 import { Event, EventTemplate, finalizeEvent } from "nostr-tools";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { dataLayer } from "../dataLayer/client";
+import { dataLayer } from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
 import { withClientTag } from "../services/clientTagSettings";
 

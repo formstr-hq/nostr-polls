@@ -16,7 +16,6 @@ import {
 import CloseIcon from "@mui/icons-material/Close";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import { nip19 } from "nostr-tools";
-import { getEventRelays } from "../../nostrRuntime/EventRelayMap";
 import { useNavigate } from "react-router-dom";
 import { useAppContext } from "../../hooks/useAppContext";
 import { useBackClose } from "../../hooks/useBackClose";
@@ -141,8 +140,9 @@ const VotersModal: React.FC<VotersModalProps> = ({
                     const npub = nip19.npubEncode(pk);
                     const name =
                       profile?.display_name || profile?.name || npub.slice(0, 8) + "…";
-                    const eventId = result.responderEventIds.get(pk);
-                    const voteRelays = eventId ? getEventRelays(eventId) : [];
+                    // Per-event relay provenance now lives in the worker and is
+                    // not exposed to the app (see useEventRelays).
+                    const voteRelays: string[] = [];
 
                     return (
                       <ListItem

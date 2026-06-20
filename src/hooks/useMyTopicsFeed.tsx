@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Event } from "nostr-tools";
-import { pool, nostrRuntime } from "../singletons";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
+import { collectOnce } from "../dataLayer/collect";
 import { useRelays } from "./useRelays";
 import { useUserContext } from "./useUserContext";
 import { signEvent } from "../nostr";
@@ -200,7 +201,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
 
   /* ------------------ subscriptions ------------------ */
 
-  const subRef = useRef<ReturnType<typeof nostrRuntime.subscribe> | null>(null);
+  const subRef = useRef<ObserveHandle | null>(null);
 
   const startSubscription = useCallback((fresh?: boolean) => {
     if (!relays.length || myTopics.size === 0) {
@@ -209,7 +210,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     }
 
     if (subRef.current) {
-      subRef.current.unsubscribe();
+      subRef.current.unobserve();
       subRef.current = null;
     }
 
@@ -218,8 +219,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     if (!fresh) initialLoadDoneRef.current = false;
 
     const since7d = Math.floor(Date.now() / 1000) - 7 * 86400;
-    const sub = nostrRuntime.subscribe(
-      relays,
+    const sub = dataLayer.observe(
       [
         { kinds: [1], "#t": topics, since: since7d, limit: 200 },
         { kinds: [OFFTOPIC_KIND], "#t": topics, limit: 500 },
@@ -270,7 +270,6 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
             }
           }
         },
-        fresh,
       }
     );
 
@@ -282,7 +281,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     }, 10000);
 
     return () => {
-      sub.unsubscribe();
+      sub.unobserve();
       clearTimeout(timeout);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -451,7 +450,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
             : "Removed user from topic",
       });
 
-      await pool.publish(relays, signed);
+      await dataLayer.publishEvent(signed);
 
       // Optimistic local update
       if (!moderationByTopic.current.has(topic)) {
@@ -479,13 +478,15 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     // Refetch own moderation events to ensure consistency
     try {
       const topicValues = Array.from(new Set(topics));
-      const events = await nostrRuntime.fetchOne(relays, {
-        kinds: [OFFTOPIC_KIND],
-        authors: [user.pubkey],
-        "#t": topicValues,
-      });
-      if (events) {
-        processModerationEvent(events);
+      const collected = await collectOnce([
+        {
+          kinds: [OFFTOPIC_KIND],
+          authors: [user.pubkey],
+          "#t": topicValues,
+        },
+      ]);
+      for (const event of collected) {
+        processModerationEvent(event);
       }
     } catch (e) {
       console.error("Failed to refetch moderation events:", e);
@@ -534,7 +535,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
       content: "Undo moderation",
     });
 
-    await pool.publish(relays, signed);
+    await dataLayer.publishEvent(signed);
 
     // Optimistic local update
     for (const id of moderationEventIds) {

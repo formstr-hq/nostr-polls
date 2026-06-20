@@ -18,23 +18,28 @@ import { useUserContext } from "../../hooks/useUserContext";
 import { getConversationId, fetchInboxRelays } from "../../nostr/nip17";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { DMMessage, SendTracking } from "../../contexts/dm-context";
-import { pool } from "../../singletons";
+import { dataLayer, type PublishResult } from "@formstr/local-relay";
+import { mergePublishResults } from "../../nostr/nip17";
 import MessageBubble from "./MessageBubble";
 import MessageContextMenu from "./MessageContextMenu";
 import MessageInput from "./MessageInput";
 
 export type RelayStatus = "pending" | "sent" | "failed" | "timeout";
 
-const TIMEOUT_MARKER = "__send_timeout__";
-
 export interface MsgSendStatus {
   relays: Record<string, RelayStatus>;
   reasons: Record<string, string>; // relay url -> rejection reason from relay
   latencies: Record<string, number>; // relay url -> ms to respond
-  retryWraps: { event: NostrEvent; relays: string[] }[];
+  retryWraps: NostrEvent[]; // signed gift wraps, kept so retry can republish
 }
 
-const SEND_TIMEOUT_MS = 10_000;
+// The worker reports a PublishStatus per relay; map it to the UI's RelayStatus.
+const STATUS_MAP: Record<string, RelayStatus> = {
+  accepted: "sent",
+  rejected: "failed",
+  timeout: "timeout",
+  failed: "failed",
+};
 
 
 const ChatView: React.FC = () => {
@@ -100,46 +105,33 @@ const ChatView: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversation?.messages?.length]);
 
-  const updateRelayStatus = useCallback(
-    (rumorId: string, relay: string, status: RelayStatus, reason?: string, latencyMs?: number) => {
+  // The worker fans each gift wrap out to the relays it owns and reports the
+  // per-relay outcome in the PublishResult. We render that directly — there is
+  // no app-side per-relay promise to race against a timeout anymore.
+  const applyResult = useCallback(
+    (rumorId: string, result: PublishResult, wraps: NostrEvent[], onlyRelays?: string[]) => {
       setSendStatuses(prev => {
-        const next = new Map(prev);
-        const s = next.get(rumorId);
-        if (!s) return prev;
-        next.set(rumorId, {
-          ...s,
-          relays: { ...s.relays, [relay]: status },
-          reasons: reason ? { ...s.reasons, [relay]: reason } : s.reasons,
-          latencies: latencyMs !== undefined ? { ...s.latencies, [relay]: latencyMs } : s.latencies,
-        });
-        return next;
+        const s = prev.get(rumorId);
+        const relays: Record<string, RelayStatus> = { ...(s?.relays ?? {}) };
+        const reasons: Record<string, string> = { ...(s?.reasons ?? {}) };
+        const latencies: Record<string, number> = { ...(s?.latencies ?? {}) };
+        for (const r of result.relayResults) {
+          if (onlyRelays && !onlyRelays.includes(r.relay)) continue;
+          relays[r.relay] = STATUS_MAP[r.status] ?? "failed";
+          if (r.message) reasons[r.relay] = r.message;
+          latencies[r.relay] = r.latencyMs;
+        }
+        return new Map(prev).set(rumorId, { relays, reasons, latencies, retryWraps: wraps });
       });
     },
     []
   );
 
   const trackRelays = useCallback((tracking: SendTracking) => {
-    const { rumorId, publishes, retryWraps } = tracking;
-    const initialRelays: Record<string, RelayStatus> = {};
-    publishes.forEach(({ relay }) => { initialRelays[relay] = "pending"; });
-    setSendStatuses(prev => new Map(prev).set(rumorId, { relays: initialRelays, reasons: {}, latencies: {}, retryWraps }));
+    applyResult(tracking.rumorId, tracking.result, tracking.wraps);
+  }, [applyResult]);
 
-    publishes.forEach(({ relay, promise }) => {
-      const start = Date.now();
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(TIMEOUT_MARKER)), SEND_TIMEOUT_MS)
-      );
-      Promise.race([promise, timeout])
-        .then(() => updateRelayStatus(rumorId, relay, "sent", undefined, Date.now() - start))
-        .catch((err: unknown) => {
-          const isTimeout = err instanceof Error && err.message === TIMEOUT_MARKER;
-          const reason = !isTimeout && err instanceof Error ? err.message : undefined;
-          updateRelayStatus(rumorId, relay, isTimeout ? "timeout" : "failed", reason, Date.now() - start);
-        });
-    });
-  }, [updateRelayStatus]);
-
-  const handleRetry = useCallback((rumorId: string, relay?: string) => {
+  const handleRetry = useCallback(async (rumorId: string, relay?: string) => {
     const status = sendStatuses.get(rumorId);
     if (!status) return;
 
@@ -147,6 +139,7 @@ const ChatView: React.FC = () => {
       ? [relay]
       : Object.keys(status.relays).filter(r => status.relays[r] !== "sent");
 
+    // Show the retried relays as pending while the worker re-attempts delivery.
     setSendStatuses(prev => {
       const s = prev.get(rumorId);
       if (!s) return prev;
@@ -157,25 +150,12 @@ const ChatView: React.FC = () => {
       return new Map(prev).set(rumorId, { ...s, relays: { ...s.relays, ...reset }, reasons });
     });
 
-    status.retryWraps.forEach(({ event, relays }) => {
-      const targets = relays.filter(r => relaysToRetry.includes(r));
-      if (targets.length === 0) return;
-      const pubs = pool.publish(targets, event);
-      targets.forEach((r, i) => {
-        const start = Date.now();
-        const timeout = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(TIMEOUT_MARKER)), SEND_TIMEOUT_MS)
-        );
-        Promise.race([pubs[i], timeout])
-          .then(() => updateRelayStatus(rumorId, r, "sent", undefined, Date.now() - start))
-          .catch((err: unknown) => {
-            const isTimeout = err instanceof Error && err.message === TIMEOUT_MARKER;
-            const reason = !isTimeout && err instanceof Error ? err.message : undefined;
-            updateRelayStatus(rumorId, r, isTimeout ? "timeout" : "failed", reason, Date.now() - start);
-          });
-      });
-    });
-  }, [sendStatuses, updateRelayStatus]);
+    // Republish the stored wraps — the worker owns relay selection/delivery.
+    const results = await Promise.all(
+      status.retryWraps.map(w => dataLayer.publishEvent(w))
+    );
+    applyResult(rumorId, mergePublishResults(results), status.retryWraps, relaysToRetry);
+  }, [sendStatuses, applyResult]);
 
   // Called by MessageInput — throwing here causes MessageInput to restore the draft
   const handleSend = useCallback(async (content: string) => {

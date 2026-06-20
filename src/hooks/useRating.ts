@@ -1,15 +1,13 @@
 // hooks/useRating.ts
 import { useContext, useEffect, useRef } from "react";
 import { signEvent } from "../nostr";
-import { useRelays } from "./useRelays";
 import { RatingContext } from "../contexts/RatingProvider";
-import { waitForPublish } from "../utils/publish";
+import { dataLayer } from "@formstr/local-relay";
 
 export const useRating = (entityId: string) => {
   const { ratings, registerEntityId, getUserRating } =
     useContext(RatingContext);
   const hasSubmittedRef = useRef(false);
-  const { relays } = useRelays();
 
   // Register entityId with the RatingsProvider
   useEffect(() => {
@@ -46,7 +44,7 @@ export const useRating = (entityId: string) => {
     try {
       const signed = await signEvent(ratingEvent, undefined);
       if (!signed) throw new Error("Signer couldn't sign Event");
-      await waitForPublish(relays, signed);
+      await dataLayer.publishEvent(signed);
     } catch (err) {
       console.error("Error publishing rating:", err);
     } finally {

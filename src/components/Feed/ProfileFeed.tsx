@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Event, Filter } from "nostr-tools";
-import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { collectOnce } from "../../dataLayer/collect";
 import ProfileCard from "../Profile/ProfileCard";
 import { useUserContext } from "../../hooks/useUserContext";
 import {
@@ -23,7 +22,6 @@ const ProfilesFeed: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState<number | undefined>(undefined);
   const { user } = useUserContext();
-  const { relays } = useRelays();
   const seen = useRef<Set<string>>(new Set());
 
   const fetchRatedProfiles = async () => {
@@ -41,74 +39,40 @@ const ProfilesFeed: React.FC = () => {
       until: currentCursor || now,
     };
 
-    const handle = nostrRuntime.subscribe(relays, [ratingFilter], {
-      onEvent: (event) => {
-        const dTag = event.tags.find((t) => t[0] === "d");
-        if (dTag && dTag[1].startsWith("profile:")) {
-          const npub = dTag[1].split(":")[1];
-          if (!seen.current.has(npub)) {
-            seen.current.add(npub);
-            ratedNpubs.add(npub);
-          }
+    // Two-stage collect: gather profile ratings, then their kind-0 metadata.
+    // collectOnce keeps each interest open across the worker's upstream fetch
+    // (the local EOSE precedes it).
+    const ratingEvents = await collectOnce([ratingFilter]);
+    for (const event of ratingEvents) {
+      const dTag = event.tags.find((t) => t[0] === "d");
+      if (dTag && dTag[1].startsWith("profile:")) {
+        const npub = dTag[1].split(":")[1];
+        if (!seen.current.has(npub)) {
+          seen.current.add(npub);
+          ratedNpubs.add(npub);
         }
+      }
+      if (!oldestTimestamp || event.created_at < oldestTimestamp) {
+        oldestTimestamp = event.created_at;
+      }
+    }
 
-        if (!oldestTimestamp || event.created_at < oldestTimestamp) {
-          oldestTimestamp = event.created_at;
+    if (ratedNpubs.size > 0) {
+      const metaEvents = await collectOnce([
+        { kinds: [0], authors: Array.from(ratedNpubs), limit: ratedNpubs.size },
+      ]);
+      setProfileEvents((prev) => {
+        const updated = new Map(prev);
+        for (const event of metaEvents) {
+          if (!updated.has(event.pubkey)) updated.set(event.pubkey, event);
         }
-      },
-      onEose: async () => {
-        handle.unsubscribe();
+        return updated;
+      });
+    }
 
-        // Fetch kind:0 metadata for those pubkeys
-        if (ratedNpubs.size > 0) {
-          const metadataFilter: Filter = {
-            kinds: [0],
-            authors: Array.from(ratedNpubs),
-            limit: ratedNpubs.size,
-          };
-
-          const metadataHandle = nostrRuntime.subscribe(relays, [metadataFilter], {
-            onEvent: (event) => {
-              setProfileEvents((prev) => {
-                if (prev.has(event.pubkey)) return prev;
-                const updated = new Map(prev);
-                updated.set(event.pubkey, event);
-                return updated;
-              });
-            },
-            onEose: () => {
-              metadataHandle.unsubscribe();
-              if (oldestTimestamp) {
-                setCursor(oldestTimestamp - 1);
-              }
-              setInitialLoadComplete(true);
-              setLoading(false);
-            },
-          });
-
-          setTimeout(() => {
-            metadataHandle.unsubscribe();
-            if (oldestTimestamp) {
-              setCursor(oldestTimestamp - 1);
-            }
-            setInitialLoadComplete(true);
-            setLoading(false);
-          }, 3000);
-        } else {
-          if (oldestTimestamp) {
-            setCursor(oldestTimestamp - 1);
-          }
-          setInitialLoadComplete(true);
-          setLoading(false);
-        }
-      },
-    });
-
-    setTimeout(() => {
-      handle.unsubscribe();
-      setInitialLoadComplete(true);
-      setLoading(false);
-    }, 3000);
+    if (oldestTimestamp) setCursor(oldestTimestamp - 1);
+    setInitialLoadComplete(true);
+    setLoading(false);
   };
 
   useEffect(() => {

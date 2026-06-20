@@ -8,17 +8,14 @@ import React, {
 } from "react";
 import { Event } from "nostr-tools";
 import { useUserContext } from "../hooks/useUserContext";
-import { nostrRuntime } from "../singletons";
+import { dataLayer, type ObserveHandle, type PublishResult } from "@formstr/local-relay";
 import {
-  fetchInboxRelays,
   unwrapGiftWrap,
   wrapAndSendDM,
   wrapAndSendReaction,
   getConversationId,
   Rumor,
-  RelayPublish,
 } from "../nostr/nip17";
-import { defaultRelays } from "../nostr";
 
 export interface DMMessage {
   id: string; // rumor id
@@ -46,8 +43,10 @@ export interface Conversation {
 
 export interface SendTracking {
   rumorId: string;
-  publishes: RelayPublish[];
-  retryWraps: { event: Event; relays: string[] }[];
+  /** Signed gift wraps — kept so a retry can republish without re-signing. */
+  wraps: Event[];
+  /** Per-relay delivery outcome reported by the worker. */
+  result: PublishResult;
 }
 
 interface DMContextInterface {
@@ -170,7 +169,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
   }, []);
   const [loading, setLoading] = useState(false);
   const seenRumorIds = useRef<Set<string>>(new Set());
-  const subRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const subRef = useRef<ObserveHandle | null>(null);
   // Serialise external-signer decryption so the user only sees one prompt at a time
   const decryptQueue = useRef<Promise<void>>(Promise.resolve());
   // If the user rejects a decrypt request, stop asking for the rest of the session
@@ -318,7 +317,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
       setConversations(new Map());
       seenRumorIds.current.clear();
       decryptionRejected.current = false;
-      subRef.current?.unsubscribe();
+      subRef.current?.unobserve();
       subRef.current = null;
       // Clear giftwrap cache (and any legacy plaintext entries) on logout
       clearGiftWrapCache();
@@ -331,12 +330,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
     const startSubscription = async () => {
       setLoading(true);
 
-      const inboxRelays = await fetchInboxRelays(myPubkey);
-      // Use both inbox relays and default relays to catch messages
-      const relaysToUse = Array.from(new Set([...inboxRelays, ...defaultRelays]));
-
-      const handle = nostrRuntime.subscribe(
-        relaysToUse,
+      const handle = dataLayer.observe(
         [{ kinds: [1059], "#p": [myPubkey] }],
         {
           onEvent: async (event: Event) => {
@@ -379,7 +373,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
 
     const seenIds = seenRumorIds.current;
     return () => {
-      subRef.current?.unsubscribe();
+      subRef.current?.unobserve();
       subRef.current = null;
       setConversations(new Map());
       seenIds.clear();
@@ -396,7 +390,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
     ): Promise<SendTracking> => {
       if (!user) throw new Error("Must be logged in to send DMs");
 
-      const { rumor, publishes, retryWraps } = await wrapAndSendDM(
+      const { rumor, wraps, result } = await wrapAndSendDM(
         recipientPubkey,
         content,
         user.privateKey,
@@ -406,7 +400,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
       // Optimistically add to state immediately
       addMessage(rumor, `local_${rumor.id}`, user.pubkey);
 
-      return { rumorId: rumor.id, publishes, retryWraps };
+      return { rumorId: rumor.id, wraps, result };
     },
     [user, addMessage]
   );

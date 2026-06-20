@@ -3,10 +3,9 @@ import { Button, CircularProgress } from "@mui/material";
 import { EventTemplate } from "nostr-tools";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
-import { useRelays } from "../../hooks/useRelays";
 import { ProfileListDialog } from "../Common/ProfileListDialog";
 import { signEvent } from "../../nostr";
-import { pool } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 
 interface FollowPackMembersDialogProps {
   open: boolean;
@@ -23,7 +22,6 @@ export const FollowPackMembersDialog: React.FC<FollowPackMembersDialogProps> = (
 }) => {
   const { user, setUser } = useUserContext();
   const { fetchLatestContactList } = useListContext();
-  const { relays } = useRelays();
   const [followingPks, setFollowingPks] = useState<Set<string>>(new Set());
 
   const handleFollow = async (e: React.MouseEvent, pk: string) => {
@@ -42,7 +40,7 @@ export const FollowPackMembersDialog: React.FC<FollowPackMembersDialogProps> = (
         content: contactEvent?.content || "",
       };
       const signed = await signEvent(newEvent);
-      pool.publish(relays, signed);
+      dataLayer.publishEvent(signed);
       setUser((prev) =>
         prev ? { ...prev, follows: [...(prev.follows || []), pk] } : prev
       );

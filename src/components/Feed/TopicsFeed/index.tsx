@@ -5,7 +5,6 @@ import { useNavigate, Outlet, useParams } from "react-router-dom";
 import {
   Typography,
   Box,
-  Chip,
   CircularProgress,
   IconButton,
   Dialog,
@@ -16,14 +15,13 @@ import {
   Button,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
-import { nostrRuntime } from "../../../singletons";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import { Virtuoso } from "react-virtuoso";
 import TopicCard from "./TopicsCard";
 import { useListContext } from "../../../hooks/useListContext";
 import MyTopicsFeed from "./MyTopicsFeed";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { useSubNav } from "../../../contexts/SubNavContext";
-import { useGossipContext } from "../../../contexts/GossipContext";
 import { useBackClose } from "../../../hooks/useBackClose";
 import { useFeedActions } from "../../../contexts/FeedActionsContext";
 
@@ -46,11 +44,10 @@ const TopicsFeed: React.FC = () => {
   const navigate = useNavigate();
   const { tag } = useParams();
   const { user, requestLogin } = useUserContext();
-  const subsRef = useRef<ReturnType<typeof nostrRuntime.subscribe>[]>([]);
+  const subsRef = useRef<ObserveHandle[]>([]);
   const isMounted = useRef(true);
   const { setItems, clearItems } = useSubNav();
   const { registerRefresh } = useFeedActions();
-  const { networkInterests } = useGossipContext();
   const handleCloseSearch = () => setSearchOpen(false);
   useBackClose(searchOpen, handleCloseSearch);
 
@@ -102,7 +99,7 @@ const TopicsFeed: React.FC = () => {
     // Cleanup on unmount
     return () => {
       isMounted.current = false;
-      subsRef.current.forEach((s) => s.unsubscribe());
+      subsRef.current.forEach((s) => s.unobserve());
       subsRef.current = [];
     };
   }, []);
@@ -113,7 +110,7 @@ const TopicsFeed: React.FC = () => {
       "#d": Array.from(tagsMap.keys()).map((tag) => `hashtag:${tag}`),
     };
 
-    const sub = nostrRuntime.subscribe(relays, [filter], {
+    const sub = dataLayer.observe([filter], {
       onEvent: (event) => {
         const dTag = event.tags.find((t) => t[0] === "d");
         if (!dTag || !dTag[1].startsWith("hashtag:")) return;
@@ -128,7 +125,7 @@ const TopicsFeed: React.FC = () => {
       },
     });
 
-    return () => sub.unsubscribe();
+    return () => sub.unobserve();
   }, [relays, tagsMap]);
 
   useEffect(() => {
@@ -138,12 +135,8 @@ const TopicsFeed: React.FC = () => {
     setLoading(true);
     setTagsMap(new Map()); // clear on refresh
 
-    subsRef.current.forEach((s) => s.unsubscribe());
+    subsRef.current.forEach((s) => s.unobserve());
     subsRef.current = [];
-
-    // On manual retry, close stale WebSockets so we re-handshake — mobile NAT
-    // often kills connections silently and pool.close() alone isn't enough.
-    const fresh = refreshKey > 0;
 
     const upsertTag = (id: string, ts: number) => {
       setTagsMap((prev) => {
@@ -156,8 +149,7 @@ const TopicsFeed: React.FC = () => {
     };
 
     // Primary source: rating events for hashtags
-    const ratingSub = nostrRuntime.subscribe(
-      relays,
+    const ratingSub = dataLayer.observe(
       [{ kinds: [34259], "#m": ["hashtag"], limit: 100 }],
       {
         onEvent: (event: Event) => {
@@ -171,15 +163,13 @@ const TopicsFeed: React.FC = () => {
         onEose: () => {
           if (isMounted.current) setLoading(false);
         },
-        fresh,
       }
     );
 
     // Fallback source: interest sets (NIP-51 kind 10015) from the network.
     // Many users curate hashtags here even when they don't rate them, so this
     // surfaces topics even on sparse relays.
-    const interestsSub = nostrRuntime.subscribe(
-      relays,
+    const interestsSub = dataLayer.observe(
       [{ kinds: [10015], limit: 100 }],
       {
         onEvent: (event: Event) => {
@@ -190,7 +180,6 @@ const TopicsFeed: React.FC = () => {
             if (id) upsertTag(id, event.created_at);
           }
         },
-        fresh,
       }
     );
 
@@ -204,7 +193,7 @@ const TopicsFeed: React.FC = () => {
 
     return () => {
       clearTimeout(timeout);
-      subsRef.current.forEach((s) => s.unsubscribe());
+      subsRef.current.forEach((s) => s.unobserve());
       subsRef.current = [];
     };
   }, [tag, relays, refreshKey]); // refreshKey forces a re-fetch on manual refresh
@@ -328,27 +317,6 @@ const TopicsFeed: React.FC = () => {
         ) : (
           // Show list of topic cards for discover / myTopics
           <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
-            {/* Network interests from gossip relays — shown in discover tab only */}
-            {activeTab === "discover" && networkInterests.length > 0 && (
-              <Box sx={{ px: 1, pt: 1, pb: 0.5, flexShrink: 0 }}>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
-                  Popular in your network
-                </Typography>
-                <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-                  {networkInterests.slice(0, 20).map((interest) => (
-                    <Chip
-                      key={interest}
-                      label={`#${interest}`}
-                      size="small"
-                      variant="outlined"
-                      color="primary"
-                      clickable
-                      onClick={() => navigate(`/feeds/topics/${interest}`)}
-                    />
-                  ))}
-                </Box>
-              </Box>
-            )}
             <Box sx={{ flexGrow: 1, minHeight: 0 }}>
               <Virtuoso
                 data={displayTags}

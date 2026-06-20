@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -68,7 +68,10 @@ const ArticlesFeed: React.FC = () => {
       filter.authors = user.follows;
     }
 
-    const handle = nostrRuntime.subscribe(relays, [filter], {
+    let settled = false;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handle = dataLayer.observe([filter], {
       onEvent: (event: Event) => {
         if (!seen.current.has(event.id)) {
           seen.current.add(event.id);
@@ -76,11 +79,18 @@ const ArticlesFeed: React.FC = () => {
           if (!profiles?.get(event.pubkey)) fetchUserProfileThrottled(event.pubkey);
         }
         if (!oldestTs || event.created_at < oldestTs) oldestTs = event.created_at;
+        // Commit shortly after the stream goes quiet (local EOSE is not
+        // completion under the dataLayer contract — upstream arrives later).
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(finalize, 900);
       },
-      onEose: () => { finalize(); handle.unsubscribe(); },
     });
 
     const finalize = () => {
+      if (settled) return;
+      settled = true;
+      if (quietTimer) clearTimeout(quietTimer);
+      handle.unobserve();
       if (newArticles.length < BATCH_SIZE) setExhausted(true);
       if (oldestTs) cursorRef.current = oldestTs - 1;
       setArticles((prev) => {
@@ -94,7 +104,8 @@ const ArticlesFeed: React.FC = () => {
       setLoadingMore(false);
     };
 
-    setTimeout(() => { finalize(); handle.unsubscribe(); }, 5000);
+    // Hard cap so an empty result (no events → no quiet timer) still settles.
+    setTimeout(finalize, 5000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, relays, exhausted]);
 

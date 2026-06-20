@@ -13,8 +13,7 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { Event, nip19 } from "nostr-tools";
 import ReactMarkdown from "react-markdown";
-import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useAppContext } from "../../hooks/useAppContext";
 import { openProfileTab } from "../../nostr";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
@@ -24,7 +23,6 @@ import { FeedbackMenu } from "../FeedbackMenu";
 const ArticleDetail: React.FC = () => {
   const { naddr } = useParams<{ naddr: string }>();
   const navigate = useNavigate();
-  const { relays } = useRelays();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const [article, setArticle] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,18 +39,19 @@ const ArticleDetail: React.FC = () => {
     if (decoded.type !== "naddr") { setLoading(false); return; }
 
     const { kind, pubkey, identifier } = decoded.data;
-    const handle = nostrRuntime.subscribe(
-      relays,
+    const handle = dataLayer.observe(
       [{ kinds: [kind], authors: [pubkey], "#d": [identifier], limit: 1 }],
       {
         onEvent: (e) => {
           setArticle(e);
+          setLoading(false);
           if (!profiles?.get(e.pubkey)) fetchUserProfileThrottled(e.pubkey);
         },
-        onEose: () => { setLoading(false); handle.unsubscribe(); },
+        // No onEose: local EOSE precedes the worker's upstream fetch, so the
+        // event arrives via onEvent. The timeout below closes the interest.
       }
     );
-    setTimeout(() => { setLoading(false); handle.unsubscribe(); }, 5000);
+    setTimeout(() => { setLoading(false); handle.unobserve(); }, 5000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [naddr]);
 

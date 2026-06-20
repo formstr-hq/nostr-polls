@@ -7,10 +7,10 @@ import {
   useState,
 } from "react";
 import { EventTemplate } from "nostr-tools";
-import { nostrRuntime, pool } from "../singletons";
+import { dataLayer } from "@formstr/local-relay";
+import { collectOnce } from "../dataLayer/collect";
 import { signEvent } from "../nostr";
 import { useUserContext } from "../hooks/useUserContext";
-import { useRelays } from "../hooks/useRelays";
 
 export type ReportReason =
   | "nudity"
@@ -52,7 +52,6 @@ export const ReportsContext = createContext<ReportsContextInterface | null>(
 
 export function ReportsProvider({ children }: { children: ReactNode }) {
   const { user } = useUserContext();
-  const { relays } = useRelays();
 
   // IDs (event ids or pubkeys) the current user has reported
   const [myReportedIds, setMyReportedIds] = useState<Set<string>>(new Set());
@@ -91,13 +90,13 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
       setMyReportedIds(new Set());
       return;
     }
-    nostrRuntime
-      .querySync(relays, {
+    collectOnce([
+      {
         kinds: [1984],
         authors: [user.pubkey],
         limit: 500,
-      })
-      .then((events) => {
+      },
+    ]).then((events) => {
         const ids = new Set<string>();
         for (const event of events) {
           for (const tag of event.tags) {
@@ -124,12 +123,14 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
 
     if (wotAuthors.size === 0) return;
 
-    const events = await nostrRuntime.querySync(relays, {
-      kinds: [1984],
-      authors: Array.from(wotAuthors),
-      "#e": idsToCheck,
-      limit: 500,
-    });
+    const events = await collectOnce([
+      {
+        kinds: [1984],
+        authors: Array.from(wotAuthors),
+        "#e": idsToCheck,
+        limit: 500,
+      },
+    ]);
 
     if (events.length === 0) return;
 
@@ -145,7 +146,7 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
-  }, [user, relays]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Called by feed components with the IDs currently visible/loaded.
   // Batches and deduplicates requests so we never fetch the same id twice.
@@ -179,12 +180,14 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
 
     if (wotAuthors.size === 0) return;
 
-    const events = await nostrRuntime.querySync(relays, {
-      kinds: [1984],
-      authors: Array.from(wotAuthors),
-      "#p": pubkeysToCheck,
-      limit: 500,
-    });
+    const events = await collectOnce([
+      {
+        kinds: [1984],
+        authors: Array.from(wotAuthors),
+        "#p": pubkeysToCheck,
+        limit: 500,
+      },
+    ]);
 
     if (events.length === 0) return;
 
@@ -200,7 +203,7 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
-  }, [user, relays]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const requestUserReportCheck = useCallback(
     (pubkeys: string[]) => {
@@ -246,11 +249,11 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
         content,
       };
       const signed = await signEvent(eventTemplate);
-      pool.publish(relays, signed);
+      dataLayer.publishEvent(signed);
       // Optimistic: mark as reported immediately
       setMyReportedIds((prev) => new Set(Array.from(prev).concat([eventId, eventPubkey])));
     },
-    [relays]
+    []
   );
 
   const reportUser = useCallback(
@@ -262,10 +265,10 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
         content,
       };
       const signed = await signEvent(eventTemplate);
-      pool.publish(relays, signed);
+      dataLayer.publishEvent(signed);
       setMyReportedIds((prev) => new Set(Array.from(prev).concat([pubkey])));
     },
-    [relays]
+    []
   );
 
   return (

@@ -37,13 +37,12 @@ import { useResizeObserver } from "../../hooks/useResizeObserver";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import SummarizeIcon from "@mui/icons-material/Summarize";
 import CellTowerIcon from "@mui/icons-material/CellTower";
-import { waitForPublish } from "../../utils/publish";
 import { publishDeletion } from "../../utils/deletion";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import RateEventModal from "../../components/Ratings/RateEventModal";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
-import { pool } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useRelays } from "../../hooks/useRelays";
 import { useNotification } from "../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
@@ -83,7 +82,7 @@ export const Notes: React.FC<NotesProps> = ({
   const navigate = useNavigate();
   const { profiles, fetchUserProfileThrottled, aiSettings, editsMap, editsHistoryMap, fetchEditsThrottled, addEventToMap } = useAppContext();
   let { user, requestLogin, setUser } = useUserContext();
-  let { relays, writeRelays } = useRelays();
+  let { relays } = useRelays();
   let { fetchLatestContactList, unfollowContact } = useListContext();
   const replyingTo = event.tags.findLast((t) => t[0] === "e")?.[1] || null;
   const isValidHex = (s: string | null) => s && s.length === 64 && /^[0-9a-f]+$/i.test(s);
@@ -142,7 +141,7 @@ export const Notes: React.FC<NotesProps> = ({
       // Add to runtime immediately so editsMap reflects the change without waiting for the throttler
       addEventToMap(signed);
       setEditDialogOpen(false);
-      const res = await waitForPublish(writeRelays, signed);
+      const res = await dataLayer.publishEvent(signed);
       openDiagnostic(signed, res, "Edit publish results");
     } catch {
       showNotification("Failed to publish edit", "error");
@@ -155,7 +154,7 @@ export const Notes: React.FC<NotesProps> = ({
     if (isBroadcasting) return;
     setIsBroadcasting(true);
     try {
-      const res = await waitForPublish(writeRelays, event);
+      const res = await dataLayer.publishEvent(event);
       openDiagnostic(event, res, "Broadcast relay results");
     } catch {
       openDiagnostic(event, { ok: false, accepted: 0, total: relays.length, relayResults: [] }, "Broadcast relay results");
@@ -230,7 +229,7 @@ export const Notes: React.FC<NotesProps> = ({
     };
 
     const signed = await signEvent(newEvent);
-    pool.publish(relays, signed);
+    dataLayer.publishEvent(signed);
     setUser({
       pubkey: signed.pubkey,
       ...user,
@@ -326,7 +325,7 @@ export const Notes: React.FC<NotesProps> = ({
   const handleDelete = async () => {
     handleCloseMenu();
     try {
-      const { event: deletionEvent, result } = await publishDeletion([event.id], [event.kind], writeRelays);
+      const { event: deletionEvent, result } = await publishDeletion([event.id], [event.kind]);
       setDeleted(true);
       openDiagnostic(deletionEvent, result, "Delete relay results");
     } catch {

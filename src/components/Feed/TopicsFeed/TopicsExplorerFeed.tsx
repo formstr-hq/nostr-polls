@@ -16,7 +16,7 @@ import { ArrowBack } from "@mui/icons-material";
 import FavoriteBorderIcon from "@mui/icons-material/FavoriteBorder";
 import FavoriteIcon from "@mui/icons-material/Favorite";
 import { useNavigate, useParams } from "react-router-dom";
-import { Event, SimplePool } from "nostr-tools";
+import { Event } from "nostr-tools";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { useRelays } from "../../../hooks/useRelays";
 import { Notes } from "../../Notes";
@@ -25,7 +25,7 @@ import Rate from "../../../components/Ratings/Rate";
 import UnifiedFeed from "../UnifiedFeed";
 import OverlappingAvatars from "../../../components/Common/OverlappingAvatars";
 import { signEvent } from "../../../nostr";
-import { pool, nostrRuntime } from "../../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useMetadata } from "../../../hooks/MetadataProvider";
 import { selectBestMetadataEvent } from "../../../utils/utils";
 import {
@@ -181,7 +181,7 @@ const TopicExplorer: React.FC = () => {
     };
 
     const signed = await signEvent(unsignedEvent);
-    await pool.publish(relays, signed);
+    await dataLayer.publishEvent(signed);
 
     if (type === "off-topic") {
       if (!curatedByMap.current.has(noteEvent.id)) {
@@ -233,7 +233,7 @@ const TopicExplorer: React.FC = () => {
       content: "Undo moderation",
     });
 
-    await pool.publish(relays, signed);
+    await dataLayer.publishEvent(signed);
 
     // Optimistic local update
     deletedModerationIds.current.add(moderationEventId);
@@ -247,7 +247,7 @@ const TopicExplorer: React.FC = () => {
     setModerationVersion((v) => v + 1);
   };
 
-  const subRef = useRef<ReturnType<SimplePool["subscribeMany"]> | null>(null);
+  const subRef = useRef<{ close: () => void } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -262,7 +262,7 @@ const TopicExplorer: React.FC = () => {
       { kinds: [5], "#k": [String(OFFTOPIC_KIND)], limit: 500 },
     ];
 
-    const handle = nostrRuntime.subscribe(relays, filters, {
+    const handle = dataLayer.observe(filters, {
       onEvent: (event: Event) => {
         if (event.kind === 5) {
           const targetIds = new Set(
@@ -334,7 +334,7 @@ const TopicExplorer: React.FC = () => {
 
     // Store reference for cleanup
     subRef.current = {
-      close: () => handle.unsubscribe(),
+      close: () => handle.unobserve(),
     };
 
     // Handle loading state after timeout

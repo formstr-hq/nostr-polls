@@ -13,15 +13,11 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import TuneIcon from "@mui/icons-material/Tune";
 import PaletteIcon from "@mui/icons-material/Palette";
-import HubIcon from "@mui/icons-material/Hub";
-import InsightsIcon from "@mui/icons-material/Insights";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import PermMediaIcon from "@mui/icons-material/PermMedia";
 import ShieldIcon from "@mui/icons-material/Shield";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { RelaySettings } from "../Header/RelaySettings";
-import { RelayAnalytics } from "../Header/RelayAnalytics";
 import { AISettings } from "../Header/AISettings";
 import { BlossomSettings } from "../Header/BlossomSettings";
 import { ModerationSettings } from "../Header/ModerationSettings";
@@ -31,8 +27,6 @@ import { GeneralSettings } from "../Header/GeneralSettings";
 type SectionId =
   | "general"
   | "appearance"
-  | "relays"
-  | "relayAnalytics"
   | "ai"
   | "media"
   | "moderation";
@@ -59,20 +53,6 @@ const SECTIONS: SectionDef[] = [
     description: "Theme, accent color, and fonts",
     icon: <PaletteIcon />,
     render: () => <AppearanceSettings />,
-  },
-  {
-    id: "relays",
-    label: "Relays",
-    description: "Manage the relays you publish to",
-    icon: <HubIcon />,
-    render: () => <RelaySettings />,
-  },
-  {
-    id: "relayAnalytics",
-    label: "Relay Analytics",
-    description: "See how your relays are performing",
-    icon: <InsightsIcon />,
-    render: () => <RelayAnalytics />,
   },
   {
     id: "ai",

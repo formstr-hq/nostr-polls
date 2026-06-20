@@ -1,8 +1,7 @@
 import { ReactNode, createContext, useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { Event } from "nostr-tools/lib/types/core";
 import { Profile } from "../nostr/types";
-import { Throttler } from "../nostr/requestThrottler";
-import { pool, nostrRuntime } from "../singletons";
+import { dataLayer, type Filter, type ObserveHandle } from "@formstr/local-relay";
 import { getCachedProfiles, setCachedProfile } from "../utils/localStorage";
 
 type AppContextInterface = {
@@ -35,6 +34,19 @@ type AppContextInterface = {
 
 export const AppContext = createContext<AppContextInterface | null>(null);
 
+/**
+ * A standing interest keyed by a growing id set. Adding an id (re-)declares the
+ * interest with a wider filter; the worker (local relay) owns the network and
+ * decides if/when to fetch. Events stream back through `onEvent`. This replaces
+ * the old per-kind Throttlers — the app never batches or drives connections.
+ */
+interface Interest {
+  ids: Set<string>;
+  handle: ObserveHandle | null;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+const newInterest = (): Interest => ({ ids: new Set(), handle: null, timer: null });
+
 export function AppContextProvider({ children }: { children: ReactNode }) {
   const [aiSettings, setAISettings] = useState(
     JSON.parse(localStorage.getItem("ai-settings") || "{}"),
@@ -44,6 +56,10 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   const [profilesVersion, setProfilesVersion] = useState(0);
   const [dataVersion, setDataVersion] = useState(0);
 
+  // The app-local view assembled from the interests we declare + optimistic
+  // inserts. (The worker store is the network source of truth; this is what the
+  // maps below are built from.)
+  const eventsRef = useRef<Map<string, Event>>(new Map());
 
   // Debounce timers — coalesce rapid per-event bumps into a single re-render
   const profilesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -55,64 +71,141 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     profilesTimerRef.current = setTimeout(() => setProfilesVersion((v) => v + 1), 50);
   }, []);
 
-  const resetStore = useCallback(() => {
-    nostrRuntime.eventStore.clear();
-    setDataVersion((v) => v + 1);
-    setProfilesVersion((v) => v + 1);
-  }, []);
-
   const bumpDataVersion = useCallback(() => {
     if (dataTimerRef.current) clearTimeout(dataTimerRef.current);
     dataTimerRef.current = setTimeout(() => setDataVersion((v) => v + 1), 50);
   }, []);
 
-  // Seed nostrRuntime from localStorage profile cache on first mount so
-  // avatars/names are available before any network responses arrive.
-  useEffect(() => {
-    const cached = getCachedProfiles();
-    if (cached.length > 0) {
-      nostrRuntime.addEvents(cached as Event[]);
-      bumpProfilesVersion();
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const queryStore = useCallback((kinds: number[]): Event[] => {
+    const out: Event[] = [];
+    eventsRef.current.forEach((e) => {
+      if (kinds.includes(e.kind)) out.push(e);
+    });
+    return out;
+  }, []);
 
-  // Add event to runtime store (for profiles)
-  const addEventToProfiles = useCallback((event: Event) => {
-    nostrRuntime.addEvent(event);
+  const onProfileEvent = useCallback((event: Event) => {
+    eventsRef.current.set(event.id, event);
     if (event.kind === 0) setCachedProfile(event as any);
     bumpProfilesVersion();
   }, [bumpProfilesVersion]);
 
-  // Batch add events to runtime
-  const addEventsToProfiles = useCallback((events: Event[]) => {
-    nostrRuntime.addEvents(events);
-    for (const event of events) {
-      if (event.kind === 0) setCachedProfile(event as any);
+  const onDataEvent = useCallback((event: Event) => {
+    eventsRef.current.set(event.id, event);
+    bumpDataVersion();
+  }, [bumpDataVersion]);
+
+  const resetStore = useCallback(() => {
+    eventsRef.current.clear();
+    setDataVersion((v) => v + 1);
+    setProfilesVersion((v) => v + 1);
+  }, []);
+
+  // Seed from the localStorage profile cache on first mount so avatars/names are
+  // available before any network responses arrive.
+  useEffect(() => {
+    const cached = getCachedProfiles();
+    if (cached.length > 0) {
+      for (const e of cached as Event[]) eventsRef.current.set(e.id, e);
+      bumpProfilesVersion();
     }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- the six standing interests (profiles + engagement) -------------------
+  const interests = useRef({
+    profiles: newInterest(),
+    comments: newInterest(),
+    edits: newInterest(),
+    likes: newInterest(),
+    zaps: newInterest(),
+    reposts: newInterest(),
+  });
+
+  const addToInterest = useCallback(
+    (
+      interest: Interest,
+      id: string,
+      buildFilters: (ids: string[]) => Filter[],
+      onEvent: (e: Event) => void,
+    ) => {
+      if (!id || interest.ids.has(id)) return;
+      interest.ids.add(id);
+      if (interest.timer) clearTimeout(interest.timer);
+      interest.timer = setTimeout(() => {
+        const filters = buildFilters(Array.from(interest.ids));
+        if (interest.handle) interest.handle.update(filters);
+        else interest.handle = dataLayer.observe(filters, { onEvent });
+      }, 300);
+    },
+    [],
+  );
+
+  // Drop every standing interest when the provider unmounts.
+  useEffect(() => {
+    const live = interests.current;
+    return () => {
+      Object.values(live).forEach((i) => {
+        if (i.timer) clearTimeout(i.timer);
+        i.handle?.unobserve();
+      });
+    };
+  }, []);
+
+  const fetchUserProfileThrottled = useCallback(
+    (pubkey: string) =>
+      addToInterest(interests.current.profiles, pubkey, (ids) => [{ kinds: [0], authors: ids }], onProfileEvent),
+    [addToInterest, onProfileEvent],
+  );
+  const fetchCommentsThrottled = useCallback(
+    (eventId: string) =>
+      addToInterest(
+        interests.current.comments,
+        eventId,
+        (ids) => [{ kinds: [1, 1111], "#e": ids }, { kinds: [1111], "#a": ids }],
+        onDataEvent,
+      ),
+    [addToInterest, onDataEvent],
+  );
+  const fetchEditsThrottled = useCallback(
+    (eventId: string) =>
+      addToInterest(interests.current.edits, eventId, (ids) => [{ kinds: [1010], "#e": ids }], onDataEvent),
+    [addToInterest, onDataEvent],
+  );
+  const fetchLikesThrottled = useCallback(
+    (eventId: string) =>
+      addToInterest(interests.current.likes, eventId, (ids) => [{ kinds: [7], "#e": ids }], onDataEvent),
+    [addToInterest, onDataEvent],
+  );
+  const fetchZapsThrottled = useCallback(
+    (eventId: string) =>
+      addToInterest(interests.current.zaps, eventId, (ids) => [{ kinds: [9735], "#e": ids }], onDataEvent),
+    [addToInterest, onDataEvent],
+  );
+  const fetchRepostsThrottled = useCallback(
+    (eventId: string) =>
+      addToInterest(interests.current.reposts, eventId, (ids) => [{ kinds: [6, 16], "#e": ids }], onDataEvent),
+    [addToInterest, onDataEvent],
+  );
+
+  // --- optimistic inserts (also pushed to the worker store) -----------------
+  const addEventToProfiles = useCallback((event: Event) => {
+    eventsRef.current.set(event.id, event);
+    dataLayer.addEvent(event as any);
+    if (event.kind === 0) setCachedProfile(event as any);
     bumpProfilesVersion();
   }, [bumpProfilesVersion]);
 
-  // Add event to runtime store (for reactions, comments, zaps, reposts)
   const addEventToMap = useCallback((event: Event) => {
-    nostrRuntime.addEvent(event);
+    eventsRef.current.set(event.id, event);
+    dataLayer.addEvent(event as any);
     bumpDataVersion();
   }, [bumpDataVersion]);
 
-  // Batch add events to runtime
-  const addEventsToMap = useCallback((events: Event[]) => {
-    nostrRuntime.addEvents(events);
-    bumpDataVersion();
-  }, [bumpDataVersion]);
-
-  // Query runtime for profiles
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // --- derived maps (assembled from the app-local view) ---------------------
   const profiles = useMemo(() => {
-    const events = nostrRuntime.query({ kinds: [0] });
     const profileMap = new Map<string, Profile>();
-
-    for (const event of events) {
+    for (const event of queryStore([0])) {
       if (badProfileEvents.current.has(event.id)) continue;
-
       try {
         const content = JSON.parse(event.content);
         profileMap.set(event.pubkey, { ...content, event });
@@ -121,52 +214,40 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
         console.warn("Skipping malformed profile", event.pubkey);
       }
     }
-
     return profileMap;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profilesVersion]);
 
-  // Query runtime for comments map (kind 1 by e-tag, kind 1111 by A/a-tag and E/e-tag)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const commentsMap = useMemo(() => {
     const map = new Map<string, Event[]>();
-
     const addToMap = (key: string, event: Event) => {
       const existing = map.get(key) || [];
-      if (!existing.find((e) => e.id === event.id)) {
-        map.set(key, [...existing, event]);
-      }
+      if (!existing.find((e) => e.id === event.id)) map.set(key, [...existing, event]);
     };
-
     // Kind 1: index by e-tag
-    for (const event of nostrRuntime.query({ kinds: [1] })) {
+    for (const event of queryStore([1])) {
       const eTag = event.tags.find((tag) => tag[0] === "e");
       if (eTag) addToMap(eTag[1], event);
     }
-
     // Kind 1111 (NIP-22): index by A/a-tag (addressable ref) AND E/e-tag (event id)
-    for (const event of nostrRuntime.query({ kinds: [1111] })) {
+    for (const event of queryStore([1111])) {
       for (const tag of event.tags) {
         if (tag[0] === "A" || tag[0] === "a" || tag[0] === "E" || tag[0] === "e") {
           if (tag[1]) addToMap(tag[1], event);
         }
       }
     }
-
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataVersion]);
 
-  // Query runtime for edits — builds both latest-edit map and full history map (kind 1010 per NIP-41)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const { editsMap, editsHistoryMap } = useMemo(() => {
     const latest = new Map<string, Event>();
     const history = new Map<string, Event[]>();
-
     const kind1ByEventId = new Map<string, Event>();
-    for (const e of nostrRuntime.query({ kinds: [1] })) kind1ByEventId.set(e.id, e);
+    for (const e of queryStore([1])) kind1ByEventId.set(e.id, e);
 
-    for (const event of nostrRuntime.query({ kinds: [1010] })) {
+    for (const event of queryStore([1010])) {
       const eTag = event.tags.find((t) => t[0] === "e");
       if (!eTag?.[1]) continue;
       const original = kind1ByEventId.get(eTag[1]);
@@ -176,135 +257,40 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
       if (!existing || event.created_at > existing.created_at) latest.set(eTag[1], event);
       history.set(eTag[1], [...(history.get(eTag[1]) || []), event]);
     }
-    // Sort each history newest-first
     Array.from(history.keys()).forEach((k) => {
-      history.set(k, (history.get(k) || []).sort((a: Event, b: Event) => b.created_at - a.created_at));
+      history.set(k, (history.get(k) || []).sort((a, b) => b.created_at - a.created_at));
     });
-
     return { editsMap: latest, editsHistoryMap: history };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataVersion]);
 
-  // Query runtime for likes map (kind 7 with e tags)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const likesMap = useMemo(() => {
-    const events = nostrRuntime.query({ kinds: [7] });
-    const map = new Map<string, Event[]>();
-
-    for (const event of events) {
-      const eTag = event.tags.find((tag) => tag[0] === "e");
-      if (eTag) {
-        const targetId = eTag[1];
-        const existing = map.get(targetId) || [];
-        map.set(targetId, [...existing, event]);
+  const byETag = useCallback(
+    (kinds: number[]) => {
+      const map = new Map<string, Event[]>();
+      for (const event of queryStore(kinds)) {
+        const eTag = event.tags.find((tag) => tag[0] === "e");
+        if (eTag) {
+          const targetId = eTag[1];
+          map.set(targetId, [...(map.get(targetId) || []), event]);
+        }
       }
-    }
+      return map;
+    },
+    [queryStore],
+  );
 
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataVersion]);
-
-  // Query runtime for zaps map (kind 9735 with e tags)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const zapsMap = useMemo(() => {
-    const events = nostrRuntime.query({ kinds: [9735] });
-    const map = new Map<string, Event[]>();
-
-    for (const event of events) {
-      const eTag = event.tags.find((tag) => tag[0] === "e");
-      if (eTag) {
-        const targetId = eTag[1];
-        const existing = map.get(targetId) || [];
-        map.set(targetId, [...existing, event]);
-      }
-    }
-
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataVersion]);
-
-  // Query runtime for reposts map (kind 6 or 16 with e tags)
+  const likesMap = useMemo(() => byETag([7]), [dataVersion]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const repostsMap = useMemo(() => {
-    const events = nostrRuntime.query({ kinds: [6, 16] });
-    const map = new Map<string, Event[]>();
+  const zapsMap = useMemo(() => byETag([9735]), [dataVersion]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const repostsMap = useMemo(() => byETag([6, 16]), [dataVersion]);
 
-    for (const event of events) {
-      const eTag = event.tags.find((tag) => tag[0] === "e");
-      if (eTag) {
-        const targetId = eTag[1];
-        const existing = map.get(targetId) || [];
-        map.set(targetId, [...existing, event]);
-      }
-    }
-
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataVersion]);
-
-  // Getter methods for individual queries
-  const getProfile = (pubkey: string): Profile | undefined => {
-    return profiles.get(pubkey);
-  };
-
-  const getComments = (eventId: string): Event[] => {
-    return commentsMap.get(eventId) || [];
-  };
-
-  const getLikes = (eventId: string): Event[] => {
-    return likesMap.get(eventId) || [];
-  };
-
-  const getZaps = (eventId: string): Event[] => {
-    return zapsMap.get(eventId) || [];
-  };
-
-  const getReposts = (eventId: string): Event[] => {
-    return repostsMap.get(eventId) || [];
-  };
-
-  const ProfileThrottler = useRef(
-    new Throttler(50, pool, addEventsToProfiles, "profiles", 500),
-  );
-  const CommentsThrottler = useRef(
-    new Throttler(50, pool, addEventsToMap, "comments", 1000),
-  );
-  const LikesThrottler = useRef(
-    new Throttler(50, pool, addEventsToMap, "likes", 1500),
-  );
-  const ZapsThrottler = useRef(
-    new Throttler(50, pool, addEventsToMap, "zaps", 2000),
-  );
-  const RepostsThrottler = useRef(
-    new Throttler(50, pool, addEventsToMap, "reposts", 2500),
-  );
-  const EditsThrottler = useRef(
-    new Throttler(50, pool, addEventsToMap, "edits", 3000),
-  );
-
-  const fetchUserProfileThrottled = (pubkey: string) => {
-    ProfileThrottler.current.addId(pubkey);
-  };
-
-  const fetchCommentsThrottled = (pollEventId: string) => {
-    CommentsThrottler.current.addId(pollEventId);
-  };
-
-  const fetchEditsThrottled = (eventId: string) => {
-    EditsThrottler.current.addId(eventId);
-  };
-
-  const fetchLikesThrottled = (pollEventId: string) => {
-    LikesThrottler.current.addId(pollEventId);
-  };
-
-  const fetchZapsThrottled = (pollEventId: string) => {
-    ZapsThrottler.current.addId(pollEventId);
-  };
-
-  const fetchRepostsThrottled = (pollEventId: string) => {
-    RepostsThrottler.current.addId(pollEventId);
-  };
+  const getProfile = (pubkey: string): Profile | undefined => profiles.get(pubkey);
+  const getComments = (eventId: string): Event[] => commentsMap.get(eventId) || [];
+  const getLikes = (eventId: string): Event[] => likesMap.get(eventId) || [];
+  const getZaps = (eventId: string): Event[] => zapsMap.get(eventId) || [];
+  const getReposts = (eventId: string): Event[] => repostsMap.get(eventId) || [];
 
   return (
     <AppContext.Provider

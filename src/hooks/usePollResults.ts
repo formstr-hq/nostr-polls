@@ -1,9 +1,7 @@
 import { useEffect, useRef, useMemo, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { nip13 } from "nostr-tools";
-import { nostrRuntime } from "../singletons";
-import { SubscriptionHandle } from "../nostrRuntime/types";
-import { useRelays } from "./useRelays";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 
 export interface OptionResult {
   count: number;
@@ -25,20 +23,15 @@ export function usePollResults(
   enabled: boolean
 ): { results: Map<string, OptionResult>; totalVotes: number } {
   const [responses, setResponses] = useState<Event[]>([]);
-  const subRef = useRef<SubscriptionHandle | null>(null);
-  const { relays: userRelays } = useRelays();
+  const subRef = useRef<ObserveHandle | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
 
     // Tear down any previous subscription (e.g. filterPubkeys changed)
-    subRef.current?.unsubscribe();
+    subRef.current?.unobserve();
     setResponses([]);
 
-    const pollRelays = pollEvent.tags
-      .filter((t) => t[0] === "relay")
-      .map((t) => t[1]);
-    const finalRelays = Array.from(new Set([...pollRelays, ...userRelays]));
     const pollExpiration = pollEvent.tags.find((t) => t[0] === "endsAt")?.[1];
 
     const resultFilter: Filter = {
@@ -50,17 +43,17 @@ export function usePollResults(
     if (filterPubkeys.length) resultFilter.authors = filterPubkeys;
     if (pollExpiration) resultFilter.until = Number(pollExpiration);
 
-    subRef.current = nostrRuntime.subscribe(finalRelays, [resultFilter], {
+    subRef.current = dataLayer.observe([resultFilter], {
       onEvent: (event: Event) => {
         setResponses((prev) => [...prev, event]);
       },
     });
 
     return () => {
-      subRef.current?.unsubscribe();
+      subRef.current?.unobserve();
       subRef.current = null;
     };
-  }, [enabled, pollEvent.id, pollEvent.tags, difficulty, filterPubkeys, userRelays]);
+  }, [enabled, pollEvent.id, pollEvent.tags, difficulty, filterPubkeys]);
 
   const options = useMemo(
     () => pollEvent.tags.filter((t) => t[0] === "option"),

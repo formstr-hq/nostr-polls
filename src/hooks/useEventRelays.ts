@@ -1,16 +1,11 @@
-import { useEffect, useState } from 'react';
-import { getEventRelays } from '../nostrRuntime/EventRelayMap';
-
 /**
- * Returns the relay URLs that an event was received from.
- * Reads from EventRelayMap which is populated as subscriptions fire.
+ * Per-event relay provenance ("which relays did this event come from") used to
+ * be tracked in the app's EventRelayMap. The worker (local relay) now owns every
+ * connection and that attribution is not exposed across the dataLayer contract,
+ * so this returns an empty list. It is kept as a stable seam so the "found on N
+ * relays" UI keeps compiling; a worker affordance can repopulate it later
+ * (out of scope for the local-relay cutover).
  */
-export function useEventRelays(eventId: string): string[] {
-  const [relays, setRelays] = useState<string[]>(() => getEventRelays(eventId));
-
-  useEffect(() => {
-    setRelays(getEventRelays(eventId));
-  }, [eventId]);
-
-  return relays;
+export function useEventRelays(_eventId: string): string[] {
+  return [];
 }

@@ -2,19 +2,20 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { Event, Filter } from "nostr-tools";
 import { verifyEvent } from "nostr-tools";
 import { useUserContext } from "../../hooks/useUserContext";
-import { useRelays } from "../../hooks/useRelays";
 import { useReports } from "../../hooks/useReports";
 import { Box } from "@mui/material";
 import FeedError from "./FeedError";
-import { nostrRuntime } from "../../singletons";
-import { SubscriptionHandle } from "../../nostrRuntime/types";
+import { dataLayer } from "@formstr/local-relay";
 import UnifiedFeed from "./UnifiedFeed";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import RepeatIcon from "@mui/icons-material/Repeat";
 import OverlappingAvatars from "../Common/OverlappingAvatars";
 import { useSubNav } from "../../contexts/SubNavContext";
-import { getRelaysForAuthors, prefetchOutboxRelays } from "../../nostr/OutboxService";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
+
+// Minimal closer shape the feed tracks. The worker owns relays/chunking, so the
+// app only needs to be able to drop its interest.
+type FeedSub = { unsubscribe: () => void };
 
 const KIND_POLL = 1068;
 const KIND_RESPONSE = [1018, 1070];
@@ -69,7 +70,7 @@ const PollFeedItem = React.memo(
   }
 );
 
-// Note: Chunking is now handled automatically by nostrRuntime
+// Note: relay selection + chunking are handled automatically by the worker.
 
 export const PollFeed = () => {
   const [pollEvents, setPollEvents] = useState<Event[]>([]);
@@ -80,7 +81,7 @@ export const PollFeed = () => {
     return (saved === "following" || saved === "webOfTrust") ? saved : "global";
   });
   const [feedSubscription, setFeedSubscription] = useState<
-    SubscriptionHandle | undefined
+    FeedSub | undefined
   >();
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -91,7 +92,6 @@ export const PollFeed = () => {
   const loadingInitialRef = useRef(true);
 
   const { user } = useUserContext();
-  const { relays } = useRelays();
   const { requestReportCheck, requestUserReportCheck } = useReports();
   const { setItems, clearItems } = useSubNav();
   const { registerRefresh } = useFeedActions();
@@ -155,25 +155,19 @@ export const PollFeed = () => {
     setPendingPollEvents([]);
   }, [pendingPollEvents]);
 
-  // Helper to subscribe - runtime handles chunking automatically for large author lists
+  // Helper to declare interest in poll events. The worker owns relay selection
+  // and chunking; the app just supplies filters and an EOSE callback.
   const subscribeWithAuthors = useCallback(
-    (filters: Filter[], onAllChunksComplete?: () => void, relayOverride?: string[], fresh?: boolean) => {
-      const targetRelays = relayOverride ?? relays;
-      const handle = nostrRuntime.subscribe(targetRelays, filters, {
+    (filters: Filter[], onAllChunksComplete?: () => void): FeedSub => {
+      const handle = dataLayer.observe(filters, {
         onEvent: handleIncomingEvent,
         onEose: () => {
           onAllChunksComplete?.();
         },
-        fresh,
       });
-
-      // Return a wrapper that matches the old API
-      return {
-        ...handle,
-        close: () => handle.unsubscribe(),
-      };
+      return { unsubscribe: () => handle.unobserve() };
     },
-    [relays, handleIncomingEvent]
+    [handleIncomingEvent]
   );
 
   const loadMore = () => {
@@ -192,13 +186,9 @@ export const PollFeed = () => {
       "#k": ["1068"],
     };
 
-    let gossipRelays: string[] | undefined;
     if (eventSource === "following" && user?.follows?.length) {
-      const authorsList = user.follows;
-      filterPoll.authors = authorsList;
-      filterResposts.authors = authorsList;
-      prefetchOutboxRelays(authorsList);
-      gossipRelays = getRelaysForAuthors(relays, authorsList);
+      filterPoll.authors = user.follows;
+      filterResposts.authors = user.follows;
     }
     if (
       eventSource === "webOfTrust" &&
@@ -208,13 +198,11 @@ export const PollFeed = () => {
       const authors = Array.from(user.webOfTrust);
       filterPoll.authors = authors;
       filterResposts.authors = authors;
-      prefetchOutboxRelays(authors);
-      gossipRelays = getRelaysForAuthors(relays, authors);
     }
 
     const closer = subscribeWithAuthors([filterPoll, filterResposts], () => {
       setLoadingMore(false);
-    }, gossipRelays);
+    });
     setFeedSubscription(closer);
   };
 
@@ -228,13 +216,9 @@ export const PollFeed = () => {
       "#k": ["1068"],
     };
 
-    let gossipRelays: string[] | undefined;
     if (eventSource === "following" && user?.follows?.length) {
-      const authorsList = user.follows;
-      filterPolls.authors = authorsList;
-      filterResposts.authors = authorsList;
-      prefetchOutboxRelays(authorsList);
-      gossipRelays = getRelaysForAuthors(relays, authorsList);
+      filterPolls.authors = user.follows;
+      filterResposts.authors = user.follows;
     }
     if (
       eventSource === "webOfTrust" &&
@@ -244,8 +228,6 @@ export const PollFeed = () => {
       const authors = Array.from(user.webOfTrust);
       filterPolls.authors = authors;
       filterResposts.authors = authors;
-      prefetchOutboxRelays(authors);
-      gossipRelays = getRelaysForAuthors(relays, authors);
     }
 
     let eoseFired = false;
@@ -268,7 +250,7 @@ export const PollFeed = () => {
       }
     };
 
-    const closer = subscribeWithAuthors([filterPolls, filterResposts], () => onComplete(), gossipRelays, fresh);
+    const closer = subscribeWithAuthors([filterPolls, filterResposts], () => onComplete());
 
     timeoutId = setTimeout(() => {
       closer.unsubscribe();
@@ -276,7 +258,7 @@ export const PollFeed = () => {
     }, FETCH_TIMEOUT_MS);
 
     return closer;
-  }, [eventSource, user, relays, subscribeWithAuthors]);
+  }, [eventSource, user, subscribeWithAuthors]);
 
   const refreshFeed = useCallback(() => {
     if (feedSubscription) feedSubscription.unsubscribe();
@@ -335,7 +317,7 @@ export const PollFeed = () => {
       },
     ];
 
-    const handle = nostrRuntime.subscribe(relays, filter, {
+    const handle = dataLayer.observe(filter, {
       onEvent: (event: Event) => {
         if (verifyEvent(event)) {
           setUserResponses((prev) => [...prev, event]);
@@ -343,10 +325,7 @@ export const PollFeed = () => {
       },
     });
 
-    return {
-      ...handle,
-      close: () => handle.unsubscribe(),
-    };
+    return { unsubscribe: () => handle.unobserve() };
   };
 
   const getLatestResponsesByPoll = (events: Event[]) => {
@@ -408,7 +387,7 @@ export const PollFeed = () => {
   }, [eventSource]);
 
   useEffect(() => {
-    let closer: SubscriptionHandle | undefined;
+    let closer: FeedSub | undefined;
     if (user && userResponses.length === 0) {
       closer = fetchUserResponses();
     }
@@ -428,7 +407,7 @@ export const PollFeed = () => {
       pollHandle.current?.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pollEvents, repostEvents, relays, eventSource]);
+  }, [pollEvents, repostEvents, eventSource]);
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>

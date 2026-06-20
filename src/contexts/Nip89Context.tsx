@@ -7,8 +7,7 @@ import React, {
   useState,
 } from "react";
 import type { Event } from "nostr-tools";
-import { dataLayer } from "../dataLayer/client";
-import type { ObserveHandle } from "../dataLayer/client";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 
 export interface HandlerApp {
   name: string;

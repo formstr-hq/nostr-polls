@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
-import { nostrRuntime } from "../../singletons";
-import { useRelays } from "../../hooks/useRelays";
+import { dataLayer } from "@formstr/local-relay";
 import { Notes } from "../Notes";
 import UnifiedFeed from "../Feed/UnifiedFeed";
 
@@ -14,11 +13,9 @@ interface UserNotesFeedProps {
 
 const KIND_NOTE = 1;
 
-const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, relays: propRelays, scrollContainerRef }) => {
+const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRef }) => {
   const [notes, setNotes] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const { relays: hookRelays } = useRelays();
-  const relays = propRelays ?? hookRelays;
 
   const fetchNotes = useCallback(() => {
     if (!pubkey) return;
@@ -32,7 +29,7 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, relays: propRelay
       },
     ];
 
-    const handle = nostrRuntime.subscribe(relays, filters, {
+    const handle = dataLayer.observe(filters, {
       onEvent(event) {
         setNotes((prev) => {
           const exists = prev.find((e) => e.id === event.id);
@@ -45,8 +42,8 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, relays: propRelay
       },
     });
 
-    return () => handle.unsubscribe();
-  }, [pubkey, relays]);
+    return () => handle.unobserve();
+  }, [pubkey]);
 
   useEffect(() => {
     const cleanup = fetchNotes();

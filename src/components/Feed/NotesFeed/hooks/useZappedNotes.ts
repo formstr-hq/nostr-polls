@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Event, Filter, nip57 } from "nostr-tools";
-import { useRelays } from "../../../../hooks/useRelays";
-import { nostrRuntime } from "../../../../singletons";
+import { Event, nip57 } from "nostr-tools";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
+import { collectOnce } from "../../../../dataLayer/collect";
 
 export interface ZapRecord {
   zapEvent: Event;
@@ -28,176 +28,89 @@ function parseZapRecord(event: Event): ZapRecord {
   return { zapEvent: event, senderPubkey, sats };
 }
 
-const FETCH_TIMEOUT_MS = 8000;
-
+/**
+ * "Zapped" feed — notes that the user's contacts have zapped (kind 9735).
+ *
+ * Same two-stage shape as the reacted feed: observe the contacts' zap receipts,
+ * then pull the referenced notes by id via a debounced one-shot collection. The
+ * app keeps local maps fed by the data layer's streaming `observe`; the worker
+ * owns every connection.
+ */
 export const useZappedNotes = (user: any) => {
   const [loading, setLoading] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
-  const [version, setVersion] = useState(0);
-  const { relays } = useRelays();
+  const [recordMap, setRecordMap] = useState<Map<string, ZapRecord[]>>(new Map());
+  const [noteMap, setNoteMap] = useState<Map<string, Event>>(new Map());
 
-  const oldestTimestampRef = useRef<number | null>(null);
-  const loadingRef = useRef(false);
-  // A fetch that times out keeps its subscription open so late-arriving events
-  // (slow/flaky relays) still complete the fetch. Held here to tear down on the
-  // next fetch or on unmount.
-  const activeHandleRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const recordsRef = useRef(new Map<string, ZapRecord[]>());
+  const notesRef = useRef(new Map<string, Event>());
+  const wantedIdsRef = useRef(new Set<string>());
+  const handleRef = useRef<ObserveHandle | null>(null);
+  const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // eventId -> ZapRecord[]
-  const zapRecords = useCallback((): Map<string, ZapRecord[]> => {
-    if (!user?.follows?.length) return new Map();
+  const scheduleNoteFetch = useCallback(() => {
+    if (noteTimerRef.current) return;
+    noteTimerRef.current = setTimeout(async () => {
+      noteTimerRef.current = null;
+      const ids = Array.from(wantedIdsRef.current).filter((id) => !notesRef.current.has(id));
+      if (!ids.length) return;
+      const events = await collectOnce([{ kinds: [1], ids }]);
+      for (const e of events) notesRef.current.set(e.id, e);
+      if (events.length) setNoteMap(new Map(notesRef.current));
+    }, 300);
+  }, []);
 
-    const map = new Map<string, ZapRecord[]>();
-    const zapEvents = nostrRuntime.query({ kinds: [9735] });
-
-    for (const event of zapEvents) {
-      const eTag = event.tags.find((t) => t[0] === "e")?.[1];
-      if (!eTag) continue;
-
-      const record = parseZapRecord(event);
-      // Only include zaps sent by contacts
-      if (!user.follows.includes(record.senderPubkey)) continue;
-
-      const existing = map.get(eTag) ?? [];
-      if (!existing.some((r) => r.zapEvent.id === event.id)) {
-        map.set(eTag, [...existing, record]);
-      }
+  const fetchZappedNotes = useCallback(() => {
+    if (!user?.follows?.length) {
+      setInitialLoadDone(true);
+      return;
     }
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.follows, version]);
-
-  const zappedEvents = useCallback((): Map<string, Event> => {
-    if (!user?.follows?.length) return new Map();
-
-    const noteIds = Array.from(zapRecords().keys());
-    const events = nostrRuntime.query({ kinds: [1], ids: noteIds });
-
-    const map = new Map<string, Event>();
-    for (const e of events) map.set(e.id, e);
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.follows, version, zapRecords]);
-
-  const fetchZappedNotes = useCallback(async () => {
-    if (!user?.follows?.length) { setInitialLoadDone(true); return; }
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    setLoadFailed(false);
     setLoading(true);
-    // Close any previous subscription kept open after a timeout.
-    activeHandleRef.current?.unsubscribe();
-    activeHandleRef.current = null;
-
-    const zapFilter: Filter = {
-      kinds: [9735],
-      "#P": user.follows, // uppercase P = sender pubkey in NIP-57
-      limit: 30,
-    } as any;
-
-    if (oldestTimestampRef.current !== null) {
-      (zapFilter as any).until = oldestTimestampRef.current;
-    } else {
-      (zapFilter as any).since = Math.floor(Date.now() / 1000) - 30 * 86400;
-    }
-
-    const zappedNoteIds: string[] = [];
-    let fetchDone = false;
-    let timeoutId: ReturnType<typeof setTimeout>;
-
-    const finishFetch = (failed = false) => {
-      if (fetchDone) return;
-      fetchDone = true;
-      clearTimeout(timeoutId);
-      loadingRef.current = false;
-      setLoading(false);
-      setInitialLoadDone(true);
-      if (failed) {
-        setLoadFailed(true);
-      } else {
-        // Late events may have completed the fetch after a timeout flagged a
-        // failure — clear it so the empty/Retry state is replaced by notes.
-        setLoadFailed(false);
-        setVersion((v) => v + 1);
+    handleRef.current?.unobserve();
+    handleRef.current = dataLayer.observe(
+      [{ kinds: [9735], "#P": user.follows, limit: 100 } as any],
+      {
+        onEvent: (e) => {
+          const eTag = e.tags.find((t) => t[0] === "e")?.[1];
+          if (!eTag) return;
+          const record = parseZapRecord(e);
+          // Only include zaps sent by contacts
+          if (!user.follows.includes(record.senderPubkey)) return;
+          const existing = recordsRef.current.get(eTag) ?? [];
+          if (!existing.some((r) => r.zapEvent.id === e.id)) {
+            recordsRef.current.set(eTag, [...existing, record]);
+            setRecordMap(new Map(recordsRef.current));
+          }
+          wantedIdsRef.current.add(eTag);
+          scheduleNoteFetch();
+        },
+        onEose: () => {
+          setLoading(false);
+          setInitialLoadDone(true);
+          scheduleNoteFetch();
+        },
       }
-    };
+    );
+  }, [user?.follows, scheduleNoteFetch]);
 
-    const handle = nostrRuntime.subscribe(relays, [zapFilter], {
-      onEvent: (event) => {
-        const eTag = event.tags.find((t) => t[0] === "e")?.[1];
-        if (eTag) zappedNoteIds.push(eTag);
-        if (
-          oldestTimestampRef.current === null ||
-          event.created_at < oldestTimestampRef.current
-        ) {
-          oldestTimestampRef.current = event.created_at;
-        }
-      },
-      onEose: () => {
-        handle.unsubscribe();
-        activeHandleRef.current = null;
-        const uniqueNoteIds = Array.from(new Set(zappedNoteIds));
-        if (uniqueNoteIds.length > 0) {
-          const noteHandle = nostrRuntime.subscribe(
-            relays,
-            [{ kinds: [1], ids: uniqueNoteIds }],
-            {
-              onEvent: () => {},
-              onEose: () => {
-                noteHandle.unsubscribe();
-                activeHandleRef.current = null;
-                finishFetch();
-              },
-            }
-          );
-          activeHandleRef.current = noteHandle;
-        } else {
-          finishFetch();
-        }
-      },
-    });
-
-    activeHandleRef.current = handle;
-
-    // On timeout, keep the subscription open so relays that connect after our
-    // 8s budget can still complete the fetch (the eventual EOSE runs the
-    // note-fetch stage and renders). We only stop the spinner and surface the
-    // empty/Retry state here — crucially we do NOT mark fetchDone, so that
-    // later completion isn't blocked. The handle is closed on the next fetch,
-    // on completion, or on unmount.
-    timeoutId = setTimeout(() => {
-      loadingRef.current = false;
-      setLoading(false);
-      setInitialLoadDone(true);
-      setLoadFailed(true);
-    }, FETCH_TIMEOUT_MS);
-  }, [user?.follows, relays]);
-
-  // Close any subscription kept open past a timeout when the hook unmounts.
   useEffect(() => {
     return () => {
-      activeHandleRef.current?.unsubscribe();
-      activeHandleRef.current = null;
+      handleRef.current?.unobserve();
+      if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
     };
   }, []);
 
   const refreshZappedNotes = useCallback(() => {
-    oldestTimestampRef.current = null;
-    loadingRef.current = false;
-    setVersion(0);
-    setInitialLoadDone(false);
-    setLoadFailed(false);
     fetchZappedNotes();
   }, [fetchZappedNotes]);
 
   return {
-    zappedEvents: zappedEvents(),
-    zapRecords: zapRecords(),
+    zappedEvents: noteMap,
+    zapRecords: recordMap,
     fetchZappedNotes,
     refreshZappedNotes,
     loading,
-    loadFailed,
+    loadFailed: false,
     initialLoadDone,
   };
 };

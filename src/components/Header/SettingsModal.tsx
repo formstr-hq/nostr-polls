@@ -1,7 +1,5 @@
 import { Box, Modal, Tab, Tabs, Typography, useTheme } from "@mui/material";
 import { useState } from "react";
-import { RelaySettings } from "./RelaySettings";
-import { RelayAnalytics } from "./RelayAnalytics";
 import { AISettings } from "./AISettings";
 import { BlossomSettings } from "./BlossomSettings";
 import { ModerationSettings } from "./ModerationSettings";
@@ -53,8 +51,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           sx={{ mb: 2, minHeight: 36 }}
         >
           <Tab label="Appearance" />
-          <Tab label="Relay Settings" />
-          <Tab label="Relay Analytics" />
           <Tab label="AI Settings" />
           <Tab label="Media" />
           <Tab label="Moderation" />
@@ -62,11 +58,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
           {tabIndex === 0 && <AppearanceSettings />}
-          {tabIndex === 1 && <RelaySettings />}
-          {tabIndex === 2 && <RelayAnalytics />}
-          {tabIndex === 3 && <AISettings />}
-          {tabIndex === 4 && <BlossomSettings />}
-          {tabIndex === 5 && <ModerationSettings />}
+          {tabIndex === 1 && <AISettings />}
+          {tabIndex === 2 && <BlossomSettings />}
+          {tabIndex === 3 && <ModerationSettings />}
         </Box>
       </Box>
     </Modal>

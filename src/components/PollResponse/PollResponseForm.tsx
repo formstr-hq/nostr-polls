@@ -32,7 +32,7 @@ import { useAppContext } from "../../hooks/useAppContext";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import CellTowerIcon from "@mui/icons-material/CellTower";
 import CircularProgress from "@mui/material/CircularProgress";
-import { waitForPublish } from "../../utils/publish";
+import { collectOnce } from "../../dataLayer/collect";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
 import { Filters } from "./Filter";
 import { useUserContext } from "../../hooks/useUserContext";
@@ -45,8 +45,6 @@ import PollTimer from "./PollTimer";
 import { FeedbackMenu } from "../FeedbackMenu";
 import { useNotification } from "../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
-import { pool, nostrRuntime } from "../../singletons";
-import { getEventRelays } from "../../nostrRuntime/EventRelayMap";
 import { useReports } from "../../hooks/useReports";
 import { ReportDialog } from "../Report/ReportDialog";
 import { ReportReason } from "../../contexts/reports-context";
@@ -58,7 +56,7 @@ import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { useEventRelays } from "../../hooks/useEventRelays";
 import { ClientChip } from "../Common/ClientChip";
 import { publishDeletion } from "../../utils/deletion";
-import { PublishResult } from "../../utils/publish";
+import { dataLayer, type PublishResult } from "@formstr/local-relay";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import PollOptions from "./PollOptions";
 import VotersModal from "./VotersModal";
@@ -112,7 +110,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
   const { showNotification } = useNotification();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user, setUser, requestLogin } = useUserContext();
-  const { relays, writeRelays } = useRelays();
+  const { relays } = useRelays();
   const { fetchLatestContactList } = useListContext();
   const { reportEvent, reportUser, isReportedByMe, getWoTReporters, wotReportThreshold, requestUserReportCheck } = useReports();
   const eventRelays = useEventRelays(pollEvent.id);
@@ -167,7 +165,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     setIsBroadcasting(true);
     setBroadcastSummary(null);
     try {
-      const res = await waitForPublish(writeRelays, pollEvent);
+      const res = await dataLayer.publishEvent(pollEvent);
       setBroadcastSummary({ accepted: res.accepted, total: res.total });
       openDiagnostic(pollEvent, res, "Broadcast relay results");
     } catch {
@@ -183,7 +181,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     setIsDetailsOpen(false);
     setAnchorEl(null);
     try {
-      const { event: deletionEvent, result } = await publishDeletion([pollEvent.id], [pollEvent.kind], writeRelays);
+      const { event: deletionEvent, result } = await publishDeletion([pollEvent.id], [pollEvent.kind]);
       setDeleted(true);
       openDiagnostic(deletionEvent, result, "Delete relay results");
     } catch {
@@ -196,26 +194,21 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     setAnchorEl(null);
     if (!user) return;
     try {
-      const pollRelays = pollEvent.tags.filter((t) => t[0] === "relay").map((t) => t[1]);
-      const fetchRelays = Array.from(new Set([...pollRelays, ...relays]));
-      const userResponses = await nostrRuntime.querySync(fetchRelays, {
+      // Snapshot the user's existing votes (a finite set we act on once), then
+      // delete them. The worker owns relay routing for both the read and the
+      // deletion publish.
+      const userResponses = await collectOnce([{
         kinds: [1018, 1070],
         authors: [user.pubkey],
         "#e": [pollEvent.id],
-      } as any);
+      }]);
       if (userResponses.length === 0) {
         showNotification("No votes found on relays", "info");
         return;
       }
       const ids = userResponses.map((e) => e.id);
       const kinds = Array.from(new Set(userResponses.map((e) => e.kind)));
-      // Send deletion to every relay that has any of these votes
-      const allDeletionRelays = Array.from(new Set([
-        ...writeRelays,
-        ...pollRelays,
-        ...ids.flatMap((id) => getEventRelays(id)),
-      ]));
-      const { event: deletionEvent, result } = await publishDeletion(ids, kinds, allDeletionRelays);
+      const { event: deletionEvent, result } = await publishDeletion(ids, kinds);
       setHasSubmitted(false);
       setResponses([]);
       setShowResults(false);
@@ -240,7 +233,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
       content: contactEvent?.content || "",
     };
     const signed = await signEvent(newEvent);
-    pool.publish(writeRelays, signed);
+    dataLayer.publishEvent(signed);
     setUser({ pubkey: signed.pubkey, ...user, follows: [...pTags, pubkeyToAdd] });
   };
 
@@ -308,9 +301,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
 
     setShowPoWModal(false);
     const signedResponse = await signEvent(useEvent, responseUser!.privateKey);
-    const eventRelays = pollEvent.tags.filter((t) => t[0] === "relay").map((t) => t[1]);
-    const publishRelays = eventRelays.length ? eventRelays : relays;
-    const result = await waitForPublish(publishRelays, signedResponse!);
+    const result = await dataLayer.publishEvent(signedResponse!);
     openDiagnostic(signedResponse!, result, "Vote publish results");
     if (result.ok) {
       showNotification(`Vote submitted to ${result.accepted}/${result.total} relays`, "success");

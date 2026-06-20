@@ -9,7 +9,7 @@ import {
 import CellTowerIcon from "@mui/icons-material/CellTower";
 import { Event } from "nostr-tools";
 import { useRelays } from "../../../hooks/useRelays";
-import { waitForPublish } from "../../../utils/publish";
+import { dataLayer } from "@formstr/local-relay";
 
 type BroadcastState = "idle" | "broadcasting" | "done";
 
@@ -23,7 +23,7 @@ export const BroadcastButton: React.FC<{ event: Event }> = ({ event }) => {
     if (state === "broadcasting") return;
     setState("broadcasting");
     try {
-      const res = await waitForPublish(writeRelays, event);
+      const res = await dataLayer.publishEvent(event);
       setResult({ accepted: res.accepted, total: res.total });
     } catch {
       setResult({ accepted: 0, total: writeRelays.length });

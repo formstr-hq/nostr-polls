@@ -11,15 +11,13 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import { useNip89 } from "../../../contexts/Nip89Context";
 import { useAppContext } from "../../../hooks/useAppContext";
-import { useRelays } from "../../../hooks/useRelays";
 import { useNavigate } from "react-router-dom";
-import { nostrRuntime } from "../../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { ArticleCard } from "../../Articles/ArticleCard";
 
 export const NaddrHandlers: React.FC<{ encoded: string }> = ({ encoded }) => {
   const { handlersMap, registerKind } = useNip89();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
-  const { relays } = useRelays();
   const navigate = useNavigate();
   const [articleEvent, setArticleEvent] = useState<Event | null>(null);
   const [articleLoading, setArticleLoading] = useState(false);
@@ -41,18 +39,19 @@ export const NaddrHandlers: React.FC<{ encoded: string }> = ({ encoded }) => {
   useEffect(() => {
     if (!decoded || decoded.kind !== 30023) return;
     setArticleLoading(true);
-    const handle = nostrRuntime.subscribe(
-      relays,
+    const handle = dataLayer.observe(
       [{ kinds: [30023], authors: [decoded.pubkey], "#d": [decoded.identifier], limit: 1 }],
       {
         onEvent: (e) => {
           setArticleEvent(e);
+          setArticleLoading(false);
           if (!profiles?.get(e.pubkey)) fetchUserProfileThrottled(e.pubkey);
         },
-        onEose: () => { setArticleLoading(false); handle.unsubscribe(); },
+        // No onEose: the event arrives via onEvent after the worker's upstream
+        // fetch; the timeout below closes the interest.
       }
     );
-    setTimeout(() => { setArticleLoading(false); handle.unsubscribe(); }, 5000);
+    setTimeout(() => { setArticleLoading(false); handle.unobserve(); }, 5000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [encoded]);
 

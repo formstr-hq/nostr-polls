@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { nip19, nip05, Event } from "nostr-tools";
-import { nostrRuntime } from "../../singletons";
+import { collectOnce } from "../../dataLayer/collect";
 import { searchRelays } from "../../nostr";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -132,25 +132,19 @@ export function useSearch(): UseSearchReturn {
 
     let cancelled = false;
 
-    const timeout = <T>(ms: number): Promise<T> =>
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), ms)
-      );
-
     const timer = setTimeout(async () => {
       setLoading(true);
       setError(null);
       setSearchedRelays(searchRelays);
 
       try {
-        const events = await Promise.race([
-          nostrRuntime.querySync(searchRelays, {
-            search: trimmed,
-            kinds: [0, 1, 1068],
-            limit: 30,
-          }),
-          timeout<Event[]>(6000),
-        ]).catch(() => [] as Event[]);
+        // NIP-50 free-text search. Relay selection (including routing the
+        // `search` filter to search-capable relays) is the worker's job now —
+        // the app just declares the interest and collects until EOSE/timeout.
+        const events = await collectOnce(
+          [{ search: trimmed, kinds: [0, 1, 1068], limit: 30 }],
+          { timeoutMs: 6000 }
+        ).catch(() => [] as Event[]);
 
         if (!cancelled) {
           setResults({

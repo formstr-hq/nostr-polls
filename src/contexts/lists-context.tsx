@@ -9,11 +9,11 @@ import {
 import { Box, LinearProgress, Modal, Typography } from "@mui/material";
 import { Event, EventTemplate, Filter } from "nostr-tools";
 import { parseContacts, getATagFromEvent } from "../nostr";
-import { useRelays } from "../hooks/useRelays";
 import { useUserContext } from "../hooks/useUserContext";
 import { useAppContext } from "../hooks/useAppContext";
 import { User } from "./user-context";
-import { nostrRuntime } from "../singletons";
+import { dataLayer } from "@formstr/local-relay";
+import { collectOnce } from "../dataLayer/collect";
 import { signerManager } from "../singletons/Signer/SignerManager";
 
 const WOT_STORAGE_KEY_PREFIX = `pollerama:webOfTrust`;
@@ -87,10 +87,12 @@ export function ListProvider({ children }: { children: ReactNode }) {
     Event | null | undefined
   >();
   const { user, setUser, requestLogin } = useUserContext();
-  const { relays } = useRelays();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const wotInFlightRef = useRef(false);
   const wotAttemptedRef = useRef(false);
+  // Standing interest in the user's own contact list (kind 3). Kept open so the
+  // worker's upstream fetch can stream it in after the local EOSE.
+  const contactHandleRef = useRef<{ unobserve: () => void } | null>(null);
   // pubkey -> set of the user's follows who follow them. Lives in a ref (large,
   // mutated incrementally); `wotIndexVersion` bumps to notify consumers.
   const networkIndexRef = useRef<Map<string, Set<string>>>(new Map());
@@ -110,6 +112,8 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setMyTopicsEvent(undefined);
       setBookmarkedPackKeys(new Set());
       setBookmarks10003(null);
+      contactHandleRef.current?.unobserve();
+      contactHandleRef.current = null;
       wotInFlightRef.current = false;
       wotAttemptedRef.current = false;
       networkIndexRef.current = new Map();
@@ -133,7 +137,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
         limit: 1,
       };
       let latestEvent: Event | null = null;
-      const handle = nostrRuntime.subscribe(relays, [filter], {
+      const handle = dataLayer.observe([filter], {
         onEvent(event: Event) {
           // Keep track of the most recent event
           if (!latestEvent || event.created_at > latestEvent.created_at) {
@@ -142,7 +146,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
         },
       });
       setTimeout(() => {
-        handle.unsubscribe();
+        handle.unobserve();
         resolve(latestEvent);
       }, 2000);
     });
@@ -195,29 +199,32 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   const fetchContacts = () => {
     if (!user || !user.pubkey) return;
+    // Keep ONE standing interest open. Under the dataLayer contract the local
+    // EOSE fires before the worker's upstream fetch returns, so the contact list
+    // (kind 3) arrives later via onEvent — we must NOT unobserve on EOSE or we
+    // tear the interest down before the worker delivers it.
+    contactHandleRef.current?.unobserve();
     let contactListFilter = {
       kinds: [3],
       authors: [user.pubkey],
     };
-    const contactHandle = nostrRuntime.subscribe(relays, [contactListFilter], {
+    contactHandleRef.current = dataLayer.observe([contactListFilter], {
       onEvent: (event: Event) => {
         handleContactListEvent(event);
       },
-      onEose: () => contactHandle.unsubscribe(),
     });
   };
 
   const fetchLists = () => {
-    // Packs I created
-    const myPacksHandle = nostrRuntime.subscribe(relays, [{ kinds: [39089], limit: 100, authors: [user!.pubkey] }], {
-      onEvent: handleListEvent,
-      onEose: () => myPacksHandle.unsubscribe(),
-    });
-    // Packs I'm mentioned in
-    const mentionedPacksHandle = nostrRuntime.subscribe(relays, [{ kinds: [39089], limit: 100, "#p": [user!.pubkey] }], {
-      onEvent: handleListEvent,
-      onEose: () => mentionedPacksHandle.unsubscribe(),
-    });
+    // Packs I created + packs I'm mentioned in. collectOnce keeps the interest
+    // open across the worker's upstream fetch (local EOSE is not completion) and
+    // resolves once the stream goes quiet.
+    collectOnce([{ kinds: [39089], limit: 100, authors: [user!.pubkey] }]).then((evts) =>
+      evts.forEach(handleListEvent),
+    );
+    collectOnce([{ kinds: [39089], limit: 100, "#p": [user!.pubkey] }]).then((evts) =>
+      evts.forEach(handleListEvent),
+    );
   };
 
   const fetchAndHydratePacks = (adrefs: string[]) => {
@@ -226,11 +233,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
       const pubkey = parts[1];
       const identifier = parts.slice(2).join(":");
       if (!pubkey) return;
-      const packHandle = nostrRuntime.subscribe(
-        relays,
-        [{ kinds: [39089], authors: [pubkey], "#d": [identifier], limit: 1 }],
-        { onEvent: handleListEvent, onEose: () => packHandle.unsubscribe() }
-      );
+      collectOnce([
+        { kinds: [39089], authors: [pubkey], "#d": [identifier], limit: 1 },
+      ]).then((evts) => evts.forEach(handleListEvent));
     });
   };
 
@@ -268,8 +273,8 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   const fetchBookmarks = () => {
     if (!user) return;
-    const bookmarksHandle = nostrRuntime.subscribe(relays, [{ kinds: [10003], authors: [user.pubkey], limit: 1 }], {
-      onEvent: (event) => {
+    collectOnce([{ kinds: [10003], authors: [user.pubkey], limit: 1 }]).then((evts) => {
+      for (const event of evts) {
         setBookmarks10003((prev) => {
           if (!prev || event.created_at > prev.created_at) {
             processBookmarksEvent(event);
@@ -277,8 +282,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
           }
           return prev;
         });
-      },
-      onEose: () => bookmarksHandle.unsubscribe(),
+      }
     });
   };
 
@@ -302,7 +306,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
       content: encrypted,
     };
     const signed = await signer.signEvent(template);
-    await Promise.allSettled(nostrRuntime.publish(relays, signed));
+    await dataLayer.publishEvent(signed);
     return signed;
   };
 
@@ -392,7 +396,45 @@ export function ListProvider({ children }: { children: ReactNode }) {
     const index = new Map<string, Set<string>>();
     let lastUiUpdate = 0;
 
-    const handle = nostrRuntime.subscribe(relays, [filter], {
+    // Under the dataLayer contract the local EOSE fires before the worker's
+    // upstream fetch returns the contact lists, so we can't commit on EOSE
+    // (that would persist an empty/stale union and tear down the fetch). Instead
+    // we keep the interest open and commit once the stream goes quiet, with a
+    // hard cap so the blocking modal can never hang.
+    let committed = false;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      if (quietTimer) clearTimeout(quietTimer);
+      clearTimeout(hardTimer);
+      handle.unobserve();
+      wotInFlightRef.current = false;
+      setIsFetchingWoT(false);
+      setWotProfileCount(union.size);
+
+      // Don't persist an empty result — leave any existing cache intact so
+      // the next session retries instead of being stuck empty.
+      if (union.size > 0) {
+        try {
+          localStorage.setItem(unionKey, JSON.stringify(Array.from(union)));
+          localStorage.setItem(timeKey, Date.now().toString());
+          localStorage.setItem(indexKey, serializeNetworkIndex(index));
+        } catch {
+          // localStorage quota exceeded — keep the index in memory for this
+          // session; it'll be recomputed next load.
+        }
+      }
+
+      networkIndexRef.current = index;
+      setWotIndexVersion((v) => v + 1);
+      setUser((prev) =>
+        prev ? ({ ...prev, webOfTrust: union } as User) : null,
+      );
+    };
+
+    const handle = dataLayer.observe([filter], {
       onEvent: (event: Event) => {
         const source = event.pubkey; // one of the user's follows
         for (const tag of event.tags) {
@@ -413,33 +455,14 @@ export function ListProvider({ children }: { children: ReactNode }) {
           lastUiUpdate = now;
           setWotProfileCount(union.size);
         }
-      },
-      onEose() {
-        handle.unsubscribe();
-        wotInFlightRef.current = false;
-        setIsFetchingWoT(false);
-        setWotProfileCount(union.size);
-
-        // Don't persist an empty result — leave any existing cache intact so
-        // the next session retries instead of being stuck empty.
-        if (union.size > 0) {
-          try {
-            localStorage.setItem(unionKey, JSON.stringify(Array.from(union)));
-            localStorage.setItem(timeKey, Date.now().toString());
-            localStorage.setItem(indexKey, serializeNetworkIndex(index));
-          } catch {
-            // localStorage quota exceeded — keep the index in memory for this
-            // session; it'll be recomputed next load.
-          }
-        }
-
-        networkIndexRef.current = index;
-        setWotIndexVersion((v) => v + 1);
-        setUser((prev) =>
-          prev ? ({ ...prev, webOfTrust: union } as User) : null,
-        );
+        // Commit ~1.5s after the stream goes quiet.
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(commit, 1500);
       },
     });
+
+    // Hard cap: commit no later than 10s even if events keep dribbling in.
+    const hardTimer = setTimeout(commit, 10000);
 
     return handle;
   };
@@ -460,35 +483,18 @@ export function ListProvider({ children }: { children: ReactNode }) {
     const signer = signerManager.getSigner().catch(() => null);
     if (!signer) return;
 
-    const filter: Filter = {
-      kinds: [10015],
-      authors: [user.pubkey],
-      limit: 1,
-    };
-
-    return new Promise<void>((resolve) => {
-      const handle = nostrRuntime.subscribe(relays, [filter], {
-        onEvent: async (event: Event) => {
-          if (myTopicsEvent && event.created_at <= myTopicsEvent.created_at)
-            return;
-          setMyTopicsEvent(event);
-          processMyTopicsFromEvent(event);
-        },
-        onEose: () => {
-          handle.unsubscribe();
-          resolve();
-        },
-      });
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        handle.unsubscribe();
-        if (!myTopicsEvent) {
-          setMyTopicsEvent(null);
-        }
-        resolve();
-      }, 10000);
-    });
+    const evts = await collectOnce([
+      { kinds: [10015], authors: [user.pubkey], limit: 1 },
+    ]);
+    if (evts.length === 0) {
+      if (!myTopicsEvent) setMyTopicsEvent(null);
+      return;
+    }
+    for (const event of evts) {
+      if (myTopicsEvent && event.created_at <= myTopicsEvent.created_at) continue;
+      setMyTopicsEvent(event);
+      processMyTopicsFromEvent(event);
+    }
   };
 
   const processMyTopicsFromEvent = async (event: Event) => {
@@ -527,7 +533,6 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    if (!nostrRuntime) return;
     if (user) {
       if (!lists) fetchLists();
       if (!user.follows || user.follows.length === 0) fetchContacts();
@@ -550,151 +555,65 @@ export function ListProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.follows]);
 
+  // Read the latest kind-10015 (interests). collectOnce keeps the interest open
+  // across the worker's upstream fetch — committing on the instant local EOSE
+  // would read an empty list and wipe the user's existing topics on write.
+  const fetchLatestInterests = async (pubkey: string): Promise<Event | null> => {
+    const evts = await collectOnce([
+      { kinds: [10015], authors: [pubkey], limit: 1 },
+    ]);
+    return evts.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+  };
+
   const addTopicToMyTopics = async (topic: string): Promise<void> => {
     const signer = await signerManager.getSigner();
     if (!signer) throw Error("No signer available");
 
     const pubkey = await signer.getPublicKey();
+    const existingEvent = await fetchLatestInterests(pubkey);
+    const tags = existingEvent?.tags ?? [];
 
-    // Fetch existing kind 10015 event
-    const filter = {
-      kinds: [10015],
-      authors: [pubkey],
-      limit: 1,
+    // Already present — nothing to do.
+    if (tags.some((tag) => tag[0] === "t" && tag[1] === topic)) return;
+
+    const eventTemplate: EventTemplate = {
+      kind: 10015,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [...tags, ["t", topic]],
+      content: existingEvent?.content ?? "",
     };
 
-    let existingEvent: Event | null = null;
-
-    return new Promise((resolve, reject) => {
-      const handle = nostrRuntime.subscribe(relays, [filter], {
-        onEvent: (event) => {
-          existingEvent = event;
-        },
-        onEose: async () => {
-          handle.unsubscribe();
-          try {
-            const tags = existingEvent?.tags ?? [];
-
-            // Check if topic already exists
-            const topicExists = tags.some(
-              (tag) => tag[0] === "t" && tag[1] === topic,
-            );
-            if (topicExists) {
-              resolve();
-              return;
-            }
-
-            // Add the new topic tag
-            const newTags = [...tags, ["t", topic]];
-
-            const eventTemplate: EventTemplate = {
-              kind: 10015,
-              created_at: Math.floor(Date.now() / 1000),
-              tags: newTags,
-              content: existingEvent?.content ?? "",
-            };
-
-            const signed = await signer.signEvent(eventTemplate);
-            await Promise.allSettled(nostrRuntime.publish(relays, signed));
-            processMyTopicsFromEvent(signed);
-            fetchMyTopics();
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        },
-      });
-
-      // Timeout after 5 seconds
-      setTimeout(() => {
-        handle.unsubscribe();
-        if (!existingEvent) {
-          // Create new event if none exists
-          handleNewEvent();
-        }
-      }, 5000);
-
-      async function handleNewEvent() {
-        try {
-          const eventTemplate: EventTemplate = {
-            kind: 10015,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [["t", topic]],
-            content: "",
-          };
-
-          const signed = await signer.signEvent(eventTemplate);
-          await Promise.allSettled(nostrRuntime.publish(relays, signed));
-          processMyTopicsFromEvent(signed);
-          fetchMyTopics();
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      }
-    });
+    const signed = await signer.signEvent(eventTemplate);
+    await dataLayer.publishEvent(signed);
+    processMyTopicsFromEvent(signed);
+    fetchMyTopics();
   };
+
   const removeTopicFromMyTopics = async (topic: string): Promise<void> => {
     const signer = await signerManager.getSigner();
     if (!signer) throw Error("No signer available");
 
     const pubkey = await signer.getPublicKey();
+    const existingEvent = await fetchLatestInterests(pubkey);
+    const oldTags = existingEvent?.tags ?? [];
+    const newTags = oldTags.filter(
+      (tag) => !(tag[0] === "t" && tag[1] === topic),
+    );
 
-    const filter: Filter = {
-      kinds: [10015],
-      authors: [pubkey],
-      limit: 1,
+    // Nothing changed — topic wasn't there.
+    if (newTags.length === oldTags.length) return;
+
+    const eventTemplate: EventTemplate = {
+      kind: 10015,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: newTags,
+      content: existingEvent?.content ?? "",
     };
 
-    let existingEvent: Event | null = null;
-
-    return new Promise((resolve, reject) => {
-      const handle = nostrRuntime.subscribe(relays, [filter], {
-        onEvent: (event) => {
-          existingEvent = event;
-        },
-        onEose: async () => {
-          handle.unsubscribe();
-          try {
-            const oldTags = existingEvent?.tags ?? [];
-
-            // Filter out the topic tag
-            const newTags = oldTags.filter(
-              (tag) => !(tag[0] === "t" && tag[1] === topic),
-            );
-
-            // If nothing changed, exit
-            if (newTags.length === oldTags.length) {
-              resolve();
-              return;
-            }
-
-            const eventTemplate: EventTemplate = {
-              kind: 10015,
-              created_at: Math.floor(Date.now() / 1000),
-              tags: newTags,
-              content: existingEvent?.content ?? "",
-            };
-
-            const signed = await signer.signEvent(eventTemplate);
-            await Promise.allSettled(nostrRuntime.publish(relays, signed));
-
-            // Update local state immediately
-            processMyTopicsFromEvent(signed);
-            fetchMyTopics();
-
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        },
-      });
-
-      setTimeout(() => {
-        handle.unsubscribe();
-        resolve(); // No existing event → nothing to remove
-      }, 5000);
-    });
+    const signed = await signer.signEvent(eventTemplate);
+    await dataLayer.publishEvent(signed);
+    processMyTopicsFromEvent(signed);
+    fetchMyTopics();
   };
 
   const unfollowContact = async (pubkeyToRemove: string): Promise<void> => {
@@ -710,7 +629,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
     };
     const signer = await signerManager.getSigner();
     const signed = await signer.signEvent(newEvent);
-    await Promise.allSettled(nostrRuntime.publish(relays, signed));
+    await dataLayer.publishEvent(signed);
     setUser((prev) => {
       if (!prev) return null;
       return { ...prev, follows: (prev.follows || []).filter(pk => pk !== pubkeyToRemove) };

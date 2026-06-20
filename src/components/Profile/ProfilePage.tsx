@@ -22,7 +22,6 @@ import {
 import { Event, EventTemplate, nip19 } from "nostr-tools";
 import { useRelays } from "../../hooks/useRelays";
 import { fetchUserProfile, signEvent } from "../../nostr";
-import { getOutboxRelays } from "../../nostr/OutboxService";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import Rate from "../Ratings/Rate";
 import UserPollsFeed from "./UserPollsFeed";
@@ -31,7 +30,7 @@ import UserArticlesFeed from "./UserArticlesFeed";
 import UserRatingsGiven from "./UserRatingsGiven";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
-import { pool, nostrRuntime } from "../../singletons";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import DownloadIcon from "@mui/icons-material/Download";
 import MailIcon from "@mui/icons-material/Mail";
@@ -95,20 +94,15 @@ const ProfilePage: React.FC = () => {
 
   const [profileRelays, setProfileRelays] = useState<string[]>(relays);
 
-  const followersHandleRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const followersHandleRef = useRef<ObserveHandle | null>(null);
   const relaysRef = useRef(relays);
   useEffect(() => { relaysRef.current = relays; }, [relays]);
 
-  // Resolve profile person's outbox relays and merge with user's own relays.
+  // Relay selection (including the profile person's outbox relays) is the
+  // worker's job now; the app just declares interest below.
   useEffect(() => {
     if (!pubkey) return;
     setProfileRelays(relays);
-    getOutboxRelays(pubkey).then((outbox) => {
-      if (outbox.length > 0) {
-        setProfileRelays(Array.from(new Set([...relaysRef.current, ...outbox])));
-      }
-    });
-  // Only re-run when pubkey changes; relays are read via relaysRef to avoid churn.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pubkey]);
 
@@ -121,8 +115,7 @@ const ProfilePage: React.FC = () => {
 
     let latestFollowingEvent: Event | null = null;
 
-    const followingHandle = nostrRuntime.subscribe(
-      profileRelays,
+    const followingHandle = dataLayer.observe(
       [
         {
           kinds: [3],
@@ -148,7 +141,7 @@ const ProfilePage: React.FC = () => {
     );
 
     return () => {
-      followingHandle.unsubscribe();
+      followingHandle.unobserve();
     };
   }, [pubkey, profileRelays, user]);
 
@@ -156,11 +149,11 @@ const ProfilePage: React.FC = () => {
   useEffect(() => {
     followersSetRef.current = new Set();
     setFollowerCount(null);
-    followersHandleRef.current?.unsubscribe();
+    followersHandleRef.current?.unobserve();
     followersHandleRef.current = null;
 
     return () => {
-      followersHandleRef.current?.unsubscribe();
+      followersHandleRef.current?.unobserve();
       followersHandleRef.current = null;
     };
   }, [pubkey, profileRelays]);
@@ -173,8 +166,7 @@ const ProfilePage: React.FC = () => {
     followersSetRef.current = new Set();
     setFollowerCount(0);
 
-    followersHandleRef.current = nostrRuntime.subscribe(
-      profileRelays,
+    followersHandleRef.current = dataLayer.observe(
       [
         {
           kinds: [3],
@@ -189,7 +181,7 @@ const ProfilePage: React.FC = () => {
         },
       },
     );
-  }, [pubkey, profileRelays]);
+  }, [pubkey]);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -219,10 +211,10 @@ const ProfilePage: React.FC = () => {
 
         setPubkey(extractedPubkey);
 
-        // Check cache first to avoid a network round-trip when we already
-        // have the profile stored (e.g. navigating back to a previously
-        // visited profile).
-        const cached = nostrRuntime.query({ kinds: [0], authors: [extractedPubkey] })[0];
+        // Check the worker's store first (cache-only read) to avoid a network
+        // round-trip when we already have the profile (e.g. navigating back to a
+        // previously visited profile).
+        const cached = await dataLayer.fetchReplaceable(0, extractedPubkey);
         if (cached) {
           setProfile(JSON.parse(cached.content || "{}"));
           setLoading(false);
@@ -287,7 +279,7 @@ const ProfilePage: React.FC = () => {
     };
 
     const signed = await signEvent(newEvent);
-    pool.publish(relays, signed);
+    dataLayer.publishEvent(signed);
     setUser({
       pubkey: signed.pubkey,
       ...user,

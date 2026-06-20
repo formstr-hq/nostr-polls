@@ -7,7 +7,7 @@ import { Event, EventTemplate } from "nostr-tools/lib/types/core";
 import { signEvent } from "../../../nostr";
 import { useRelays } from "../../../hooks/useRelays";
 import { useUserContext } from "../../../hooks/useUserContext";
-import { pool } from "../../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import ReactionsDetailsModal from "./ReactionsDetailsModal";
 
 const LONG_PRESS_MS = 500;
@@ -90,7 +90,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     };
 
     const finalEvent = await signEvent(event, user.privateKey);
-    pool.publish(relays, finalEvent!);
+    dataLayer.publishEvent(finalEvent!);
     addEventToMap(finalEvent!);
     setShowPicker(false);
   };

@@ -11,10 +11,9 @@ import {
   Divider,
 } from "@mui/material";
 import { signEvent } from "../../../nostr";
-import { useRelays } from "../../../hooks/useRelays";
 import { Event } from "nostr-tools";
 import TopicsCard from "./TopicsCard";
-import { pool } from "../../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useBackClose } from "../../../hooks/useBackClose";
 
 interface Props {
@@ -28,7 +27,6 @@ const TopicMetadataModal: React.FC<Props> = ({ open, onClose, topic }) => {
   const [description, setDescription] = useState("");
   const [tab, setTab] = useState(0);
   const [previewEvent, setPreviewEvent] = useState<Event>();
-  const { relays } = useRelays();
   useBackClose(open, onClose);
 
   useEffect(() => {
@@ -66,7 +64,7 @@ const TopicMetadataModal: React.FC<Props> = ({ open, onClose, topic }) => {
     const signed = await signEvent(event);
     if (!signed) return;
 
-    pool.publish(relays, signed);
+    dataLayer.publishEvent(signed);
     onClose();
   };
 

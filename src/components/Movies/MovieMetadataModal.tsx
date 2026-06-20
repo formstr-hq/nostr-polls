@@ -12,11 +12,10 @@ import {
   Divider,
 } from "@mui/material";
 import { signEvent } from "../../nostr";
-import { useRelays } from "../../hooks/useRelays";
 import { Event } from "nostr-tools";
 import MovieCard from "./MovieCard";
 import { useBackClose } from "../../hooks/useBackClose";
-import { waitForPublish } from "../../utils/publish";
+import { dataLayer } from "@formstr/local-relay";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 
@@ -44,7 +43,6 @@ const MovieMetadataModal: React.FC<MovieMetadataModalProps> = ({
   const [genres, setGenres] = useState<string[]>([]);
   const [tab, setTab] = useState(0);
   const [previewEvent, setPreviewEvent] = useState<Event>();
-  const { relays } = useRelays();
   const { result, open: diagOpen, setOpen: setDiagOpen, title: diagTitle, openModal, retry } = usePublishDiagnostic();
   useBackClose(open, onClose);
 
@@ -169,7 +167,7 @@ LIMIT 1
     if (!signed) throw new Error("Signing failed");
 
     onClose();
-    const publishResult = await waitForPublish(relays, signed);
+    const publishResult = await dataLayer.publishEvent(signed);
     openModal(signed, publishResult, "Movie metadata publish results");
   };
 

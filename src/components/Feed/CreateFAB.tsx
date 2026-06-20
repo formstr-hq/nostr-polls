@@ -8,7 +8,6 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useNotification } from "../../contexts/notification-context";
 import { DraggableCorner } from "../Common/DraggableCorner";
-import { nostrRuntime } from "../../singletons";
 
 interface CreateFABProps {
   extraActions?: {
@@ -47,9 +46,6 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
 
   const handleRefresh = () => {
     setOpen(false);
-    // Re-establish any silently-dropped relay connections before refetching, so
-    // a manual refresh also recovers a long-lived tab that lost its sockets.
-    nostrRuntime.reconnect();
     refresh();
   };
 

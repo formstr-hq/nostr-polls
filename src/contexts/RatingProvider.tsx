@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useEffect, useRef, useState } from "
 import { Event } from "nostr-tools";
 import { useRelays } from "../hooks/useRelays";
 import { useUserContext } from "../hooks/useUserContext";
-import { dataLayer } from "../dataLayer/client";
+import { dataLayer } from "@formstr/local-relay";
 
 type RatingMap = Map<string, Map<string, number>>; // entityId -> pubkey -> rating
 type UserRatingMap = Map<string, Event>; // entityId -> Event

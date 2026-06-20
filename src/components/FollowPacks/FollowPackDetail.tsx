@@ -13,8 +13,7 @@ import {
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import PeopleIcon from "@mui/icons-material/People";
 import { Event, Filter, nip19 } from "nostr-tools";
-import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useAppContext } from "../../hooks/useAppContext";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { Notes } from "../Notes";
@@ -42,7 +41,6 @@ function getPackMeta(event: Event) {
 const FollowPackDetail: React.FC = () => {
   const { naddr } = useParams<{ naddr: string }>();
   const navigate = useNavigate();
-  const { relays } = useRelays();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
 
   const [packEvent, setPackEvent] = useState<Event | null>(null);
@@ -69,11 +67,12 @@ const FollowPackDetail: React.FC = () => {
 
     const { kind, pubkey, identifier } = decoded.data;
     const filter: Filter = { kinds: [kind], authors: [pubkey], "#d": [identifier], limit: 1 };
-    const handle = nostrRuntime.subscribe(relays, [filter], {
-      onEvent: (e) => setPackEvent(e),
-      onEose: () => { setPackLoading(false); handle.unsubscribe(); },
+    const handle = dataLayer.observe([filter], {
+      onEvent: (e) => { setPackEvent(e); setPackLoading(false); },
+      // No onEose: the pack arrives via onEvent after the worker's upstream
+      // fetch; the timeout below closes the interest.
     });
-    setTimeout(() => { setPackLoading(false); handle.unsubscribe(); }, 5000);
+    setTimeout(() => { setPackLoading(false); handle.unobserve(); }, 5000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [naddr]);
 
@@ -99,18 +98,28 @@ const FollowPackDetail: React.FC = () => {
       until: cursor ?? now,
     };
 
-    const handle = nostrRuntime.subscribe(relays, [filter], {
+    let settled = false;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handle = dataLayer.observe([filter], {
       onEvent: (e) => {
         if (!seen.current.has(e.id)) {
           seen.current.add(e.id);
           newEvents.push(e);
         }
         if (!oldestTs || e.created_at < oldestTs) oldestTs = e.created_at;
+        // Commit shortly after the stream goes quiet (local EOSE precedes the
+        // worker's upstream fetch under the dataLayer contract).
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(finalize, 900);
       },
-      onEose: () => { finalize(); handle.unsubscribe(); },
     });
 
     const finalize = () => {
+      if (settled) return;
+      settled = true;
+      if (quietTimer) clearTimeout(quietTimer);
+      handle.unobserve();
       setFeedEvents((prev) => {
         const ids = new Set(prev.map((e) => e.id));
         const merged = [...prev, ...newEvents.filter((e) => !ids.has(e.id))];
@@ -122,7 +131,8 @@ const FollowPackDetail: React.FC = () => {
       setFeedLoading(false);
     };
 
-    setTimeout(() => { finalize(); handle.unsubscribe(); }, 5000);
+    // Hard cap so an empty result (no events → no quiet timer) still settles.
+    setTimeout(finalize, 5000);
   };
 
   // Start feed once pack is loaded

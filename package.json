@@ -17,6 +17,7 @@
     "@fontsource-variable/comfortaa": "^5.2.8",
     "@fontsource-variable/fredoka": "^5.2.10",
     "@fontsource-variable/raleway": "^5.2.8",
+    "@formstr/local-relay": "^0.1.0",
     "@formstr/signer": "^0.2.2",
     "@mui/icons-material": "^6.1.2",
     "@mui/material": "^6.1.2",

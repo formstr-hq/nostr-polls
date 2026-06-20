@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { Event } from "nostr-tools";
 import { nip57 } from "nostr-tools";
 import { useRelays } from "../hooks/useRelays";
-import { dataLayer } from "../dataLayer/client";
+import { dataLayer } from "@formstr/local-relay";
 
 export interface ZapInfo {
   event: Event;

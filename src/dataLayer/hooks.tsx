@@ -11,11 +11,18 @@
  * here commands the network.
  */
 import React from "react";
-import type { Event } from "../localRelay/core/types";
-import { DataLayer, ObserveHandle, getDataLayer } from "./client";
-import { Scope, ScopeUser, buildFilters, scopeHasInput } from "./scope";
-import { assembleFeed } from "./feed";
-import { isFeedRoot } from "./kinds";
+import {
+  DataLayer,
+  getDataLayer,
+  buildFilters,
+  scopeHasInput,
+  assembleFeed,
+  isFeedRoot,
+  type Event,
+  type ObserveHandle,
+  type Scope,
+  type ScopeUser,
+} from "@formstr/local-relay";
 
 const PAGE = 100; // window grows by this many events per "load older"
 
@@ -202,13 +209,14 @@ export function useEvent(id?: string): Event | undefined {
       return;
     }
     let alive = true;
-    // One interest by id: cache hit replays immediately; if missing, the worker
-    // fetches it and the value updates when it arrives.
-    const handle = dataLayer.observe([{ ids: [id], limit: 1 }], {
-      onEvent: (e) => {
-        if (alive) setEvent(e);
-      },
-    });
+    // Cache-only: a read never triggers a fetch. The event is in the store
+    // because the worker enriched it for whatever scope referenced it; this
+    // updates live if it lands later. (Reads can't cause network activity.)
+    const handle = dataLayer.observe(
+      [{ ids: [id], limit: 1 }],
+      { onEvent: (e) => { if (alive) setEvent(e); } },
+      { localOnly: true }
+    );
     return () => {
       alive = false;
       handle.unobserve();

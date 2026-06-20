@@ -22,8 +22,7 @@ import { useNostrNotifications } from "../../contexts/nostr-notification-context
 import { parseNotification } from "../Header/notification-utils";
 import { useAppContext } from "../../hooks/useAppContext";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
-import { nostrRuntime } from "../../singletons";
-import { useRelays } from "../../hooks/useRelays";
+import { dataLayer } from "@formstr/local-relay";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 
@@ -32,7 +31,6 @@ dayjs.extend(relativeTime);
 const NotificationsPage: React.FC = () => {
   const { notifications, markAllAsRead, refresh, pollMap, isLoading } = useNostrNotifications();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
-  const { relays } = useRelays();
   const navigate = useNavigate();
 
   const [postSnippets, setPostSnippets] = useState<Map<string, string>>(new Map());
@@ -51,22 +49,9 @@ const NotificationsPage: React.FC = () => {
       if (fetchedRef.current.has(postId) || fetchingRef.current.has(postId)) return;
       fetchingRef.current.add(postId);
 
-      const cached = nostrRuntime.get(postId);
-      if (cached) {
-        fetchedRef.current.add(postId);
-        fetchingRef.current.delete(postId);
-        setPostSnippets((prev) => {
-          const next = new Map(prev);
-          next.set(postId, cached.content?.slice(0, 80) || "");
-          return next;
-        });
-        return;
-      }
-
-      const fetchRelays = relayHint
-        ? Array.from(new Set([...relays, relayHint]))
-        : relays;
-      nostrRuntime.fetchBatched(fetchRelays, postId).then((event) => {
+      // fetchById reads the worker's store first (cache), then lets the worker
+      // warm from the network — so there's no separate synchronous cache path.
+      dataLayer.fetchById(postId).then((event) => {
         fetchedRef.current.add(postId);
         fetchingRef.current.delete(postId);
         if (event) {
@@ -78,7 +63,7 @@ const NotificationsPage: React.FC = () => {
         }
       });
     },
-    [relays]
+    []
   );
 
   useEffect(() => {

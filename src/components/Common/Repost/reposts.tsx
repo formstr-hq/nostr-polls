@@ -14,7 +14,7 @@ import { useUserContext } from "../../../hooks/useUserContext";
 import { useNotification } from "../../../contexts/notification-context";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useRelays } from "../../../hooks/useRelays";
-import { pool } from "../../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { signEvent } from "../../../nostr";
 import QuotePostDialog from "./QuotePostDialog";
 
@@ -104,7 +104,7 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
     try {
       for (const template of repostTemplates) {
         const signedEvent = await signEvent(template, user!.privateKey);
-        pool.publish(relays, signedEvent);
+        dataLayer.publishEvent(signedEvent);
         addEventToMap(signedEvent);
       }
       setReposted(true);

@@ -7,12 +7,16 @@
  * Kept separate from `client.ts` so the DataLayer class stays unit-testable in
  * jsdom (no Worker, no signerManager import).
  */
-import type { Event } from "../localRelay/core/types";
-import { LocalRelayClient } from "../localRelay/transport/LocalRelayClient";
-import { workerChannel } from "../localRelay/transport/channel";
+import {
+  DataLayer,
+  LocalRelayClient,
+  workerChannel,
+  getDataLayer,
+  setDataLayer,
+  type Event,
+} from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
 import { defaultRelays } from "../nostr";
-import { DataLayer, getDataLayer, setDataLayer } from "./client";
 
 let started = false;
 
@@ -23,7 +27,7 @@ export function bootstrapDataLayer(): DataLayer {
 
   // Webpack 5 emits a same-origin worker chunk for this URL form (proven by the
   // existing mining worker); loads under http(s)/capacitor origins alike.
-  const worker = new Worker(new URL("../localRelay/worker/relay.worker", import.meta.url));
+  const worker = new Worker(new URL("../worker/relay.worker", import.meta.url));
   const channel = workerChannel(worker);
 
   const client = new LocalRelayClient(channel, {
@@ -45,7 +49,8 @@ export function bootstrapDataLayer(): DataLayer {
 
   // Active account → worker scope. setActiveAccount does NOT rehydrate the shared
   // public store; it only retargets which scope/relays the syncs follow.
-  const applyAccount = () => client.setActiveAccount(signerManager.getUser()?.pubkey ?? null);
+  const applyAccount = () =>
+    client.setActiveAccount(signerManager.getUser()?.pubkey ?? null);
   applyAccount();
   signerManager.onChange(applyAccount);
 

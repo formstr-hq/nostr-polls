@@ -25,7 +25,6 @@ import FlagIcon from "@mui/icons-material/Flag";
 import EditIcon from "@mui/icons-material/Edit";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { signEvent } from "../../../nostr";
-import { useRelays } from "../../../hooks/useRelays";
 import { Event, EventTemplate, nip19 } from "nostr-tools";
 import { DEFAULT_IMAGE_URL } from "../../../utils/constants";
 import { useUserContext } from "../../../hooks/useUserContext";
@@ -35,9 +34,7 @@ import CommentInput from "./CommentInput";
 import { extractMentionTags } from '../../EventCreator/MentionTextArea';
 import { getColorsWithTheme } from "../../../styles/theme";
 import { useNotification } from "../../../contexts/notification-context";
-import { nostrRuntime } from "../../../singletons";
-import { SubscriptionHandle } from "../../../nostrRuntime/types";
-import { publishWithGossip, waitForPublish } from "../../../utils/publish";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import { usePublishDiagnostic } from "../../../hooks/usePublishDiagnostic";
 import { PublishDiagnosticModal } from "../PublishDiagnosticModal";
 import { FeedbackMenu } from "../../FeedbackMenu";
@@ -97,7 +94,6 @@ interface CommentCardProps {
 const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncestors, children }) => {
   const { profiles, fetchUserProfileThrottled, editsMap, editsHistoryMap, fetchEditsThrottled, addEventToMap } = useAppContext();
   const { user } = useUserContext();
-  const { writeRelays } = useRelays();
   const { showNotification } = useNotification();
   const eventRelays = useEventRelays(comment.id);
   const { reportEvent, reportUser } = useReports();
@@ -145,7 +141,7 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
       // waiting for the throttled refetch.
       addEventToMap(signed);
       setEditDialogOpen(false);
-      const res = await waitForPublish(writeRelays, signed);
+      const res = await dataLayer.publishEvent(signed);
       if (res.ok) {
         showNotification("Comment edited", "success");
       } else {
@@ -395,28 +391,24 @@ const CommentSection: React.FC<CommentSectionProps> = ({
   const { result: publishResult, open: diagnosticOpen, setOpen: setDiagnosticOpen, title: diagnosticTitle, openModal, retry } = usePublishDiagnostic();
 
   const { user, requestLogin } = useUserContext();
-  const { relays, writeRelays } = useRelays();
 
   const fetchComments = () => {
-    const filters: object[] = [{ kinds: [1], "#e": [eventId] }];
+    const filters: any[] = [{ kinds: [1], "#e": [eventId] }];
     if (addressableRef) {
       filters.push({ kinds: [1111], "#a": [addressableRef] });
     } else if (rootKind != null) {
       filters.push({ kinds: [1111], "#E": [eventId] });
       filters.push({ kinds: [1111], "#e": [eventId] });
     }
-    const handle = nostrRuntime.subscribe(relays, filters as any, {
-      onEvent: addEventToMap,
-    });
-    return handle;
+    return dataLayer.observe(filters, { onEvent: addEventToMap });
   };
 
   useEffect(() => {
-    let handle: SubscriptionHandle | undefined;
+    let handle: ObserveHandle | undefined;
     if (!handle && showComments) {
       handle = fetchComments();
       return () => {
-        if (handle) handle.unsubscribe();
+        if (handle) handle.unobserve();
       };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -473,7 +465,7 @@ const CommentSection: React.FC<CommentSectionProps> = ({
     const signedComment = await signEvent(commentEvent, user.privateKey);
     if (!signedComment) return;
 
-    const result = await publishWithGossip(writeRelays, signedComment);
+    const result = await dataLayer.publishEvent(signedComment);
     openModal(signedComment, result, "Comment publish results");
 
     if (result.ok) {

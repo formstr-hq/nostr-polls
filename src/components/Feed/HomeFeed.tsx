@@ -7,7 +7,7 @@ import { useReports } from "../../hooks/useReports";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useAppContext } from "../../hooks/useAppContext";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import UnifiedFeed from "./UnifiedFeed";
 import { Notes } from "../Notes";
 import PollResponseForm from "../PollResponse/PollResponseForm";
@@ -115,24 +115,10 @@ const HomeFeed: React.FC = () => {
     return user?.follows ?? [];
   }, [source, user]);
 
-  // Synchronously read what's already in the global EventStore for the current
-  // source. Used to paint instantly on (re)mount — navigating away unmounts the
-  // feed and drops its local state, but the cache survives, so we rehydrate from
-  // it instead of showing a blank loader and refetching everything.
-  const hydrateFromCache = useCallback((): Event[] => {
-    const authors = authorsForSource();
-    if (authors.length === 0) return [];
-    const map = new Map<string, Event>();
-    for (const kind of FEED_KINDS) {
-      for (const e of nostrRuntime.query({ kinds: [kind], authors })) {
-        if (e.kind === KIND_NOTE && !isRootNote(e)) continue;
-        const k = dedupeKey(e);
-        const existing = map.get(k);
-        if (!existing || e.created_at > existing.created_at) map.set(k, e);
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => b.created_at - a.created_at);
-  }, [authorsForSource]);
+  // The data layer contract has no synchronous store read (the worker owns the
+  // store), so there's no instant cache-paint on (re)mount. The feed paints from
+  // the live `observe` stream below, which the worker serves from cache first.
+  const hydrateFromCache = useCallback((): Event[] => [], []);
 
   // Move buffered "new" items into the visible feed (SpeedDial "+N new" action).
   const showNewItems = useCallback(() => {
@@ -232,7 +218,20 @@ const HomeFeed: React.FC = () => {
         loadingRef.current = false;
       };
 
-      const handle = nostrRuntime.subscribe(relays, filters, {
+      // Under the dataLayer contract the local EOSE fires before the worker's
+      // upstream fetch returns, so committing on EOSE would settle this batch
+      // empty. Instead we commit shortly after the event stream goes quiet, with
+      // the timeout below as a hard cap.
+      let quietTimer: ReturnType<typeof setTimeout> | null = null;
+      const scheduleCommit = () => {
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(() => {
+          finalize();
+          handle.unobserve();
+        }, 900);
+      };
+
+      const handle = dataLayer.observe(filters, {
         onEvent: (event: Event) => {
           if (!verifyEvent(event)) return;
           if (event.kind === KIND_NOTE && !isRootNote(event)) return;
@@ -251,20 +250,17 @@ const HomeFeed: React.FC = () => {
             displayBatch.push(event);
             if (!oldestTs || event.created_at < oldestTs) oldestTs = event.created_at;
           }
+          scheduleCommit();
         },
-        onEose: () => {
-          finalize();
-          handle.unsubscribe();
-        },
-        fresh: mode === "refresh",
       });
 
       setTimeout(() => {
+        if (quietTimer) clearTimeout(quietTimer);
         finalize();
-        handle.unsubscribe();
+        handle.unobserve();
       }, FETCH_TIMEOUT_MS);
     },
-    [relays, authorsForSource, exhausted, profiles, fetchUserProfileThrottled]
+    [authorsForSource, exhausted, profiles, fetchUserProfileThrottled]
   );
 
   // Poll for items newer than anything we've seen and buffer them as "new".
@@ -279,7 +275,7 @@ const HomeFeed: React.FC = () => {
       limit: BATCH_SIZE,
     }));
 
-    const handle = nostrRuntime.subscribe(relays, filters, {
+    const handle = dataLayer.observe(filters, {
       onEvent: (event: Event) => {
         if (!verifyEvent(event)) return;
         if (event.kind === KIND_NOTE && !isRootNote(event)) return;
@@ -291,17 +287,15 @@ const HomeFeed: React.FC = () => {
         if (!existing || event.created_at > existing.created_at) {
           pendingRef.current.set(key, event);
         }
-      },
-      onEose: () => {
         setPendingCount(pendingRef.current.size);
-        handle.unsubscribe();
       },
-      fresh: true,
+      // No onEose: newer items stream in via onEvent after the worker's upstream
+      // fetch (local EOSE precedes it); the timeout below closes the interest.
     });
 
     setTimeout(() => {
       setPendingCount(pendingRef.current.size);
-      handle.unsubscribe();
+      handle.unobserve();
     }, FETCH_TIMEOUT_MS);
   }, [relays, authorsForSource, profiles, fetchUserProfileThrottled]);
 
@@ -309,8 +303,7 @@ const HomeFeed: React.FC = () => {
   // user's prior answer.
   useEffect(() => {
     if (!user) return;
-    const handle = nostrRuntime.subscribe(
-      relays,
+    const handle = dataLayer.observe(
       [{ kinds: KIND_RESPONSE, authors: [user.pubkey], limit: 100 }],
       {
         onEvent: (event: Event) => {
@@ -318,7 +311,7 @@ const HomeFeed: React.FC = () => {
         },
       }
     );
-    return () => handle.unsubscribe();
+    return () => handle.unobserve();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 

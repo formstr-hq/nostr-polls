@@ -12,7 +12,7 @@ import {
 import { StatusBar, Style } from "@capacitor/status-bar";
 import { App as CapApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
-import { nostrRuntime } from "./singletons";
+import { dataLayer } from "@formstr/local-relay";
 
 import { EventCreator } from "./components/EventCreator";
 import { PollResponse } from "./components/PollResponse";
@@ -30,7 +30,6 @@ import { MetadataProvider } from "./hooks/MetadataProvider";
 import { NotificationProvider } from "./contexts/notification-context";
 import { RelayProvider } from "./contexts/relay-context";
 import { RelayHealthProvider } from "./contexts/RelayHealthContext";
-import { GossipProvider } from "./contexts/GossipContext";
 import { NostrNotificationsProvider } from "./contexts/nostr-notification-context";
 import { DMProvider } from "./contexts/dm-context";
 import { ReportsProvider } from "./contexts/reports-context";
@@ -66,7 +65,7 @@ import { Nip89Provider } from "./contexts/Nip89Context";
 import { useUserContext } from "./hooks/useUserContext";
 import { useAppContext } from "./hooks/useAppContext";
 import { DataLayerProvider } from "./dataLayer/hooks";
-import { getDataLayer } from "./dataLayer/client";
+import { getDataLayer } from "@formstr/local-relay";
 import TopicsFeed from "./components/Feed/TopicsFeed";
 import TopicExplorer from "./components/Feed/TopicsFeed/TopicsExplorerFeed";
 import FeedsLayout from "./components/Feed/FeedsLayout";
@@ -150,7 +149,9 @@ function AppContent() {
     // undefined = first render (skip); null→pubkey or pubkey→pubkey = actual switch
     if (prev !== undefined && prev !== next) {
       resetStore();
-      nostrRuntime.reconnect();
+      // Account switch: the DataLayerProvider's user/scope change drives the
+      // worker's re-sync; resume() just nudges it that the foreground is active.
+      dataLayer.resume();
     }
     prevPubkeyRef.current = next;
   }, [user?.pubkey, resetStore]);
@@ -261,40 +262,32 @@ const App: React.FC = () => {
     setupStatusBar();
   }, []);
 
-  // Prune events older than 7 days every 10 minutes to keep memory bounded
-  useEffect(() => {
-    const interval = setInterval(() => nostrRuntime.debug.pruneOldEvents(7), 10 * 60_000);
-    return () => clearInterval(interval);
-  }, []);
-
-
-  // Reconnect relay subscriptions when the app returns from background.
-  // WebSocket connections are killed by the OS when backgrounded — especially
-  // on mobile/Capacitor where the WebView is aggressively throttled.
-  // We use Capacitor's appStateChange on native and visibilitychange on web,
-  // and always reconnect on foreground (no idle threshold) so publish never
-  // hits a dead connection.
+  // Tell the worker the app returned to the foreground. The worker owns the
+  // WebSocket connections (killed by the OS when backgrounded, especially on
+  // mobile/Capacitor) and decides how to recover — the app only signals the
+  // foreground transition it can observe but the worker can't. Event pruning is
+  // also the worker's responsibility now (its PrunePolicy), so no app-side prune.
   useEffect(() => {
     if (Capacitor.isNativePlatform()) {
       // Native: Capacitor fires appStateChange reliably on Android/iOS
       let listener: Awaited<ReturnType<typeof CapApp.addListener>> | null = null;
       CapApp.addListener("appStateChange", ({ isActive }) => {
-        if (isActive) nostrRuntime.reconnect();
+        if (isActive) dataLayer.resume();
       }).then((l) => { listener = l; });
       // Also handle network coming back online (e.g. WiFi → cellular switch)
-      const onOnline = () => nostrRuntime.reconnect();
+      const onOnline = () => dataLayer.resume();
       window.addEventListener("online", onOnline);
       return () => {
         listener?.remove();
         window.removeEventListener("online", onOnline);
       };
     } else {
-      // Web: visibilitychange is reliable; reconnect whenever tab becomes visible
+      // Web: visibilitychange is reliable; resume whenever tab becomes visible
       const onVisibilityChange = () => {
-        if (!document.hidden) nostrRuntime.reconnect();
+        if (!document.hidden) dataLayer.resume();
       };
       document.addEventListener("visibilitychange", onVisibilityChange);
-      window.addEventListener("online", () => nostrRuntime.reconnect());
+      window.addEventListener("online", () => dataLayer.resume());
       return () => document.removeEventListener("visibilitychange", onVisibilityChange);
     }
   }, []);
@@ -308,7 +301,6 @@ const App: React.FC = () => {
               <DataLayerScopeBridge>
               <RelayProvider>
                 <RelayHealthProvider>
-                <GossipProvider>
                 <DMProvider>
                 <NostrNotificationsProvider>
                   <TranslationBatchProvider>
@@ -339,7 +331,6 @@ const App: React.FC = () => {
                   </TranslationBatchProvider>
                 </NostrNotificationsProvider>
                 </DMProvider>
-                </GossipProvider>
                 </RelayHealthProvider>
               </RelayProvider>
               </DataLayerScopeBridge>
