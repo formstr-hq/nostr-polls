@@ -13,7 +13,7 @@ import { useUserContext } from './useUserContext';
 import { useAppContext } from './useAppContext';
 import { useRelays } from './useRelays';
 import { initLocalNotifications, fireNotification, NotifExtra } from '../services/localNotificationService';
-import { getNip65InboxRelays } from '../nostr/OutboxService';
+import { dataLayer } from '@formstr/local-relay';
 import { getCachedProfiles } from '../utils/localStorage';
 
 const NOTIF_ID_DMS = 1002;
@@ -25,6 +25,23 @@ const MAX_WORKER_RELAYS = 6;
 const MAX_WORKER_PROFILES = 1000;
 const PENDING_IDS_KEY = 'notif_pending_ids';
 const EVENT_KEY_PREFIX = 'notif_event_';
+// Cap NIP-65 read relays per account, matching the old OutboxService budget.
+const MAX_NIP65_RELAYS = 5;
+
+/** Fetch a pubkey's NIP-65 (kind:10002) read/inbox relays via the dataLayer.
+ *  Replaces the deleted OutboxService.getNip65InboxRelays — the local relay
+ *  worker now owns the fetch + caching, so we just parse the "r" tags here. */
+async function getNip65InboxRelays(pubkey: string): Promise<string[]> {
+  const event = await dataLayer.fetchReplaceable(10002, pubkey);
+  if (!event) return [];
+  const read: string[] = [];
+  for (const tag of event.tags) {
+    if (tag[0] !== 'r' || !tag[1]) continue;
+    const marker = tag[2]; // "read", "write", or undefined (= both)
+    if (!marker || marker === 'read') read.push(tag[1]);
+  }
+  return read.slice(0, MAX_NIP65_RELAYS);
+}
 
 /** Derive a stable integer notification ID from an event ID (hex string). */
 function eventIdToNotifId(eventId: string): number {
@@ -350,8 +367,8 @@ export function useAndroidNotifications() {
       await Promise.all(
         pubkeys.map(async (pk) => {
           try {
-            // persist=true seeds localStorage + warms the cache for every account.
-            const inbox = await getNip65InboxRelays(pk, true);
+            // The local relay worker caches the kind:10002 it fetches.
+            const inbox = await getNip65InboxRelays(pk);
             inbox.forEach((r) => union.add(r));
           } catch (e) {
             console.warn('[useAndroidNotifications] inbox relays fetch failed:', pk, e);
