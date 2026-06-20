@@ -21,10 +21,27 @@ export const useFollowingNotes = () => {
     includeNonRoots: true,
   });
 
-  // kind 1 notes, keyed by id
+  // kind 1 notes, keyed by id. Includes notes that arrived directly in the feed
+  // PLUS the originals embedded inside kind-6 reposts. NIP-18 stringifies the
+  // reposted event into the repost's `content`; recovering it here is what lets a
+  // repost of a note from someone you don't follow still render in the feed
+  // (otherwise the original is absent and the repost is silently dropped).
   const notes = useMemo(() => {
     const m = new Map<string, Event>();
     for (const e of items) if (e.kind === 1) m.set(e.id, e);
+    for (const e of items) {
+      if (e.kind !== 6 || !e.content) continue;
+      const originalId = e.tags.find((t) => t[0] === "e")?.[1];
+      if (!originalId || m.has(originalId)) continue;
+      try {
+        const embedded = JSON.parse(e.content) as Event;
+        if (embedded?.id === originalId && embedded.kind === 1) {
+          m.set(originalId, embedded);
+        }
+      } catch {
+        // malformed repost content — skip, the repost just won't have a body
+      }
+    }
     return m;
   }, [items]);
 

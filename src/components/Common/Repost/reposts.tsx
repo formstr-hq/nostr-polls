@@ -17,6 +17,7 @@ import { useRelays } from "../../../hooks/useRelays";
 import { dataLayer } from "@formstr/local-relay";
 import { signEvent } from "../../../nostr";
 import QuotePostDialog from "./QuotePostDialog";
+import RepostsDetailsModal from "./RepostsDetailsModal";
 
 interface RepostButtonProps {
   event: Event;
@@ -32,6 +33,7 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
   const [reposted, setReposted] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [quoteDialogOpen, setQuoteDialogOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   useEffect(() => {
     const checkAndFetch = async () => {
@@ -120,20 +122,28 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
   };
 
   // Count unique reposters for this event
+  const repostsForEvent: Event[] = repostsMap?.get(event.id) || [];
   const repostCount = new Set(
-    (repostsMap?.get(event.id) || []).map((e: Event) => e.pubkey)
+    repostsForEvent.map((e: Event) => e.pubkey)
   ).size;
 
   return (
-    <div style={{ marginLeft: 20 }}>
+    <div
+      style={{
+        marginLeft: 20,
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+      }}
+    >
+      {/* The icon opens the repost/quote menu. */}
       <span
         onClick={handleIconClick}
         style={{
           cursor: "pointer",
           display: "flex",
-          flexDirection: "row",
           alignItems: "center",
-          gap: 4,
           padding: 2,
         }}
       >
@@ -153,15 +163,21 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
                 }
           }
         />
-        {repostCount > 0 && (
-          <Typography
-            variant="caption"
-            sx={{ color: reposted ? theme.palette.primary.main : "inherit" }}
-          >
-            {repostCount}
-          </Typography>
-        )}
       </span>
+      {/* The count is its own target — tapping it opens the reposters list. */}
+      {repostCount > 0 && (
+        <Typography
+          variant="caption"
+          onClick={() => setDetailsOpen(true)}
+          sx={{
+            cursor: "pointer",
+            color: reposted ? theme.palette.primary.main : "inherit",
+            "&:hover": { textDecoration: "underline" },
+          }}
+        >
+          {repostCount}
+        </Typography>
+      )}
       <Menu
         anchorEl={menuAnchor}
         open={Boolean(menuAnchor)}
@@ -187,6 +203,11 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
           event={event}
         />
       )}
+      <RepostsDetailsModal
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        reposts={repostsForEvent}
+      />
     </div>
   );
 };

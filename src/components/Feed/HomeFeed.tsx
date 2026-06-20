@@ -12,12 +12,14 @@ import UnifiedFeed from "./UnifiedFeed";
 import { Notes } from "../Notes";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import { ArticleCard } from "../Articles/ArticleCard";
+import RepostsCard from "./NotesFeed/components/RepostedNoteCard";
 
 const KIND_NOTE = 1;
 const KIND_POLL = 1068;
 const KIND_ARTICLE = 30023;
+const KIND_REPOST = 6;
 const KIND_RESPONSE = [1018, 1070];
-const FEED_KINDS = [KIND_NOTE, KIND_POLL, KIND_ARTICLE];
+const FEED_KINDS = [KIND_NOTE, KIND_POLL, KIND_ARTICLE, KIND_REPOST];
 
 const STORAGE_KEY = "pollerama:homeSource";
 // Per-kind page size. Notes vastly outnumber polls/articles, so giving each
@@ -327,6 +329,69 @@ const HomeFeed: React.FC = () => {
     return map;
   }, [userResponses]);
 
+  // Fold kind-6 reposts into the feed. Reposts of the same note collapse to one
+  // entry (with all reposters), and a note that's also reposted shows once with a
+  // "reposted by" header, ordered by the most recent repost. NIP-18 stringifies
+  // the original event into the repost's `content`, so a repost of a note from
+  // someone you don't follow still renders even though the note isn't fetched
+  // directly. Non-repost events pass through unchanged, ordered by created_at.
+  type FeedItem =
+    | { type: "event"; event: Event; sortTime: number }
+    | { type: "repost"; note: Event; reposts: Event[]; sortTime: number };
+
+  const feedItems = useMemo<FeedItem[]>(() => {
+    const reposts = events.filter((e) => e.kind === KIND_REPOST);
+    const others = events.filter((e) => e.kind !== KIND_REPOST);
+
+    // Group reposts by original note id, recovering the embedded original body.
+    const groups = new Map<string, { note?: Event; reposts: Event[] }>();
+    for (const r of reposts) {
+      const originalId = r.tags.find((t) => t[0] === "e")?.[1];
+      if (!originalId) continue;
+      const g = groups.get(originalId) || { reposts: [] };
+      g.reposts.push(r);
+      if (!g.note && r.content) {
+        try {
+          const embedded = JSON.parse(r.content) as Event;
+          if (embedded?.id === originalId && embedded.kind === KIND_NOTE) {
+            g.note = embedded;
+          }
+        } catch {
+          // malformed repost content — skip, may still resolve via a direct copy
+        }
+      }
+      groups.set(originalId, g);
+    }
+
+    // A reposted note that's also directly in the feed should merge into the
+    // repost item instead of appearing twice.
+    const directByKey = new Map<string, Event>();
+    for (const e of others) directByKey.set(dedupeKey(e), e);
+
+    const items: FeedItem[] = [];
+    const consumed = new Set<string>();
+
+    groups.forEach((g, originalId) => {
+      const note = directByKey.get(originalId) || g.note;
+      if (!note) return; // can't render without the original body
+      consumed.add(originalId);
+      const latestRepost = Math.max(...g.reposts.map((r) => r.created_at));
+      items.push({
+        type: "repost",
+        note,
+        reposts: g.reposts,
+        sortTime: Math.max(note.created_at, latestRepost),
+      });
+    });
+
+    for (const e of others) {
+      if (consumed.has(dedupeKey(e))) continue;
+      items.push({ type: "event", event: e, sortTime: e.created_at });
+    }
+
+    return items.sort((a, b) => b.sortTime - a.sortTime);
+  }, [events]);
+
   const refresh = useCallback(() => {
     cursorRef.current = undefined;
     setExhausted(false);
@@ -386,13 +451,19 @@ const HomeFeed: React.FC = () => {
     registerRefresh(refresh);
   }, [registerRefresh, refresh]);
 
-  // Report checks for the visible batch.
+  // Report checks for the visible batch. For reposts we check the original note
+  // (and its author), not the repost wrapper, so moderation applies to the body
+  // actually shown.
   useEffect(() => {
-    if (events.length > 0) {
-      requestReportCheck(events.map((e) => e.id));
-      requestUserReportCheck(events.map((e) => e.pubkey));
+    if (feedItems.length > 0) {
+      const ids = feedItems.map((i) => (i.type === "repost" ? i.note.id : i.event.id));
+      const pubkeys = feedItems.map((i) =>
+        i.type === "repost" ? i.note.pubkey : i.event.pubkey
+      );
+      requestReportCheck(ids);
+      requestUserReportCheck(pubkeys);
     }
-  }, [events, requestReportCheck, requestUserReportCheck]);
+  }, [feedItems, requestReportCheck, requestUserReportCheck]);
 
   const handleEndReached = useCallback(() => {
     if (!loadingRef.current && initialLoadDone && !exhausted) fetchBatch("more");
@@ -400,8 +471,8 @@ const HomeFeed: React.FC = () => {
 
   return (
     <UnifiedFeed
-      data={events}
-      loading={loading && events.length === 0}
+      data={feedItems}
+      loading={loading && feedItems.length === 0}
       loadingMore={loadingMore}
       refreshing={refreshing}
       onEndReached={handleEndReached}
@@ -410,9 +481,11 @@ const HomeFeed: React.FC = () => {
       newItemCount={pendingCount}
       onShowNewItems={showNewItems}
       newItemLabel="posts"
-      computeItemKey={(_, event) => dedupeKey(event)}
+      computeItemKey={(_, item) =>
+        item.type === "repost" ? `repost:${item.note.id}` : dedupeKey(item.event)
+      }
       emptyState={
-        initialLoadDone && events.length === 0 ? (
+        initialLoadDone && feedItems.length === 0 ? (
           <Box display="flex" justifyContent="center" px={3} py={8}>
             <Typography variant="body2" color="text.secondary" textAlign="center">
               {!user
@@ -424,9 +497,16 @@ const HomeFeed: React.FC = () => {
           </Box>
         ) : undefined
       }
-      itemContent={(_, event) => (
-        <HomeItem event={event} userResponse={latestResponses.get(event.id)} />
-      )}
+      itemContent={(_, item) =>
+        item.type === "repost" ? (
+          <RepostsCard note={item.note} reposts={item.reposts} />
+        ) : (
+          <HomeItem
+            event={item.event}
+            userResponse={latestResponses.get(item.event.id)}
+          />
+        )
+      }
     />
   );
 };
