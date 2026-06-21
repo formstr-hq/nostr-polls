@@ -1,3 +1,15 @@
+# 1.9.4
+
+- Trust scores: profiles now show a "Trust score" — how many of the people you follow also follow them — surfaced as a network chip, so you can gauge a stranger at a glance.
+- New "People you may know" rail: follow suggestions drawn from your web of trust (people followed by those you follow), ranked by how many of your follows follow them.
+- Network settings now show your web-of-trust size and last computed time, with a button to recompute it on demand.
+- Trust scores and recommendations are computed in the background by the web-of-trust worker, so they don't block the app.
+
+# 1.9.3
+
+- Fixed a crash on launch.
+- Fixed the Home feed sometimes failing to load.
+
 # 1.9.2
 
 - Fixed the Home and Notes feeds (and any "Following"/"Network" view) sometimes showing nothing on launch or resume — your follow list is now cached and available instantly, independent of the sync engine.
