@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { Box, LinearProgress, Modal, Typography } from "@mui/material";
 import { Event, EventTemplate, Filter } from "nostr-tools";
 import { parseContacts, getATagFromEvent } from "../nostr";
 import { useUserContext } from "../hooks/useUserContext";
@@ -23,30 +22,17 @@ const WOT_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
 
 // The web-of-trust "network index" maps every reachable pubkey to the subset of
 // the user's own follows that follow them. It powers the "followed by … you
-// follow" row on profiles. Persisted in a compact form that references each
-// source (one of the user's follows) by integer index, keeping it small enough
-// for localStorage even on large follow graphs.
+// follow" row on profiles, the per-pubkey trust score, and follow suggestions.
+// Persisted in a compact, index-referenced form (each source referenced by
+// integer) so it stays small in localStorage even on large follow graphs. The
+// compact form is produced in `src/utils/wot-worker.ts`; only the inverse
+// (rebuilding the in-memory Map) is needed on the main thread.
 type SerializedNetworkIndex = { follows: string[]; edges: Record<string, number[]> };
 
-function serializeNetworkIndex(index: Map<string, Set<string>>): string {
-  const follows: string[] = [];
-  const followIdx = new Map<string, number>();
-  const edges: Record<string, number[]> = {};
-  index.forEach((sources, target) => {
-    const arr: number[] = [];
-    sources.forEach((src) => {
-      let i = followIdx.get(src);
-      if (i === undefined) {
-        i = follows.length;
-        follows.push(src);
-        followIdx.set(src, i);
-      }
-      arr.push(i);
-    });
-    edges[target] = arr;
-  });
-  return JSON.stringify({ follows, edges });
-}
+// A follow recommendation: a 2nd-degree pubkey the user doesn't follow yet, with
+// its trust score (how many of the user's follows follow them). Computed in the
+// worker at commit and cached alongside the union/index.
+export type WotRecommendation = { pubkey: string; score: number };
 
 function deserializeNetworkIndex(json: string): Map<string, Set<string>> {
   const parsed = JSON.parse(json) as SerializedNetworkIndex;
@@ -75,6 +61,20 @@ interface ListContextInterface {
   fetchAndHydratePacks: (adrefs: string[]) => void;
   // Which of the user's own follows follow `pubkey` (the "followed by" set).
   getNetworkFollowers: (pubkey: string) => string[];
+  // Trust score for a pubkey: how many of the user's follows follow them (0 if
+  // not in the network). Synchronous read off the in-memory network index.
+  getTrustScore: (pubkey: string) => number;
+  // Returns the given pubkeys sorted by descending trust score (stable for ties).
+  // For ranking small batches — feed authors, search hits, reply/zap lists.
+  rankByTrust: (pubkeys: string[]) => string[];
+  // Top follow suggestions (2nd-degree pubkeys, strongest trust first), already
+  // filtered against the user's current follows. Precomputed by the worker.
+  getFollowRecommendations: (limit?: number) => WotRecommendation[];
+  // Web-of-trust computation status, surfaced in the Network settings panel.
+  isFetchingWoT: boolean;
+  wotProfileCount: number;
+  wotLastComputed: number | null; // ms epoch of the last successful compute
+  recomputeWebOfTrust: () => void; // force a fresh fetch, bypassing the cache
 }
 
 export const ListContext = createContext<ListContextInterface | null>(null);
@@ -99,6 +99,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
   const relayRefresh = useRelayRefresh();
   const wotInFlightRef = useRef(false);
   const wotAttemptedRef = useRef(false);
+  // Dedicated worker that does the heavy kind-3 aggregation + serialization off
+  // the UI thread. Lazily spawned per fetch and terminated on commit/teardown.
+  const wotWorkerRef = useRef<Worker | null>(null);
   // Standing interest in the user's own contact list (kind 3). Kept open so the
   // worker's upstream fetch can stream it in after the local EOSE.
   const contactHandleRef = useRef<{ unobserve: () => void } | null>(null);
@@ -106,10 +109,14 @@ export function ListProvider({ children }: { children: ReactNode }) {
   // mutated incrementally); `wotIndexVersion` bumps to notify consumers.
   const networkIndexRef = useRef<Map<string, Set<string>>>(new Map());
   const [wotIndexVersion, setWotIndexVersion] = useState(0);
-  // Blocking modal shown while the WoT is fetched/computed — the stream of
-  // contact lists is heavy enough to make the UI janky, so we block instead.
+  // WoT computation status, surfaced (non-blocking) in the Network settings
+  // panel. The aggregation itself runs in a worker, so we no longer block the UI.
   const [isFetchingWoT, setIsFetchingWoT] = useState(false);
   const [wotProfileCount, setWotProfileCount] = useState(0);
+  const [wotLastComputed, setWotLastComputed] = useState<number | null>(null);
+  // Cached follow suggestions (worker-computed, persisted). Lives in a ref since
+  // it's only read on demand via getFollowRecommendations, not rendered directly.
+  const recommendationsRef = useRef<WotRecommendation[]>([]);
   const prevPubkeyRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -123,15 +130,27 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setBookmarks10003(null);
       contactHandleRef.current?.unobserve();
       contactHandleRef.current = null;
+      wotWorkerRef.current?.terminate();
+      wotWorkerRef.current = null;
       wotInFlightRef.current = false;
       wotAttemptedRef.current = false;
       networkIndexRef.current = new Map();
+      recommendationsRef.current = [];
       setWotIndexVersion((v) => v + 1);
       setIsFetchingWoT(false);
       setWotProfileCount(0);
+      setWotLastComputed(null);
     }
     prevPubkeyRef.current = next;
   }, [user?.pubkey]);
+
+  // Tear down the WoT worker if the provider unmounts mid-computation.
+  useEffect(() => {
+    return () => {
+      wotWorkerRef.current?.terminate();
+      wotWorkerRef.current = null;
+    };
+  }, []);
 
   // Instant contact-list availability. The moment a user is present, hydrate
   // `follows` from the persistent cache — before, and independent of, the worker.
@@ -379,8 +398,10 @@ export function ListProvider({ children }: { children: ReactNode }) {
     const unionKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}`;
     const timeKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_time`;
     const indexKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_index`;
+    const recsKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_recs`;
 
     const storedTime = localStorage.getItem(timeKey);
+    if (storedTime) setWotLastComputed(Number(storedTime));
     let cachedUnion: string[] | null = null;
     try {
       const raw = localStorage.getItem(unionKey);
@@ -407,6 +428,15 @@ export function ListProvider({ children }: { children: ReactNode }) {
       if (storedIndex) {
         try {
           networkIndexRef.current = deserializeNetworkIndex(storedIndex);
+          // Restore cached follow suggestions if present. Absent for users whose
+          // cache predates this feature — they'll populate on the next compute
+          // (TTL refresh or the Recompute button), so we don't force a refetch.
+          try {
+            const storedRecs = localStorage.getItem(recsKey);
+            recommendationsRef.current = storedRecs ? JSON.parse(storedRecs) : [];
+          } catch {
+            recommendationsRef.current = [];
+          }
           setWotIndexVersion((v) => v + 1);
           return; // Fully hydrated from cache — no network needed.
         } catch {
@@ -418,26 +448,35 @@ export function ListProvider({ children }: { children: ReactNode }) {
     }
 
     // Background fetch: pull kind-3 lists from every follow and build both the
-    // union set and the inverted "network index". We accumulate locally and only
-    // commit once at EOSE — calling setUser per-event used to re-render the whole
-    // app on each of up to 500 events and hang it, so it stays off the hot path.
+    // union set and the inverted "network index". The aggregation + serialization
+    // run in a dedicated worker (see src/utils/wot-worker.ts) — doing it inline
+    // used to loop every `p` tag of up to 500 lists on the UI thread and hang it.
+    // The main thread here only forwards raw events and persists the result.
     wotInFlightRef.current = true;
     setWotProfileCount(0);
-    setIsFetchingWoT(true); // Block the UI — the contact-list stream is heavy.
+    setIsFetchingWoT(true); // Drives the non-blocking progress in Network settings.
 
     const filter: Filter = { kinds: [3], authors: user.follows, limit: 500 };
+
+    const worker = new Worker(new URL("../utils/wot-worker", import.meta.url));
+    wotWorkerRef.current = worker;
     // Seed the union with whatever we already have so a sparse fetch can only
     // ever add to the web of trust, never shrink it (e.g. a backfill that comes
-    // back with fewer contact lists must not wipe a good cached union).
-    const union = new Set<string>(cachedUnion ?? user.webOfTrust ?? []);
-    const index = new Map<string, Set<string>>();
-    let lastUiUpdate = 0;
+    // back with fewer contact lists must not wipe a good cached union). `follows`
+    // + `self` let the worker exclude already-followed/own pubkeys from the
+    // follow-recommendation list it builds at commit.
+    worker.postMessage({
+      type: "init",
+      seedUnion: Array.from(new Set<string>(cachedUnion ?? user.webOfTrust ?? [])),
+      follows: user.follows,
+      self: user.pubkey,
+    });
 
     // Under the dataLayer contract the local EOSE fires before the worker's
     // upstream fetch returns the contact lists, so we can't commit on EOSE
     // (that would persist an empty/stale union and tear down the fetch). Instead
-    // we keep the interest open and commit once the stream goes quiet, with a
-    // hard cap so the blocking modal can never hang.
+    // we keep the interest open and ask the worker to commit once the stream
+    // goes quiet, with a hard cap so the computation can never hang.
     let committed = false;
     let quietTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -447,51 +486,60 @@ export function ListProvider({ children }: { children: ReactNode }) {
       if (quietTimer) clearTimeout(quietTimer);
       clearTimeout(hardTimer);
       handle.unobserve();
+      // The worker replies with the finished union + serialized index; everything
+      // heavy (Set/Map building, JSON stringify) already happened off-thread.
+      worker.postMessage({ type: "commit" });
+    };
+
+    worker.onmessage = (e: MessageEvent) => {
+      const msg = e.data;
+      if (msg.type === "progress") {
+        setWotProfileCount(msg.size);
+        return;
+      }
+      if (msg.type !== "result") return;
+
+      worker.terminate();
+      if (wotWorkerRef.current === worker) wotWorkerRef.current = null;
       wotInFlightRef.current = false;
       setIsFetchingWoT(false);
-      setWotProfileCount(union.size);
+      setWotProfileCount(msg.size);
 
+      const union: string[] = msg.union;
+      const recommendations: WotRecommendation[] = msg.recommendations ?? [];
       // Don't persist an empty result — leave any existing cache intact so
       // the next session retries instead of being stuck empty.
-      if (union.size > 0) {
+      if (union.length > 0) {
+        const now = Date.now();
         try {
-          localStorage.setItem(unionKey, JSON.stringify(Array.from(union)));
-          localStorage.setItem(timeKey, Date.now().toString());
-          localStorage.setItem(indexKey, serializeNetworkIndex(index));
+          localStorage.setItem(unionKey, JSON.stringify(union));
+          localStorage.setItem(timeKey, now.toString());
+          localStorage.setItem(indexKey, msg.serializedIndex);
+          localStorage.setItem(recsKey, JSON.stringify(recommendations));
         } catch {
           // localStorage quota exceeded — keep the index in memory for this
           // session; it'll be recomputed next load.
         }
+        setWotLastComputed(now);
       }
 
-      networkIndexRef.current = index;
+      recommendationsRef.current = recommendations;
+      networkIndexRef.current = deserializeNetworkIndex(msg.serializedIndex);
       setWotIndexVersion((v) => v + 1);
       setUser((prev) =>
-        prev ? ({ ...prev, webOfTrust: union } as User) : null,
+        prev ? ({ ...prev, webOfTrust: new Set(union) } as User) : null,
       );
     };
 
     const handle = dataLayer.observe([filter], {
       onEvent: (event: Event) => {
-        const source = event.pubkey; // one of the user's follows
-        for (const tag of event.tags) {
-          if (tag[0] === "p" && tag[1]) {
-            const target = tag[1];
-            union.add(target);
-            let sources = index.get(target);
-            if (!sources) {
-              sources = new Set();
-              index.set(target, sources);
-            }
-            sources.add(source);
-          }
-        }
-        // Throttle progress updates so the modal doesn't re-render per event.
-        const now = Date.now();
-        if (now - lastUiUpdate > 200) {
-          lastUiUpdate = now;
-          setWotProfileCount(union.size);
-        }
+        // Forward to the worker; it owns the union/index aggregation. We keep
+        // main-thread work to a single postMessage per event.
+        worker.postMessage({
+          type: "event",
+          pubkey: event.pubkey,
+          tags: event.tags,
+        });
         // Commit ~1.5s after the stream goes quiet.
         if (quietTimer) clearTimeout(quietTimer);
         quietTimer = setTimeout(commit, 1500);
@@ -504,6 +552,16 @@ export function ListProvider({ children }: { children: ReactNode }) {
     return handle;
   };
 
+  // Manual refresh from the Network settings panel. Busts the cache timestamp so
+  // the validity check misses, then re-runs the (worker-backed) fetch. The union
+  // is seeded from the existing cache, so a recompute can only grow it.
+  const recomputeWebOfTrust = () => {
+    if (!user?.pubkey || wotInFlightRef.current) return;
+    localStorage.removeItem(`${WOT_STORAGE_KEY_PREFIX}${user.pubkey}_time`);
+    wotAttemptedRef.current = false;
+    subscribeToContacts();
+  };
+
   const getNetworkFollowers = useCallback(
     (pk: string): string[] => {
       const sources = networkIndexRef.current.get(pk);
@@ -512,6 +570,35 @@ export function ListProvider({ children }: { children: ReactNode }) {
     // Recreated whenever the index changes so consumers depending on this
     // function (in effect/memo deps) recompute once it's ready.
     [wotIndexVersion], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const getTrustScore = useCallback(
+    (pk: string): number => networkIndexRef.current.get(pk)?.size ?? 0,
+    [wotIndexVersion], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const rankByTrust = useCallback(
+    (pubkeys: string[]): string[] => {
+      const idx = networkIndexRef.current;
+      // Stable sort by descending score; ties keep their original order.
+      return pubkeys
+        .map((pk, i) => ({ pk, i, score: idx.get(pk)?.size ?? 0 }))
+        .sort((a, b) => b.score - a.score || a.i - b.i)
+        .map((e) => e.pk);
+    },
+    [wotIndexVersion], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const getFollowRecommendations = useCallback(
+    (limit?: number): WotRecommendation[] => {
+      // Re-filter against the current follow list so anyone followed since the
+      // last compute drops off without waiting for a recompute. (Already-sorted.)
+      const followed = new Set(user?.follows ?? []);
+      const recs = recommendationsRef.current.filter((r) => !followed.has(r.pubkey));
+      return limit != null ? recs.slice(0, limit) : recs;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wotIndexVersion, user?.follows],
   );
 
   const fetchMyTopics = async () => {
@@ -677,55 +764,31 @@ export function ListProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <>
-      <Modal open={isFetchingWoT} aria-labelledby="wot-modal-title">
-        <Box
-          sx={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            width: { xs: "85%", sm: 420 },
-            maxWidth: "90vw",
-            bgcolor: "background.paper",
-            borderRadius: 2,
-            boxShadow: 24,
-            p: 4,
-            outline: "none",
-          }}
-        >
-          <Typography id="wot-modal-title" variant="h6" gutterBottom>
-            Computing your web of trust
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Please wait while we analyze the people you follow. This powers your
-            feeds and content moderation, and only happens occasionally.
-          </Typography>
-          <LinearProgress sx={{ mb: 1.5, borderRadius: 1, height: 8 }} />
-          <Typography variant="caption" color="text.secondary">
-            Loaded {wotProfileCount.toLocaleString()} profiles
-          </Typography>
-        </Box>
-      </Modal>
-      <ListContext.Provider
-        value={{
-          lists,
-          selectedList,
-          handleListSelected,
-          fetchLatestContactList,
-          unfollowContact,
-          myTopics,
-          addTopicToMyTopics,
-          removeTopicFromMyTopics,
-          bookmarkedPackKeys,
-          bookmarkFollowPack,
-          unbookmarkFollowPack,
-          fetchAndHydratePacks,
-          getNetworkFollowers,
-        }}
-      >
-        {children}
-      </ListContext.Provider>
-    </>
+    <ListContext.Provider
+      value={{
+        lists,
+        selectedList,
+        handleListSelected,
+        fetchLatestContactList,
+        unfollowContact,
+        myTopics,
+        addTopicToMyTopics,
+        removeTopicFromMyTopics,
+        bookmarkedPackKeys,
+        bookmarkFollowPack,
+        unbookmarkFollowPack,
+        fetchAndHydratePacks,
+        getNetworkFollowers,
+        getTrustScore,
+        rankByTrust,
+        getFollowRecommendations,
+        isFetchingWoT,
+        wotProfileCount,
+        wotLastComputed,
+        recomputeWebOfTrust,
+      }}
+    >
+      {children}
+    </ListContext.Provider>
   );
 }

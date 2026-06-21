@@ -5,6 +5,7 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  LinearProgress,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -12,11 +13,29 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import SyncIcon from "@mui/icons-material/Sync";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import { dataLayer, type Diagnostics, type RelayHealth } from "@formstr/local-relay";
+import { useListContext } from "../../hooks/useListContext";
+import { useUserContext } from "../../hooks/useUserContext";
 
 // IndexedDB database the worker persists the shared event store to. Matches
 // `new IndexedDBStorage("shared")` in the worker entry (`pollerama-local-relay`
 // prefix + namespace). Deleting it clears the on-disk cache.
 const CACHE_DB_NAME = "pollerama-local-relay:shared";
+
+// Mirror of WOT_TTL in lists-context.tsx — kept local just to show the user when
+// the cached web of trust will next be recomputed.
+const WOT_TTL_MS = 5 * 24 * 60 * 60 * 1000;
+
+// Compact "2d 3h ago" / "in 4d 22h" style durations for the WoT status rows.
+const formatDuration = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  if (m > 0) return `${m}m`;
+  return "just now";
+};
 
 const SectionHeader: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Typography
@@ -86,6 +105,10 @@ export const NetworkSettings: React.FC = () => {
   const [error, setError] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [clearing, setClearing] = React.useState(false);
+  const { user } = useUserContext();
+  const { isFetchingWoT, wotProfileCount, wotLastComputed, recomputeWebOfTrust } =
+    useListContext();
+  const wotSize = user?.webOfTrust?.size ?? 0;
 
   const refresh = React.useCallback(async () => {
     try {
@@ -190,6 +213,56 @@ export const NetworkSettings: React.FC = () => {
           Clear cache
         </Button>
       </Box>
+
+      <Divider />
+
+      {/* Web of trust */}
+      <Box>
+        <SectionHeader>Web of Trust</SectionHeader>
+        {isFetchingWoT ? (
+          <Box>
+            <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.75 }}>
+              <Typography variant="body2" color="text.secondary">
+                Building your network…
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {wotProfileCount.toLocaleString()}
+              </Typography>
+            </Box>
+            <LinearProgress sx={{ borderRadius: 1, height: 6 }} />
+          </Box>
+        ) : (
+          <>
+            <Stat label="In your network" value={wotSize.toLocaleString()} />
+            <Stat
+              label="Last computed"
+              value={wotLastComputed ? `${formatDuration(Date.now() - wotLastComputed)} ago` : "Never"}
+            />
+            {wotLastComputed && (
+              <Stat
+                label="Recomputes in"
+                value={formatDuration(wotLastComputed + WOT_TTL_MS - Date.now())}
+              />
+            )}
+          </>
+        )}
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<SyncIcon />}
+          onClick={recomputeWebOfTrust}
+          disabled={isFetchingWoT || !user?.follows?.length}
+          sx={{ mt: 1 }}
+        >
+          Recompute
+        </Button>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+          Maps everyone the people you follow follow. Powers your network feed and
+          content moderation; recomputed automatically every 5 days.
+        </Typography>
+      </Box>
+
+      <Divider />
 
       {/* Lifecycle / connections */}
       <Box>

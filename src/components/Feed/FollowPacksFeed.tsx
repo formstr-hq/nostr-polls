@@ -6,6 +6,7 @@ import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { FollowPackCard } from "../FollowPacks/FollowPackCard";
+import { WhoToFollow } from "../Profile/WhoToFollow";
 
 const STORAGE_KEY = "pollerama:followPacksSource";
 const BATCH_SIZE = 20;
@@ -144,6 +145,10 @@ const FollowPacksFeed: React.FC = () => {
 
   return (
     <Box sx={{ height: "100%", overflowY: "auto" }}>
+      {/* Algorithmic follow suggestions sit atop the discovery (Global) tab —
+          packs are curated lists to follow, so "people you may know" fits here.
+          Renders nothing until the WoT worker has produced recommendations. */}
+      {source === "global" && <WhoToFollow />}
       {isLoading && displayPacks.length === 0 ? (
         <Box display="flex" justifyContent="center" py={8}>
           <CircularProgress />

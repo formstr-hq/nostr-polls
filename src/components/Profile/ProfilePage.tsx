@@ -40,6 +40,7 @@ import { Nip05Badge } from "../Common/Nip05Badge";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
 import EditIcon from "@mui/icons-material/Edit";
 import LinkIcon from "@mui/icons-material/Link";
+import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
 import { FeedActionsProvider } from "../../contexts/FeedActionsContext";
 import CreateFAB from "../Feed/CreateFAB";
 import { ProfileEditModal } from "./ProfileEditModal";
@@ -87,7 +88,7 @@ const ProfilePage: React.FC = () => {
   const followersSetRef = useRef(new Set<string>());
   const { relays } = useRelays();
   const { user, requestLogin, setUser } = useUserContext();
-  const { fetchLatestContactList } = useListContext();
+  const { fetchLatestContactList, getTrustScore } = useListContext();
   const { showNotification } = useNotification();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -318,6 +319,9 @@ const ProfilePage: React.FC = () => {
 
   const npub = nip19.npubEncode(pubkey);
   const isOwnProfile = user?.pubkey === pubkey;
+  // Trust score = how many of the viewer's own follows also follow this profile.
+  // Shown on every profile (logged in, not your own) as an at-a-glance signal.
+  const trustScore = user && !isOwnProfile ? getTrustScore(pubkey) : 0;
 
   return (
     <FeedActionsProvider>
@@ -392,17 +396,29 @@ const ProfilePage: React.FC = () => {
                 {followsYou && (
                   <Chip label="Follows you" size="small" variant="outlined" />
                 )}
-                {user &&
-                  !isOwnProfile &&
-                  !user.follows?.includes(pubkey) &&
-                  user.webOfTrust?.has(pubkey) && (
+                {user && !isOwnProfile && (
+                  <Tooltip
+                    title={
+                      trustScore > 0
+                        ? `Trust score: ${trustScore} ${
+                            trustScore === 1 ? "person" : "people"
+                          } you follow also follow them`
+                        : "No one you follow follows them"
+                    }
+                  >
                     <Chip
-                      label="In your wider network"
+                      icon={<PeopleAltOutlinedIcon />}
+                      label={
+                        trustScore > 0
+                          ? `${trustScore} in your network`
+                          : "Not in your network"
+                      }
                       size="small"
-                      color="primary"
+                      color={trustScore > 0 ? "primary" : "default"}
                       variant="outlined"
                     />
-                  )}
+                  </Tooltip>
+                )}
               </Box>
 
               {profile?.nip05 && (
