@@ -33,9 +33,15 @@ export const Nip05Badge: React.FC<Nip05BadgeProps> = ({
   pubkey,
   variant = "caption",
 }) => {
-  const status = useNip05(identifier, pubkey);
+  // Relay-sourced profile metadata isn't guaranteed to honor the type:
+  // a malformed profile can set `nip05` to a non-string, which would throw
+  // in formatNip05/useNip05 and white-screen the app. Treat those as absent.
+  const safeIdentifier =
+    typeof identifier === "string" ? identifier : undefined;
 
-  if (!identifier) return null;
+  const status = useNip05(safeIdentifier, pubkey);
+
+  if (!safeIdentifier) return null;
 
   return (
     <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5, minWidth: 0 }}>
@@ -50,7 +56,7 @@ export const Nip05Badge: React.FC<Nip05BadgeProps> = ({
         </Tooltip>
       )}
       <Typography variant={variant} color="text.secondary" sx={{ wordBreak: "break-all" }}>
-        {formatNip05(identifier)}
+        {formatNip05(safeIdentifier)}
       </Typography>
     </Box>
   );
