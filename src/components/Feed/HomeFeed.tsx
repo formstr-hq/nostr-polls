@@ -418,6 +418,24 @@ const HomeFeed: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, relays]);
 
+  // The user's follows / web-of-trust resolve asynchronously after login, so on
+  // a cold start the initial fetch above often runs with an empty author set and
+  // bails (showing the empty state). The [source, relays] effect won't re-run
+  // when authors arrive, so kick a fetch on the empty→populated transition.
+  // Without this the home feed stays blank until a manual reload (which works
+  // only because follows is then cached synchronously). Fires once per
+  // transition; loadingRef guards against double-fetching on a warm mount.
+  const hasAuthors =
+    source === "network"
+      ? (user?.webOfTrust?.size ?? 0) > 0
+      : (user?.follows?.length ?? 0) > 0;
+  const prevHadAuthorsRef = useRef(false);
+  useEffect(() => {
+    const had = prevHadAuthorsRef.current;
+    prevHadAuthorsRef.current = hasAuthors;
+    if (!had && hasAuthors) fetchBatch("initial");
+  }, [hasAuthors, fetchBatch]);
+
   // Poll for newer items every 60s once we have a baseline; they buffer into
   // the "+N new" prompt.
   useEffect(() => {
