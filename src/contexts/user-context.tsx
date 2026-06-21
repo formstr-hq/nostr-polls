@@ -5,6 +5,7 @@ import {
   PassphraseModalMode,
 } from "../components/Login/PassphraseModal";
 import { signerManager, StoredAccount } from "../singletons/Signer/SignerManager";
+import { readCachedContacts } from "../nostr/contactsCache";
 
 export type User = {
   name?: string;
@@ -42,8 +43,22 @@ type PassphraseRequest = {
   resolve: (passphrase: string | null) => void;
 };
 
+/**
+ * Seed a freshly-resolved user with their persisted contact list so following/
+ * network feeds have `follows` from the very first render — the contact list is
+ * load-bearing and must never depend on worker/relay timing. lists-context
+ * revalidates with anything newer (stale-while-revalidate).
+ */
+function withCachedFollows(u: User | null): User | null {
+  if (!u || (u.follows && u.follows.length > 0)) return u;
+  const cached = readCachedContacts(u.pubkey);
+  return cached ? ({ ...u, follows: cached.follows } as User) : u;
+}
+
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => signerManager.getUser());
+  const [user, setUser] = useState<User | null>(() =>
+    withCachedFollows(signerManager.getUser()),
+  );
   const [accounts, setAccounts] = useState<StoredAccount[]>(() =>
     signerManager.getAccounts(),
   );
@@ -95,7 +110,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     signerManager.onChange(() => {
       setUser((prev) => {
-        const next = signerManager.getUser();
+        const next = withCachedFollows(signerManager.getUser());
         if (next?.pubkey && next.pubkey === prev?.pubkey) return prev;
         return next;
       });

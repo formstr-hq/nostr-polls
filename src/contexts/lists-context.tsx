@@ -14,6 +14,8 @@ import { useAppContext } from "../hooks/useAppContext";
 import { User } from "./user-context";
 import { dataLayer } from "@formstr/local-relay";
 import { collectOnce } from "../dataLayer/collect";
+import { useRelayRefresh } from "../dataLayer/hooks";
+import { readCachedContacts, writeCachedContacts } from "../nostr/contactsCache";
 import { signerManager } from "../singletons/Signer/SignerManager";
 
 const WOT_STORAGE_KEY_PREFIX = `pollerama:webOfTrust`;
@@ -88,6 +90,13 @@ export function ListProvider({ children }: { children: ReactNode }) {
   >();
   const { user, setUser, requestLogin } = useUserContext();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
+  // Bumps once the worker hydrates its store (or restarts). The contact list
+  // (kind 3) is fetched via a standing observe that EOSEs before hydration and,
+  // because bulkLoad suppresses emits, never receives the hydrated list — leaving
+  // `follows` empty so following/network feeds (home, notes) show nothing while
+  // author-less feeds (polls, DMs, notifications) keep working. Re-running the
+  // fetch effect on this signal re-observes against the populated store.
+  const relayRefresh = useRelayRefresh();
   const wotInFlightRef = useRef(false);
   const wotAttemptedRef = useRef(false);
   // Standing interest in the user's own contact list (kind 3). Kept open so the
@@ -122,6 +131,31 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setWotProfileCount(0);
     }
     prevPubkeyRef.current = next;
+  }, [user?.pubkey]);
+
+  // Instant contact-list availability. The moment a user is present, hydrate
+  // `follows` from the persistent cache — before, and independent of, the worker.
+  // This is the load-bearing list for every following/network feed, so it must
+  // never wait on worker hydration timing or IndexedDB surviving. We also re-seed
+  // the worker store with the raw kind-3 so author-scoped reads + outbox routing
+  // have it even if IndexedDB was evicted. The standing kind-3 observe still
+  // revalidates with anything newer (stale-while-revalidate).
+  useEffect(() => {
+    const pubkey = user?.pubkey;
+    if (!pubkey) return;
+    const cached = readCachedContacts(pubkey);
+    if (!cached) return;
+    try {
+      dataLayer.addEvent(cached.event);
+    } catch {
+      // best-effort: ingestion failing just means we rely on the relay copy
+    }
+    setUser((prev) => {
+      if (!prev || prev.pubkey !== pubkey) return prev;
+      if (prev.follows && prev.follows.length > 0) return prev; // network already won
+      return { ...prev, follows: cached.follows } as User;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.pubkey]);
 
   const fetchLatestContactList = (): Promise<Event | null> => {
@@ -172,28 +206,31 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   const handleContactListEvent = async (event: Event) => {
     if (event.pubkey !== user?.pubkey) return;
-    const follows = await parseContacts(event);
-    let a_tag = `${event.kind}:${event.pubkey}`;
 
+    // Newness is decided against the persistent cache, not just the in-memory map,
+    // so an in-memory reset (account switch, remount) can't make us re-accept a
+    // stale list. Only act on a genuinely newer contact list.
+    const cached = readCachedContacts(event.pubkey);
+    if (cached && event.created_at <= cached.event.created_at) return;
+
+    const follows = Array.from(await parseContacts(event));
+
+    // Persist aggressively so following/network feeds always have the list on the
+    // next launch — independent of the worker store / IndexedDB, the gap that made
+    // the empty-feed bug recur.
+    writeCachedContacts(event.pubkey, { event, follows });
+
+    setUser((prevUser) =>
+      prevUser && prevUser.pubkey === event.pubkey
+        ? ({ ...prevUser, follows } as User)
+        : prevUser,
+    );
+
+    const a_tag = `${event.kind}:${event.pubkey}`;
     setLists((prevMap) => {
-      const pastEvent = prevMap?.get(a_tag);
-
-      // Only update if this event is newer than what we have
-      if (event.created_at > (pastEvent?.created_at || 0)) {
-        setUser((prevUser) => {
-          if (!prevUser) return null;
-          return {
-            ...prevUser,
-            follows: Array.from(follows),
-          } as User;
-        });
-        const newMap = new Map(prevMap);
-        newMap.set(a_tag, event);
-        return newMap;
-      }
-
-      // Return unchanged map if this event is older
-      return prevMap;
+      const newMap = new Map(prevMap);
+      newMap.set(a_tag, event);
+      return newMap;
     });
   };
 
@@ -541,8 +578,11 @@ export function ListProvider({ children }: { children: ReactNode }) {
       if (!myTopics) fetchMyTopics();
       if (bookmarkedPackKeys.size === 0 && !bookmarks10003) fetchBookmarks();
     }
+    // `relayRefresh` re-runs these one-shot fetches after the worker hydrates, so
+    // a kind-3/list/bookmark read that EOSE'd on a cold store retries against the
+    // populated one — the guards above keep it to only what's still missing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lists, myTopics, user]);
+  }, [lists, myTopics, user, relayRefresh]);
 
   // Warm profile cache with followed pubkeys
   useEffect(() => {

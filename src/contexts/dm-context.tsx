@@ -9,6 +9,7 @@ import React, {
 import { Event } from "nostr-tools";
 import { useUserContext } from "../hooks/useUserContext";
 import { dataLayer, type ObserveHandle, type PublishResult } from "@formstr/local-relay";
+import { useRelayRefresh } from "../dataLayer/hooks";
 import {
   unwrapGiftWrap,
   wrapAndSendDM,
@@ -74,6 +75,11 @@ const GW_CACHE_PREFIX = "dm_gw_";
 // Legacy key used in earlier versions — purged on mount/logout.
 const LEGACY_CACHE_PREFIX = "dm_cache_";
 const LAST_SEEN_PREFIX = "dm_lastseen_";
+// Per-account "all read up to" watermark. markAllAsRead sets this so messages
+// that decrypt or arrive AFTER the click — or conversations not loaded yet at
+// click time — are still treated as read on the next load. A per-conversation
+// lastSeen alone missed those, so old messages reappeared as unread.
+const MARK_ALL_PREFIX = "dm_markall_";
 const REACTION_CACHE_PREFIX = "dm_reactions_";
 const GW_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -157,6 +163,23 @@ function setLastSeen(conversationId: string, timestamp: number): void {
   }
 }
 
+function getMarkAllTs(pubkey: string): number {
+  try {
+    const ts = localStorage.getItem(MARK_ALL_PREFIX + pubkey);
+    return ts ? parseInt(ts, 10) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function setMarkAllTs(pubkey: string, timestamp: number): void {
+  try {
+    localStorage.setItem(MARK_ALL_PREFIX + pubkey, String(timestamp));
+  } catch {
+    // ignore
+  }
+}
+
 export function DMProvider({ children }: { children: ReactNode }) {
   const { user } = useUserContext();
   const [conversations, setConversations] = useState<Map<string, Conversation>>(
@@ -169,7 +192,17 @@ export function DMProvider({ children }: { children: ReactNode }) {
   }, []);
   const [loading, setLoading] = useState(false);
   const seenRumorIds = useRef<Set<string>>(new Set());
+  // Gift-wrap event ids already processed — dedup BEFORE decrypt so a re-observe
+  // (after worker hydration) doesn't re-decrypt known wraps and, for external
+  // signers, doesn't re-prompt the user for approval.
+  const seenWrapIds = useRef<Set<string>>(new Set());
+  // The account the current subscription state belongs to, so a refresh-driven
+  // re-observe (same user) preserves conversations while an account switch resets.
+  const lastUserKey = useRef<string | null>(null);
   const subRef = useRef<ObserveHandle | null>(null);
+  // Bumps once the worker has hydrated its store (or restarted); we re-observe
+  // so cached gift wraps that the boot-time subscription EOSE'd past get decrypted.
+  const refresh = useRelayRefresh();
   // Serialise external-signer decryption so the user only sees one prompt at a time
   const decryptQueue = useRef<Promise<void>>(Promise.resolve());
   // If the user rejects a decrypt request, stop asking for the rest of the session
@@ -277,7 +310,13 @@ export function DMProvider({ children }: { children: ReactNode }) {
       setConversations((prev) => {
         const next = new Map(prev);
         const existing = next.get(conversationId);
-        const lastSeen = getLastSeen(conversationId);
+        // Read threshold = the later of this conversation's own lastSeen and the
+        // account-wide "mark all read" watermark, so a global mark-all covers
+        // messages/conversations that hadn't loaded when it was clicked.
+        const lastSeen = Math.max(
+          getLastSeen(conversationId),
+          getMarkAllTs(myPubkey)
+        );
 
         if (existing) {
           if (existing.messages.some((m) => m.id === rumor.id)) return prev;
@@ -316,6 +355,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
     if (!user) {
       setConversations(new Map());
       seenRumorIds.current.clear();
+      seenWrapIds.current.clear();
+      lastUserKey.current = null;
       decryptionRejected.current = false;
       subRef.current?.unobserve();
       subRef.current = null;
@@ -327,6 +368,17 @@ export function DMProvider({ children }: { children: ReactNode }) {
     const myPubkey = user.pubkey;
     const privateKey = user.privateKey;
 
+    // Reset accumulated state only on a genuine account switch — NOT on a
+    // refresh-driven re-observe for the same user (that would drop conversations
+    // and force every wrap to be re-decrypted/re-prompted).
+    if (lastUserKey.current !== myPubkey) {
+      lastUserKey.current = myPubkey;
+      setConversations(new Map());
+      seenRumorIds.current.clear();
+      seenWrapIds.current.clear();
+      decryptionRejected.current = false;
+    }
+
     const startSubscription = async () => {
       setLoading(true);
 
@@ -334,6 +386,12 @@ export function DMProvider({ children }: { children: ReactNode }) {
         [{ kinds: [1059], "#p": [myPubkey] }],
         {
           onEvent: async (event: Event) => {
+            // Dedup by gift-wrap id before any decryption so a re-observe never
+            // re-decrypts (and never re-prompts an external signer for) a wrap
+            // we've already handled this session.
+            if (seenWrapIds.current.has(event.id)) return;
+            seenWrapIds.current.add(event.id);
+
             // Persist the encrypted giftwrap so a reload can re-decrypt
             // without waiting for the relay to re-deliver it.
             // Only the encrypted blob is stored — no plaintext at rest.
@@ -371,16 +429,14 @@ export function DMProvider({ children }: { children: ReactNode }) {
 
     startSubscription();
 
-    const seenIds = seenRumorIds.current;
+    // Only drop the subscription here — accumulated state (conversations, seen
+    // ids) is reset at the top of the effect on an account switch, and on logout
+    // by the `!user` branch. This lets a refresh-driven re-observe keep state.
     return () => {
       subRef.current?.unobserve();
       subRef.current = null;
-      setConversations(new Map());
-      seenIds.clear();
-      decryptionRejected.current = false;
-      clearGiftWrapCache();
     };
-  }, [user, addMessage]);
+  }, [user, addMessage, refresh]);
 
   const sendMessage = useCallback(
     async (
@@ -440,19 +496,22 @@ export function DMProvider({ children }: { children: ReactNode }) {
   );
 
   const markAllAsRead = useCallback(() => {
+    if (!user) return;
     const now = Math.floor(Date.now() / 1000);
+    // Persist a single account-wide watermark — this is what makes mark-all stick
+    // across reloads even for conversations that decrypt/arrive later.
+    setMarkAllTs(user.pubkey, now);
 
     setConversations((prev) => {
       const next = new Map(prev);
       Array.from(next.entries()).forEach(([id, conv]) => {
         if (conv.unreadCount > 0) {
-          setLastSeen(id, now);
           next.set(id, { ...conv, unreadCount: 0 });
         }
       });
       return next;
     });
-  }, []);
+  }, [user]);
 
   const unreadTotal = Array.from(conversations.values()).reduce(
     (sum, c) => sum + c.unreadCount,

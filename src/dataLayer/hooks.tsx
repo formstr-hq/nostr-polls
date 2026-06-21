@@ -23,6 +23,16 @@ import {
   type Scope,
   type ScopeUser,
 } from "@formstr/local-relay";
+import { getRelayRefresh, subscribeRelayRefresh } from "./relayRefresh";
+
+/**
+ * Reactive read of the relay refresh signal — bumps when the worker can newly
+ * serve cached data (post-hydration / after a restart). Feeds use it to
+ * re-declare interests so a populated store actually paints. See `relayRefresh`.
+ */
+export function useRelayRefresh(): number {
+  return React.useSyncExternalStore(subscribeRelayRefresh, getRelayRefresh);
+}
 
 const PAGE = 100; // window grows by this many events per "load older"
 
@@ -86,6 +96,9 @@ export interface UseEventsResult {
 export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): UseEventsResult {
   const { dataLayer, user } = useDataLayerContext();
   const feedRootsOnly = !includeNonRoots;
+  // Re-declare the interest when the worker can newly serve cached data, so a
+  // feed that EOSE'd before hydration repaints from the now-populated store.
+  const refresh = useRelayRefresh();
 
   const [items, setItems] = React.useState<Event[]>([]);
   const [newCount, setNewCount] = React.useState(0);
@@ -176,7 +189,7 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
       handleRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataLayer, kindsKey, scopeKey, follows, wot, feedRootsOnly]);
+  }, [dataLayer, kindsKey, scopeKey, follows, wot, feedRootsOnly, refresh]);
 
   const showNew = React.useCallback(() => {
     pendingRef.current = new Map(); // events are already in allRef; just stop withholding
@@ -202,6 +215,9 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
 export function useEvent(id?: string): Event | undefined {
   const { dataLayer } = useDataLayerContext();
   const [event, setEvent] = React.useState<Event | undefined>(undefined);
+  // A cache-only read that resolved (or missed) before hydration won't see the
+  // hydrated event (bulkLoad suppresses emits); re-run on refresh to catch it.
+  const refresh = useRelayRefresh();
 
   React.useEffect(() => {
     if (!id) {
@@ -221,7 +237,7 @@ export function useEvent(id?: string): Event | undefined {
       alive = false;
       handle.unobserve();
     };
-  }, [id, dataLayer]);
+  }, [id, dataLayer, refresh]);
 
   return event;
 }

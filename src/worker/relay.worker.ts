@@ -18,7 +18,13 @@ const service = new RelayService({
   storage: new IndexedDBStorage("shared"),
 });
 
-// Hydrate from IndexedDB, then begin write-through + pruning.
-void service.start();
+// Hydrate from IndexedDB, then begin write-through + pruning. The worker emits
+// `ready` from its constructor (before hydration), and hydration's bulkLoad
+// suppresses change emits — so interests declared during boot can EOSE on an
+// empty store and miss the hydrated cache. We post a `hydrated` frame once the
+// store is loaded so the main thread can re-declare its interests against it.
+void service.start().then(() => {
+  channel.post({ kind: "hydrated" });
+});
 
 export {};

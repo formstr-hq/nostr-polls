@@ -1,3 +1,9 @@
+# 1.9.2
+
+- Fixed the Home and Notes feeds (and any "Following"/"Network" view) sometimes showing nothing on launch or resume — your follow list is now cached and available instantly, independent of the sync engine.
+- Notes shared inside DMs now load reliably, fetching the referenced note from relay hints even when you don't follow the author.
+- New Network settings: see your relay connections, cache size, and sync state at a glance, with controls to reconnect or clear the local cache.
+
 # 1.9.0
 
 - New on-device relay engine: a built-in local relay now stores everything you've seen and answers the app from local cache first, so feeds, profiles, and threads load instantly — even offline — and stay in sync with the network in the background.

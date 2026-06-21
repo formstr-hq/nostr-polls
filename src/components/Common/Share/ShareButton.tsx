@@ -6,6 +6,7 @@ import { useUserContext } from "../../../hooks/useUserContext";
 import { useNotification } from "../../../contexts/notification-context";
 import { useDMContext } from "../../../hooks/useDMContext";
 import ContactSearchDialog from "../../Messages/ContactSearchDialog";
+import { authorWriteRelayHints } from "../../../nostr/relayHints";
 
 interface ShareButtonProps {
   event: Event;
@@ -26,11 +27,16 @@ const ShareButton: React.FC<ShareButtonProps> = ({ event }) => {
   };
 
   const handleSelect = async (pubkeys: string[], message?: string) => {
-    // Build a nostr: URI for the event so TextWithImages will render it
+    // Build a nostr: URI for the event so TextWithImages will render it. Include
+    // the author's write-relay hints so the recipient — who likely doesn't follow
+    // the author or subscribe to those relays — can resolve the note via the
+    // worker's gossip pool (see PrepareNote). Empty when uncached; still valid.
+    const relays = await authorWriteRelayHints(event.pubkey);
     const neventId = nip19.neventEncode({
       id: event.id,
       kind: event.kind,
       author: event.pubkey,
+      relays,
     });
     const neventUri = `nostr:${neventId}`;
     const content = message ? `${message}\n\n${neventUri}` : neventUri;

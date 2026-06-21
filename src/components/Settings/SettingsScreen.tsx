@@ -16,6 +16,7 @@ import PaletteIcon from "@mui/icons-material/Palette";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import PermMediaIcon from "@mui/icons-material/PermMedia";
 import ShieldIcon from "@mui/icons-material/Shield";
+import LanIcon from "@mui/icons-material/Lan";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AISettings } from "../Header/AISettings";
@@ -23,13 +24,15 @@ import { BlossomSettings } from "../Header/BlossomSettings";
 import { ModerationSettings } from "../Header/ModerationSettings";
 import { AppearanceSettings } from "../Header/AppearanceSettings";
 import { GeneralSettings } from "../Header/GeneralSettings";
+import { NetworkSettings } from "../Header/NetworkSettings";
 
 type SectionId =
   | "general"
   | "appearance"
   | "ai"
   | "media"
-  | "moderation";
+  | "moderation"
+  | "network";
 
 interface SectionDef {
   id: SectionId;
@@ -74,6 +77,13 @@ const SECTIONS: SectionDef[] = [
     description: "Reports, mutes, and content filters",
     icon: <ShieldIcon />,
     render: () => <ModerationSettings />,
+  },
+  {
+    id: "network",
+    label: "Network",
+    description: "Relay connections, cache, and sync diagnostics",
+    icon: <LanIcon />,
+    render: () => <NetworkSettings />,
   },
 ];
 
