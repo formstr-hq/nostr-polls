@@ -1,3 +1,13 @@
+# 1.9.5
+
+- Direct messages now arrive on time on Android: gift-wrapped DMs (which carry a randomized, sometimes back-dated timestamp) were being skipped by the background notifier, so messages could show up days late or not at all — they're now caught and notified as they land.
+- DMs deliver and sync more reliably: your message inbox relays are now used specifically for messages, separate from your feed relays, so conversations stay in real time without dragging your whole feed onto a small inbox relay.
+- Messages and posts that can't reach a relay are no longer lost — they're queued and re-sent automatically when the connection comes back. Network settings now show pending/failed deliveries (with a Retry button) and an online indicator.
+- Tap a reaction again to remove it: react with an emoji and tapping it once more takes it back (the picker also highlights the reactions you've already added so you can clear them).
+- Poll response notifications now tell you what the person chose, not just that they responded.
+- Fixed not being able to tap anything above the floating create button.
+- Fixed the Interests / topic feeds freezing the app while they loaded.
+
 # 1.9.4
 
 - Trust scores: profiles now show a "Trust score" — how many of the people you follow also follow them — surfaced as a network chip, so you can gauge a stranger at a glance.
