@@ -51,6 +51,37 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
 
   const { getScrollTop } = useFeedScroll();
 
+  /* ------------------ streaming update coalescing ------------------ */
+  // During initial load a topic can stream hundreds of notes plus hundreds of
+  // moderation/deletion events. Committing a setState per event re-runs
+  // resolvedNotes and re-reconciles the virtualized feed hundreds of times,
+  // freezing the app. Instead we buffer note inserts and a "moderation dirty"
+  // flag in refs and flush them at most once per frame-ish window.
+  const noteBufferRef = useRef<Map<string, TopicNote>>(new Map());
+  const moderationDirtyRef = useRef(false);
+  const flushTimer = useRef<number | null>(null);
+
+  const scheduleFlush = useCallback(() => {
+    if (flushTimer.current !== null) return;
+    flushTimer.current = window.setTimeout(() => {
+      flushTimer.current = null;
+      if (noteBufferRef.current.size > 0) {
+        const buffered = noteBufferRef.current;
+        noteBufferRef.current = new Map();
+        setNotes((prev) => {
+          const next = new Map(prev);
+          buffered.forEach((v, k) => next.set(k, v));
+          return next;
+        });
+      }
+      if (moderationDirtyRef.current) {
+        moderationDirtyRef.current = false;
+        // resolvedNotes / moderatorsByTopic recompute off moderationVersion.
+        setModerationVersion((v) => v + 1);
+      }
+    }, 150);
+  }, []);
+
   /* ------------------ moderation processing ------------------ */
 
   const processModerationEvent = (event: Event) => {
@@ -96,9 +127,9 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
       }
     }
 
-    // force rerender
-    setNotes((prev) => new Map(prev));
-    setModerationVersion((v) => v + 1);
+    // Coalesce the rerender; resolvedNotes recomputes off moderationVersion.
+    moderationDirtyRef.current = true;
+    scheduleFlush();
   };
 
   const processDeletionEvent = (event: Event) => {
@@ -131,8 +162,8 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     targetIds.forEach((id) => deletedModerationIds.current.add(id));
 
     if (changed) {
-      setNotes((prev) => new Map(prev));
-      setModerationVersion((v) => v + 1);
+      moderationDirtyRef.current = true;
+      scheduleFlush();
     }
   };
 
@@ -262,11 +293,9 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
               pendingNotesRef.current.set(event.id, { event, topics });
               setPendingCount((c) => c + 1);
             } else {
-              setNotes((prev) => {
-                const next = new Map(prev);
-                next.set(event.id, { event, topics });
-                return next;
-              });
+              // Buffer and flush in batches to avoid a setState-per-note storm.
+              noteBufferRef.current.set(event.id, { event, topics });
+              scheduleFlush();
             }
           }
         },
@@ -283,6 +312,12 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     return () => {
       sub.unobserve();
       clearTimeout(timeout);
+      if (flushTimer.current !== null) {
+        clearTimeout(flushTimer.current);
+        flushTimer.current = null;
+      }
+      noteBufferRef.current.clear();
+      moderationDirtyRef.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relays, myTopics]);

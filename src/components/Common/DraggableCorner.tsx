@@ -25,6 +25,11 @@ interface DraggableCornerProps {
    * CSS selector (within this component) for the element that initiates a drag.
    * Without it, the whole wrapper is draggable — and wrappers like SpeedDial
    * reserve large empty padding areas that then hijack scroll gestures.
+   *
+   * Note: the wrapper Box is `pointer-events: none` so its (often oversized)
+   * bounding box does not block touches over the content beneath it. Interactive
+   * children must therefore assert `pointer-events: auto` themselves — MUI's
+   * SpeedDial fab/actions already do; a bare element (e.g. Fab) must set it.
    */
   handle?: string;
   children: (corner: Corner) => React.ReactNode;
@@ -104,6 +109,12 @@ export const DraggableCorner: React.FC<DraggableCornerProps> = ({
     position: "fixed",
     zIndex,
     touchAction: "none",
+    // The wrapper's bounding box spans the tall column a SpeedDial reserves for
+    // its (closed) actions above the fab. Left as `auto`, that empty column
+    // would intercept every touch over it and block the content underneath.
+    // The fab/open-actions set their own `pointer-events: auto`, and their
+    // events still bubble up to the wake/drag handlers on this Box.
+    pointerEvents: "none",
     opacity: idle && !disableIdle ? IDLE_OPACITY : 1,
     transition: `${transforms}, opacity ${FADE_MS}ms ease`,
   };

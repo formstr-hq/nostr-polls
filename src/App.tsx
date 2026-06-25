@@ -175,7 +175,9 @@ function AppContent() {
               zIndex={1200}
             >
               {() => (
-                <Fab size="small" onClick={toggleSidebar}>
+                // DraggableCorner's wrapper is pointer-events:none; interactive
+                // children must re-assert auto (SpeedDial's fab does this itself).
+                <Fab size="small" onClick={toggleSidebar} sx={{ pointerEvents: "auto" }}>
                   <MenuOpenIcon fontSize="small" />
                 </Fab>
               )}

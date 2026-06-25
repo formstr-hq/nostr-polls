@@ -148,18 +148,42 @@ const NotificationsPage: React.FC = () => {
     return `post ${postId.slice(0, 8)}\u2026`;
   };
 
+  // Map a poll response (kind 1018) to the human-readable labels it selected,
+  // resolving each `["response", optionId]` tag against the poll's
+  // `["option", optionId, label]` tags. Falls back to the raw id if the poll
+  // (or that option) isn't available yet.
+  const getPollAnswer = (ev: Event, pollId: string | undefined): string => {
+    const selected = ev.tags
+      .filter((t) => t[0] === "response")
+      .map((t) => t[1]);
+    if (selected.length === 0) return "";
+    const poll = pollId ? pollMap.get(pollId) : undefined;
+    const labels = selected.map((id) => {
+      const opt = poll?.tags.find((t) => t[0] === "option" && t[1] === id);
+      return opt?.[2] || id.slice(0, 8);
+    });
+    return labels.join(", ");
+  };
+
   const getNotifText = (ev: Event): { title: string; body: string } => {
     const parsed = parseNotification(ev);
     const name = getName(parsed.fromPubkey);
 
     switch (parsed.type) {
-      case "poll-response":
+      case "poll-response": {
+        const answer = getPollAnswer(ev, parsed.pollId);
+        const question = pollMap.get(parsed.pollId!)?.content;
+        const body = [
+          answer ? `Chose: ${answer}` : "",
+          question ? `"${question.slice(0, 80)}"` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
         return {
           title: `${name} responded to your poll`,
-          body: pollMap.get(parsed.pollId!)?.content
-            ? `"${pollMap.get(parsed.pollId!)?.content.slice(0, 80)}"`
-            : "",
+          body,
         };
+      }
       case "comment": {
         const commentTitle =
           ev.kind === 1068 ? `${name} mentioned you in a poll` :
