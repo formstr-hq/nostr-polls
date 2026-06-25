@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,11 +44,18 @@ public class NotificationWorker extends Worker {
     private static final String KEY_PROFILES  = "worker_profiles";
     private static final String KEY_LAST      = "worker_last_check";
     private static final String KEY_PENDING   = "notif_pending_ids";
+    private static final String KEY_SEEN_DMS  = "worker_seen_dm_ids";
     private static final String EVENT_KEY_PREFIX = "notif_event_";
     private static final int    NOTIF_DMS     = 1002;
     private static final long   TIMEOUT_SEC   = 15;
     private static final int    MAX_PER_RUN   = 20;
     private static final int    MAX_RELAYS    = 6;
+    // NIP-59 randomizes a gift wrap's created_at up to two days into the past, so
+    // a freshly received DM can carry an old timestamp. Widen the 1059 `since`
+    // window by this grace so backdated wraps aren't dropped by the relay filter.
+    private static final long   GIFTWRAP_BACKDATE_GRACE_SEC = 2L * 24 * 60 * 60;
+    // Cap on the persisted set of already-notified gift-wrap ids (cross-run DM dedup).
+    private static final int    MAX_SEEN_DMS  = 300;
 
     public NotificationWorker(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
@@ -114,22 +122,36 @@ public class NotificationWorker extends Worker {
                 .readTimeout(TIMEOUT_SEC + 2, TimeUnit.SECONDS)
                 .build();
 
-        // Kinds: 1 (notes tagging me), 7 (reactions), 9735 (zaps), 1018 (poll responses), 1059 (DM gift wraps)
+        // Two filters in one REQ (relays OR them):
+        //  - notifications: kinds 1 (mentions), 7 (reactions), 9735 (zaps),
+        //    1018 (poll responses) — a normal `since: lastCheck`.
+        //  - DM gift wraps: kind 1059 — `since` widened by the NIP-59 backdating
+        //    grace so backdated wraps aren't dropped. Cross-run dedup via the
+        //    persisted seen-id set keeps the wider window from re-notifying.
         String reqMsg;
         try {
-            JSONObject filter = new JSONObject();
-            JSONArray kinds = new JSONArray();
-            kinds.put(1); kinds.put(7); kinds.put(9735); kinds.put(1018); kinds.put(1059);
-            filter.put("kinds", kinds);
             JSONArray pArr = new JSONArray();
             for (String pk : myPubkeys) pArr.put(pk);
-            filter.put("#p", pArr);
-            filter.put("since", lastCheck);
+
+            JSONObject notifFilter = new JSONObject();
+            JSONArray notifKinds = new JSONArray();
+            notifKinds.put(1); notifKinds.put(7); notifKinds.put(9735); notifKinds.put(1018);
+            notifFilter.put("kinds", notifKinds);
+            notifFilter.put("#p", pArr);
+            notifFilter.put("since", lastCheck);
+
+            JSONObject dmFilter = new JSONObject();
+            JSONArray dmKinds = new JSONArray();
+            dmKinds.put(1059);
+            dmFilter.put("kinds", dmKinds);
+            dmFilter.put("#p", pArr);
+            dmFilter.put("since", Math.max(0, lastCheck - GIFTWRAP_BACKDATE_GRACE_SEC));
 
             JSONArray req = new JSONArray();
             req.put("REQ");
             req.put("notif-check");
-            req.put(filter);
+            req.put(notifFilter);
+            req.put(dmFilter);
             reqMsg = req.toString();
         } catch (Exception e) {
             return Result.failure();
@@ -366,15 +388,32 @@ public class NotificationWorker extends Worker {
         }
 
         // DM gift wraps stay as a summary — we can't decrypt them in the worker.
-        if (!dms.isEmpty() && nm != null) {
-            int count = dms.size();
+        // Because the 1059 `since` window is widened for backdating, the same wrap
+        // can reappear across runs; dedup against the persisted seen-id set so we
+        // only notify (and only count) genuinely new DMs. Insertion order is kept
+        // so the set can be trimmed to its most-recent entries.
+        LinkedHashSet<String> seenDmIds = new LinkedHashSet<>();
+        JSONArray seenDmArr = parseJsonArray(prefs.getString(KEY_SEEN_DMS, "[]"));
+        for (int i = 0; i < seenDmArr.length(); i++) {
+            String id = seenDmArr.optString(i, null);
+            if (id != null && !id.isEmpty()) seenDmIds.add(id);
+        }
+
+        int newDmCount = 0;
+        for (JSONObject dm : dms) {
+            String id = dm.optString("id", null);
+            if (id == null || id.isEmpty()) continue;
+            if (seenDmIds.add(id)) newDmCount++; // add() returns true only if newly seen
+        }
+
+        if (newDmCount > 0 && nm != null) {
             Intent dmIntent = new Intent(Intent.ACTION_VIEW,
                     Uri.parse("nostr-polls://app/messages"));
             dmIntent.setClass(getApplicationContext(), MainActivity.class);
             dmIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             PendingIntent dmPi = PendingIntent.getActivity(
                     getApplicationContext(), 1, dmIntent, piFlags);
-            String body = count == 1 ? "You have a new message" : "You have " + count + " new messages";
+            String body = newDmCount == 1 ? "You have a new message" : "You have " + newDmCount + " new messages";
             nm.notify(NOTIF_DMS, new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
                     .setSmallIcon(R.drawable.ic_notification)
                     .setContentTitle("Pollerama")
@@ -384,6 +423,16 @@ public class NotificationWorker extends Worker {
                     .setAutoCancel(true)
                     .build());
         }
+
+        // Persist the seen-DM ids, trimmed to the most recent MAX_SEEN_DMS.
+        JSONArray seenOut = new JSONArray();
+        int skip = Math.max(0, seenDmIds.size() - MAX_SEEN_DMS);
+        int seenIdx = 0;
+        for (String id : seenDmIds) {
+            if (seenIdx++ < skip) continue;
+            seenOut.put(id);
+        }
+        editor.putString(KEY_SEEN_DMS, seenOut.toString());
 
         // Persist the pending-ID index so the JS layer knows which keys to read.
         JSONArray pendingOut = new JSONArray();
