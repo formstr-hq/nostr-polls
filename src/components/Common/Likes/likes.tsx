@@ -39,7 +39,7 @@ const RenderEmoji: React.FC<{ content: string; tags?: string[][] }> = ({ content
 };
 
 const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
-  const { likesMap, fetchLikesThrottled, addEventToMap } = useAppContext();
+  const { likesMap, fetchLikesThrottled, addEventToMap, removeEventFromMap } = useAppContext();
   const { user, requestLogin } = useUserContext();
   const { relays } = useRelays();
   const [showPicker, setShowPicker] = useState(false);
@@ -71,14 +71,46 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     setShowPicker(true);
   };
 
-  const userReactionEvent = () => {
-    if (!user) return null;
-    return likesMap?.get(pollEvent.id)?.find((r) => r.pubkey === user.pubkey) || null;
+  // All of the current user's own reactions on this note (a user can stack more
+  // than one emoji). Used to highlight + toggle them off in the picker.
+  const userReactions = user
+    ? reactions.filter((r) => r.pubkey === user.pubkey)
+    : [];
+
+  const userReactionEvent = () => userReactions[0] || null;
+
+  // Remove a reaction by publishing a NIP-09 deletion request (kind 5) for it,
+  // then optimistically dropping it from the local view.
+  const removeReaction = async (reactionEvent: Event) => {
+    if (!user) {
+      requestLogin();
+      return;
+    }
+    const del: EventTemplate = {
+      kind: 5,
+      content: "",
+      tags: [
+        ["e", reactionEvent.id],
+        ["k", "7"],
+      ],
+      created_at: Math.floor(Date.now() / 1000),
+    };
+    const signed = await signEvent(del, user.privateKey);
+    if (signed) dataLayer.publishEvent(signed);
+    removeEventFromMap(reactionEvent.id);
   };
 
   const addReaction = async (emoji: string) => {
     if (!user) {
       requestLogin();
+      return;
+    }
+
+    // Tapping an emoji you've already reacted with toggles it off.
+    const existing = userReactions.find((r) => r.content === emoji);
+    if (existing) {
+      await removeReaction(existing);
+      setShowPicker(false);
       return;
     }
 
@@ -223,6 +255,41 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
             touchAction: "pan-y",
           }}
         >
+          {/* Your current reactions: highlighted chips you can tap to remove. */}
+          {userReactions.length > 0 && (
+            <Box sx={{ mb: 1.5 }}>
+              <Box sx={{ fontSize: 12, color: "text.secondary", mb: 0.5 }}>
+                Your reactions · tap to remove
+              </Box>
+              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                {userReactions.map((r) => (
+                  <Box
+                    key={r.id}
+                    role="button"
+                    aria-label={`Remove reaction ${r.content}`}
+                    onClick={() => removeReaction(r)}
+                    sx={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      fontSize: 18,
+                      lineHeight: 1,
+                      px: 1,
+                      py: 0.5,
+                      borderRadius: 2,
+                      cursor: "pointer",
+                      border: 2,
+                      borderColor: "primary.main",
+                      bgcolor: "action.selected",
+                      "&:hover": { bgcolor: "action.hover" },
+                    }}
+                  >
+                    <RenderEmoji content={r.content} tags={r.tags} />
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )}
+
           <EmojiPicker
             // Device-font emojis — no CDN sprite fetch, instant open, offline-safe.
             emojiStyle={EmojiStyle.NATIVE}

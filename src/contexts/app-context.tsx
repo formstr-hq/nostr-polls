@@ -19,6 +19,7 @@ type AppContextInterface = {
   getReposts: (eventId: string) => Event[];
   addEventToProfiles: (event: Event) => void;
   addEventToMap: (event: Event) => void;
+  removeEventFromMap: (eventId: string) => void;
   fetchUserProfileThrottled: (pubkey: string) => void;
   fetchCommentsThrottled: (pollEventId: string) => void;
   fetchEditsThrottled: (eventId: string) => void;
@@ -60,6 +61,10 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   // inserts. (The worker store is the network source of truth; this is what the
   // maps below are built from.)
   const eventsRef = useRef<Map<string, Event>>(new Map());
+  // Locally-deleted event ids (NIP-09). Filtered out of every derived view so an
+  // optimistic removal (e.g. undoing a reaction) sticks even if the worker
+  // re-streams the same event before the delete propagates.
+  const deletedEventIds = useRef<Set<string>>(new Set());
 
   // Debounce timers — coalesce rapid per-event bumps into a single re-render
   const profilesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -79,7 +84,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   const queryStore = useCallback((kinds: number[]): Event[] => {
     const out: Event[] = [];
     eventsRef.current.forEach((e) => {
-      if (kinds.includes(e.kind)) out.push(e);
+      if (kinds.includes(e.kind) && !deletedEventIds.current.has(e.id)) out.push(e);
     });
     return out;
   }, []);
@@ -201,6 +206,15 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     bumpDataVersion();
   }, [bumpDataVersion]);
 
+  // Optimistically drop an event from the local view (e.g. after publishing a
+  // NIP-09 delete for it). Tracked in deletedEventIds so a re-stream can't
+  // resurrect it within the session.
+  const removeEventFromMap = useCallback((eventId: string) => {
+    deletedEventIds.current.add(eventId);
+    eventsRef.current.delete(eventId);
+    bumpDataVersion();
+  }, [bumpDataVersion]);
+
   // --- derived maps (assembled from the app-local view) ---------------------
   const profiles = useMemo(() => {
     const profileMap = new Map<string, Profile>();
@@ -309,6 +323,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
         getReposts,
         addEventToProfiles,
         addEventToMap,
+        removeEventFromMap,
         fetchUserProfileThrottled,
         fetchCommentsThrottled,
         fetchEditsThrottled,
