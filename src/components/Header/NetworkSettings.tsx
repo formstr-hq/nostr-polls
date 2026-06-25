@@ -274,9 +274,16 @@ export const NetworkSettings: React.FC = () => {
             color={diag.paused ? "warning" : "success"}
             variant={diag.paused ? "filled" : "outlined"}
           />
+          <Chip
+            size="small"
+            label={diag.online ? "Online" : "Offline"}
+            color={diag.online ? "success" : "default"}
+            variant={diag.online ? "outlined" : "filled"}
+          />
           <Chip size="small" variant="outlined" label={`${diag.connections.total} connected`} />
         </Box>
         <Stat label="User relays" value={diag.connections.user} />
+        <Stat label="DM inbox relays (NIP-17)" value={diag.dmRelays.length} />
         <Stat label="Outbox relays" value={diag.connections.outbox} />
         <Stat label="Gossip relays (discovered)" value={diag.connections.gossip} />
         {diag.paused && (
@@ -340,6 +347,46 @@ export const NetworkSettings: React.FC = () => {
           <Typography variant="caption" color="warning.main" sx={{ display: "block", mt: 0.5 }}>
             No interests declared while the app is open — the worker may have
             restarted. Reopen the screen or reconnect to re-declare.
+          </Typography>
+        )}
+      </Box>
+
+      <Divider />
+
+      {/* Delivery (durable outbox) — events still being re-delivered to relays
+          that haven't accepted them. Transient timeouts auto-retry on reconnect;
+          `failed` records exhausted their retries and need a manual nudge. */}
+      <Box>
+        <SectionHeader>Delivery</SectionHeader>
+        <Stat label="Awaiting delivery (auto-retry)" value={diag.delivery.pendingRelays} />
+        <Stat label="Failed (needs retry)" value={diag.delivery.failed} />
+        {diag.delivery.failed > 0 ? (
+          <>
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<SyncIcon />}
+              onClick={() => {
+                dataLayer.retryDelivery();
+                setTimeout(refresh, 600);
+              }}
+              sx={{ mt: 1 }}
+            >
+              Retry failed
+            </Button>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+              Some publishes couldn't reach a relay after several tries. Retry re-arms
+              them; rejected events (spam/policy) are never retried.
+            </Typography>
+          </>
+        ) : diag.delivery.pendingRelays > 0 ? (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+            Re-delivering automatically as relays reconnect — no action needed.
+          </Typography>
+        ) : (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+            Everything you've published has been delivered.
           </Typography>
         )}
       </Box>

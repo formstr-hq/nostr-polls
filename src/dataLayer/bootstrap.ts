@@ -72,14 +72,18 @@ export function bootstrapDataLayer(): DataLayer {
   // Outbox routing per author (kind-10002) happens inside the worker on top of this.
   client.setUserRelays(defaultRelays);
 
-  // Feed the user's OWN relays into that set so DMs are received in REAL TIME.
-  // Author-less interests only stream live from the user-relay set, so if the
-  // worker only knows defaultRelays a gift wrap delivered to the user's actual
-  // inbox relays isn't seen until a reconnect re-query (the "DMs aren't live"
-  // symptom; feeds are unaffected because they're outbox-routed to the author).
-  // A standing syncing observe fetches the user's NIP-65 read relays (kind 10002)
-  // and NIP-17 DM inbox relays (kind 10050) and folds them in — each list can only
-  // ever add relays above the default floor.
+  // Feed the user's OWN relays into the worker so DMs are received in REAL TIME.
+  // Two ROUTING-POLICY inputs, kept separate (local-relay >= 0.4.0):
+  //   - setUserRelays  ← NIP-65 read relays (kind 10002), the floor for feeds and
+  //     every author-less scope EXCEPT DMs.
+  //   - setDmRelays    ← NIP-17 DM inbox relays (kind 10050). The kind-1059 stream
+  //     reads from DM relays UNION user relays; other author-less scopes (the feed
+  //     firehose, {ids} fetches) never touch the DM inbox relays. Folding 10050
+  //     into setUserRelays (the pre-0.4.0 approach) firehosed the user's whole
+  //     feed at their often access-restricted DM relay — exactly what this avoids.
+  // A standing syncing observe fetches both lists; each is reapplied as it arrives.
+  // A real change reopens the affected standing subs on the new relays; both lists
+  // can only ever ADD relays above the default floor.
   let userRelaysHandle: { unobserve: () => void } | null = null;
   const applyUserRelays = () => {
     userRelaysHandle?.unobserve();
@@ -87,9 +91,11 @@ export function bootstrapDataLayer(): DataLayer {
     const pubkey = signerManager.getUser()?.pubkey;
     if (!pubkey) {
       client.setUserRelays(defaultRelays);
+      client.setDmRelays([]);
       return;
     }
-    const relays = new Set(defaultRelays);
+    const readRelays = new Set(defaultRelays);
+    const dmRelays = new Set<string>();
     userRelaysHandle = client.observe(
       [{ kinds: [10002, 10050], authors: [pubkey] }],
       {
@@ -97,15 +103,16 @@ export function bootstrapDataLayer(): DataLayer {
           if (event.kind === 10002) {
             // NIP-65 `r` tags: unmarked = read+write, "read" = inbox.
             for (const t of event.tags) {
-              if (t[0] === "r" && t[1] && (!t[2] || t[2] === "read")) relays.add(t[1]);
+              if (t[0] === "r" && t[1] && (!t[2] || t[2] === "read")) readRelays.add(t[1]);
             }
+            client.setUserRelays(Array.from(readRelays));
           } else if (event.kind === 10050) {
-            // NIP-17 DM inbox relays.
+            // NIP-17 DM inbox relays → dedicated kind-1059 routing.
             for (const t of event.tags) {
-              if (t[0] === "relay" && t[1]) relays.add(t[1]);
+              if (t[0] === "relay" && t[1]) dmRelays.add(t[1]);
             }
+            client.setDmRelays(Array.from(dmRelays));
           }
-          client.setUserRelays(Array.from(relays));
         },
       }
     );
