@@ -89,6 +89,7 @@ public class MusicLibraryPlugin extends Plugin {
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.DURATION,
         };
         String selection = MediaStore.Audio.Media.IS_MUSIC + " != 0";
@@ -100,10 +101,17 @@ public class MusicLibraryPlugin extends Plugin {
                 int titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE);
                 int artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST);
                 int albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM);
+                int albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID);
                 int durCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION);
+
+                // The albumart provider exposes embedded cover art as a content://
+                // URI keyed by album id; not every album has one, so the web layer
+                // falls back to a placeholder when it fails to load.
+                Uri albumArtBase = Uri.parse("content://media/external/audio/albumart");
 
                 while (cursor.moveToNext()) {
                     long id = cursor.getLong(idCol);
+                    long albumId = cursor.getLong(albumIdCol);
                     Uri contentUri = ContentUris.withAppendedId(collection, id);
                     JSObject t = new JSObject();
                     t.put("id", String.valueOf(id));
@@ -112,6 +120,9 @@ public class MusicLibraryPlugin extends Plugin {
                     t.put("album", cursor.getString(albumCol));
                     t.put("durationMs", cursor.getLong(durCol));
                     t.put("uri", contentUri.toString());
+                    if (albumId > 0) {
+                        t.put("artworkUri", ContentUris.withAppendedId(albumArtBase, albumId).toString());
+                    }
                     tracks.put(t);
                 }
             }

@@ -105,6 +105,16 @@ public class PlaybackService extends MediaSessionService {
                 .setSessionActivity(sessionActivity)
                 .build();
 
+        // Register the session with the service ourselves. Media3 only attaches its
+        // notification/foreground manager to a session when onGetSession fires, and
+        // that only happens when a MediaController BINDS — which never occurs here,
+        // since we drive the player directly via the static instance. Without this,
+        // Media3 never posts the media notification nor calls startForeground(), so
+        // the startForegroundService() launch misses its 5s obligation and the OS
+        // kills us (ForegroundServiceDidNotStartInTimeException). The controller
+        // connect path checks containment, so this is safe if one ever does bind.
+        addSession(mediaSession);
+
         // Apply any queue the plugin staged before the service finished starting.
         MusicPlaybackPlugin.flushPending();
     }

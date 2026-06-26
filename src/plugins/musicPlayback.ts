@@ -27,6 +27,12 @@ export interface NativePosition {
 }
 
 export interface MusicPlaybackPlugin {
+  /**
+   * Ensure POST_NOTIFICATIONS is granted (Android 13+). Required before playback:
+   * without it the media notification can't post and the foreground service is
+   * killed by the OS. No-op (resolves granted) on older Android.
+   */
+  ensureNotificationPermission(): Promise<{ granted: boolean }>;
   /** Replace the queue and start playing at startIndex. Boots the service. */
   setQueue(opts: { tracks: NativeQueueTrack[]; startIndex: number }): Promise<void>;
   play(): Promise<void>;

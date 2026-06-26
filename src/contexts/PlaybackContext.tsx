@@ -136,16 +136,26 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
         setCurrent(tracks[startIndex] ?? null);
         setPosition(0);
         setDuration(0);
-        void MusicPlayback.setQueue({
-          tracks: tracks.map((t) => ({
-            id: t.id,
-            sources: t.sources,
-            title: t.title,
-            artist: t.artist,
-            image: t.image,
-          })),
-          startIndex,
-        });
+        // Secure the notification permission first: Media3 promotes the service
+        // to foreground via its media notification, so without the grant the OS
+        // kills the service shortly after it starts.
+        void (async () => {
+          try {
+            await MusicPlayback.ensureNotificationPermission();
+          } catch {
+            /* proceed regardless; playback still works, just without controls */
+          }
+          await MusicPlayback.setQueue({
+            tracks: tracks.map((t) => ({
+              id: t.id,
+              sources: t.sources,
+              title: t.title,
+              artist: t.artist,
+              image: t.image,
+            })),
+            startIndex,
+          });
+        })();
         return;
       }
       load(startIndex);

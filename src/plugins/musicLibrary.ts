@@ -1,7 +1,9 @@
 import { registerPlugin } from "@capacitor/core";
 
-// A track from the device's MediaStore. `uri` is a content:// URI; convert it with
-// Capacitor.convertFileSrc(uri) before handing it to an <audio> element.
+// A track from the device's MediaStore. `uri` is a content:// URI handed straight
+// to native ExoPlayer (which reads content:// directly — do NOT convertFileSrc it,
+// that yields a localhost URL only the WebView can resolve). `artworkUri` is the
+// album-art content:// URI, which IS shown in the WebView via convertFileSrc.
 export interface NativeTrack {
   id: string;
   title: string;
@@ -9,6 +11,7 @@ export interface NativeTrack {
   album?: string;
   durationMs?: number;
   uri: string;
+  artworkUri?: string;
 }
 
 export interface MusicLibraryPlugin {

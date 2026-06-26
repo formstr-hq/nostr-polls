@@ -34,7 +34,21 @@ interface LocalTrack {
   name: string;
   title: string;
   artist?: string;
+  album?: string;
+  durationMs?: number;
+  // Display-only album-art URL (native: convertFileSrc'd content URI). Absent on
+  // web and for native tracks with no embedded cover.
+  artworkUrl?: string;
 }
+
+// "3:07" from a millisecond duration; empty when unknown.
+const formatDuration = (ms?: number): string => {
+  if (!ms || ms <= 0) return "";
+  const total = Math.round(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+};
 
 type NativeState = "idle" | "loading" | "needsPermission" | "denied" | "done";
 
@@ -61,6 +75,9 @@ const LocalMusic: React.FC = () => {
 
   const native = isAndroidNative();
   const supportsFsa = fsaSupported();
+  // Album-art URIs that failed to load (no embedded cover / unreadable); fall back
+  // to the music-note placeholder so a missing cover doesn't leave a blank box.
+  const [brokenArt, setBrokenArt] = useState<Set<string>>(new Set());
   // id → FileSystemFileHandle (FSA) for re-reading the referenced file on demand.
   const handlesRef = useRef<Map<string, any>>(new Map());
   // id → playable URL (object URL for web blobs/handles, convertFileSrc for native
@@ -75,15 +92,23 @@ const LocalMusic: React.FC = () => {
       if (!granted) granted = (await MusicLibrary.requestPermission()).granted;
       if (!granted) { setNativeState("denied"); return; }
       const { tracks: nativeTracks } = await MusicLibrary.getTracks();
-      nativeTracks.forEach((t) =>
-        urlCacheRef.current.set(t.id, Capacitor.convertFileSrc(t.uri))
-      );
+      // Hand ExoPlayer the raw content:// URI — it reads those directly. (Do NOT
+      // convertFileSrc here: that yields a localhost URL only the WebView's
+      // Capacitor server can resolve, which the native player can't fetch.)
+      nativeTracks.forEach((t) => urlCacheRef.current.set(t.id, t.uri));
       setTracks(
         nativeTracks.map((t) => ({
           id: t.id,
           name: t.title,
           title: t.title || "Unknown title",
           artist: t.artist && t.artist !== "<unknown>" ? t.artist : undefined,
+          album: t.album && t.album !== "<unknown>" ? t.album : undefined,
+          durationMs: t.durationMs,
+          // Album art DOES go through the WebView (an <img>), so convertFileSrc is
+          // correct here — unlike the audio URI above.
+          artworkUrl: t.artworkUri
+            ? Capacitor.convertFileSrc(t.artworkUri)
+            : undefined,
         }))
       );
       setNativeState("done");
@@ -289,21 +314,69 @@ const LocalMusic: React.FC = () => {
         <List dense disablePadding>
           {tracks.map((t, i) => {
             const isCurrent = current?.id === t.id;
+            const showArt = t.artworkUrl && !brokenArt.has(t.id);
+            const duration = formatDuration(t.durationMs);
+            // Prefer the album under the artist line when both exist.
+            const subtitle = [t.artist, t.album].filter(Boolean).join(" • ");
             return (
-              <ListItemButton key={t.id} selected={isCurrent} onClick={() => onRowClick(i, t.id)} sx={{ borderRadius: 1 }}>
-                <IconButton size="small" edge="start" sx={{ mr: 1 }} aria-label={isCurrent && playing ? "Pause" : "Play"}>
-                  {isCurrent && playing ? <PauseIcon /> : <PlayArrowIcon />}
-                </IconButton>
+              <ListItemButton key={t.id} selected={isCurrent} onClick={() => onRowClick(i, t.id)} sx={{ borderRadius: 1, gap: 1 }}>
+                <Box sx={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}>
+                  {showArt ? (
+                    <Box
+                      component="img"
+                      src={t.artworkUrl}
+                      alt=""
+                      onError={() =>
+                        setBrokenArt((prev) => new Set(prev).add(t.id))
+                      }
+                      sx={{ width: 44, height: 44, borderRadius: 1, objectFit: "cover", display: "block" }}
+                    />
+                  ) : (
+                    <Box
+                      sx={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        bgcolor: "action.hover",
+                      }}
+                    >
+                      <MusicNoteIcon color="disabled" fontSize="small" />
+                    </Box>
+                  )}
+                  {/* Play/pause overlays the cover so each row stays compact. */}
+                  <Box
+                    sx={{
+                      position: "absolute",
+                      inset: 0,
+                      display: isCurrent ? "flex" : "none",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderRadius: 1,
+                      bgcolor: "rgba(0,0,0,0.45)",
+                      color: "common.white",
+                    }}
+                  >
+                    {isCurrent && playing ? <PauseIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+                  </Box>
+                </Box>
                 <Box minWidth={0} flex={1}>
                   <Typography variant="body2" noWrap sx={{ fontWeight: isCurrent ? 600 : 400 }}>
                     {t.title}
                   </Typography>
-                  {t.artist && (
-                    <Typography variant="caption" color="text.secondary" noWrap>
-                      {t.artist}
+                  {subtitle && (
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+                      {subtitle}
                     </Typography>
                   )}
                 </Box>
+                {duration && (
+                  <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                    {duration}
+                  </Typography>
+                )}
                 {!native && (
                   <IconButton size="small" aria-label="Remove" onClick={(e) => { e.stopPropagation(); void removeTrack(t.id); }}>
                     <CloseIcon fontSize="small" />

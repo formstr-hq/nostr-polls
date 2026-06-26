@@ -1,7 +1,9 @@
 package com.formstr.pollerama;
 
+import android.Manifest;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -13,10 +15,13 @@ import androidx.media3.common.util.UnstableApi;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -28,7 +33,12 @@ import java.util.List;
 // itself, just relays commands to PlaybackService (the ExoPlayer host) and
 // forwards player state back to JS as "sync" / "position" events.
 @OptIn(markerClass = UnstableApi.class)
-@CapacitorPlugin(name = "MusicPlayback")
+@CapacitorPlugin(
+        name = "MusicPlayback",
+        permissions = {
+                @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS })
+        }
+)
 public class MusicPlaybackPlugin extends Plugin {
 
     private static MusicPlaybackPlugin instance;
@@ -44,6 +54,29 @@ public class MusicPlaybackPlugin extends Plugin {
     @Override
     public void load() {
         instance = this;
+    }
+
+    // Media3's MediaSessionService posts the playback notification (and promotes
+    // the service to foreground) only if POST_NOTIFICATIONS is granted. On
+    // Android 13+ that's a runtime grant; without it there's no media control and
+    // the foreground-service start obligation is never met → the OS kills us.
+    @PluginMethod
+    public void ensureNotificationPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || getPermissionState("notifications") == PermissionState.GRANTED) {
+            JSObject ret = new JSObject();
+            ret.put("granted", true);
+            call.resolve(ret);
+            return;
+        }
+        requestPermissionForAlias("notifications", call, "notifPermCallback");
+    }
+
+    @PermissionCallback
+    private void notifPermCallback(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("granted", getPermissionState("notifications") == PermissionState.GRANTED);
+        call.resolve(ret);
     }
 
     @PluginMethod
