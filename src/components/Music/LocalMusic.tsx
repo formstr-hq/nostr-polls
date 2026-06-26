@@ -148,9 +148,10 @@ const LocalMusic: React.FC = () => {
   }, [native]);
 
   useEffect(() => {
+    const urlCache = urlCacheRef.current;
     return () => {
       // convertFileSrc URLs aren't blobs; revokeObjectURL is a harmless no-op there.
-      urlCacheRef.current.forEach((u) => URL.revokeObjectURL(u));
+      urlCache.forEach((u) => URL.revokeObjectURL(u));
     };
   }, []);
 
