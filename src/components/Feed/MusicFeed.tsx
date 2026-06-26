@@ -8,10 +8,24 @@ import { useSubNav } from "../../contexts/SubNavContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { MusicCard, KIND_MUSIC } from "../Music/MusicCard";
 import LocalMusic from "../Music/LocalMusic";
+import PlaylistStrip from "../Music/PlaylistStrip";
+import FollowingPlaylists from "../Music/FollowingPlaylists";
+import { eventToPlaybackTrack } from "../Music/musicTrack";
+import { usePlayback, PlaybackTrack } from "../../contexts/PlaybackContext";
 import UnifiedFeed from "./UnifiedFeed";
 
 const STORAGE_KEY = "pollerama:musicSource";
 const BATCH_SIZE = 20;
+
+// The playlist strips that sit at the top of every music tab. Defined at module
+// scope (a stable reference) so Virtuoso's Header slot never remounts it on
+// re-render — which would reset the strips' horizontal scroll and refetch.
+const MusicHeader: React.FC = () => (
+  <>
+    <PlaylistStrip />
+    <FollowingPlaylists />
+  </>
+);
 
 // "discover" = global tracks, "following" = tracks from people you follow,
 // "local" = files on this device (no Nostr). Only the first two hit relays.
@@ -22,6 +36,7 @@ const MusicFeed: React.FC = () => {
   const { user } = useUserContext();
   const { fetchUserProfileThrottled, profiles } = useAppContext();
   const { setItems, clearItems } = useSubNav();
+  const { playQueue } = usePlayback();
 
   const savedSource = (localStorage.getItem(STORAGE_KEY) as Source) || "discover";
   const [source, setSource] = useState<Source>(savedSource);
@@ -125,38 +140,60 @@ const MusicFeed: React.FC = () => {
     }
   }, [loadingMore, loading, initialLoadDone, exhausted, fetchBatch]);
 
+  // Start playback from a feed card with the whole feed loaded as a queue, so the
+  // MiniPlayer's next/prev walk the list instead of playing one track in isolation.
+  const playFromFeed = useCallback(
+    (startEventId: string) => {
+      const queue: PlaybackTrack[] = [];
+      let startAt = 0;
+      for (const ev of tracks) {
+        const pt = eventToPlaybackTrack(ev);
+        if (!pt) continue;
+        if (ev.id === startEventId) startAt = queue.length;
+        queue.push(pt);
+      }
+      if (queue.length) playQueue(queue, startAt);
+    },
+    [tracks, playQueue]
+  );
+
   const renderItem = useCallback((_index: number, track: Event) => (
     <Box sx={{ maxWidth: 700, mx: "auto" }}>
-      <MusicCard event={track} />
+      <MusicCard event={track} onPlay={() => playFromFeed(track.id)} />
     </Box>
-  ), []);
+  ), [playFromFeed]);
 
   const computeKey = useCallback((_index: number, track: Event) => track.id, []);
 
-  if (source === "local") {
-    return <LocalMusic />;
-  }
-
   return (
-    <UnifiedFeed
-      data={tracks}
-      itemContent={renderItem}
-      computeItemKey={computeKey}
-      loading={false}
-      loadingMore={loading || loadingMore}
-      onEndReached={handleEndReached}
-      emptyState={
-        initialLoadDone ? (
-          <Box display="flex" justifyContent="center" px={3} py={8}>
-            <Typography variant="body2" color="text.secondary" textAlign="center">
-              {source === "following"
-                ? "No tracks found from people you follow."
-                : "No tracks found."}
-            </Typography>
-          </Box>
-        ) : undefined
-      }
-    />
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+        {source === "local" ? (
+          <LocalMusic header={<MusicHeader />} />
+        ) : (
+          <UnifiedFeed
+            data={tracks}
+            itemContent={renderItem}
+            computeItemKey={computeKey}
+            ListHeader={MusicHeader}
+            loading={false}
+            loadingMore={loading || loadingMore}
+            onEndReached={handleEndReached}
+            emptyState={
+              initialLoadDone ? (
+                <Box display="flex" justifyContent="center" px={3} py={8}>
+                  <Typography variant="body2" color="text.secondary" textAlign="center">
+                    {source === "following"
+                      ? "No tracks found from people you follow."
+                      : "No tracks found."}
+                  </Typography>
+                </Box>
+              ) : undefined
+            }
+          />
+        )}
+      </Box>
+    </Box>
   );
 };
 

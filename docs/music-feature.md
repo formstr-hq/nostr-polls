@@ -126,14 +126,70 @@ Verify on device, in priority order:
 
 ---
 
-## Phase 2 — playlists (planned)
-- Horizontal playlist-cards strip on `/feeds/music` (🔒 badge for encrypted) +
-  "New playlist" card.
-- Encrypted create/edit (kind 34139, nip44-to-self) reusing the `lists-context.tsx`
-  pattern; unified entries for Nostr (`a` coords) + local (metadata + content-hash).
-- Playlist detail at `/feeds/music/:naddr` with queue playback + auto-advance.
-- Make the Discover feed play as a queue so MiniPlayer next/prev walk the list
-  (today `MusicCard` plays a single track).
+## Phase 2 — playlists — DONE (web; native local-in-playlist deferred)
+
+**Local-first** playlists that mix local files + Nostr tracks, with shuffle and a
+queue view, plus an optional "Make public" that publishes the shareable part to
+Nostr.
+
+### Locked decisions (revised — superseded the encrypted-30078 design)
+The encrypted-Nostr-playlist idea was dropped: a playlist holding local files gains
+nothing from being a (private) relay event, since the files can't leave the device
+anyway. Instead:
+- **Playlists are LOCAL by default** — stored in **IndexedDB** (`playlistStore.ts`,
+  DB `pollerama-playlists`), device-local (not per-account), so they persist, work
+  **logged-out**, and can freely hold local + Nostr track refs. Shown with a
+  **"Local" badge**. No encryption, no relay, no signer to create/edit.
+- **"Make public"** publishes a **standard kind-34139** playlist (Wavlake/Fountain
+  convention — readable by other clients): public `a` coords for the Nostr tracks,
+  `d`=playlist id, `title`/`image`. **Local tracks are dropped** (can't be shared)
+  after a confirm dialog that warns how many. The **local copy is kept** and tagged
+  with the published naddr (badge → "Public"). Requires a signer.
+- **Local-track identity = full-file SHA-256** (`computeFingerprint`,
+  `crypto.subtle.digest`), computed once at add, **sequentially** (peak memory =
+  one file; progress bar on bulk import). Survives renames/re-adds. Used purely as
+  the LOCAL reference — it never goes into a Nostr event now. Local ref shape:
+  `{ type:"local", fingerprint, title, artist?, durationMs?, filename? }`.
+- **Cross-browser**: identical fingerprint matching on Chromium (FSA handle —
+  hashed at pick time, no extra prompt) and Firefox (blob copy). Missing local
+  tracks render greyed-out + skipped by Play-all/shuffle; re-resolve if re-added.
+
+### Files (new)
+- `src/components/Music/playlistStore.ts` — IndexedDB CRUD for `LocalPlaylist`.
+- `src/contexts/playlists-context.tsx` — local CRUD + `publishPlaylist` (34139).
+- `src/components/Music/playlistModel.ts` — `PlaylistTrackRef`, `trackRefKey`,
+  `KIND_PUBLIC_PLAYLIST=34139`, `publicPlaylistNaddr`, `newPlaylistId`.
+- `src/components/Music/musicTrack.ts` — `KIND_MUSIC`, tag helpers, `trackCoord`,
+  `eventToPlaybackTrack` (shared by MusicCard + PlaylistDetail).
+- `src/components/Music/localTrackResolver.ts` — **module-level** url/handle/blob
+  cache + `resolveByFingerprint`/`hasFingerprint`. Lifted from LocalMusic; also
+  fixes the latent unmount-revoke bug (URLs survive navigation while playing).
+- `PlaylistStrip.tsx` (Local/Public badge), `PlaylistDetail.tsx` (Make-public
+  confirm + snackbar), `AddToPlaylistButton.tsx` (no login gate),
+  `NewPlaylistDialog.tsx`.
+
+### Files (modified)
+- `localMusicStore.ts` — `fingerprint` on StoredEntry, `computeFingerprint`,
+  `getEntryByFingerprint`.
+- `LocalMusic.tsx` — fingerprint at add (sequential + progress), uses resolver,
+  per-row "add to playlist", dropped unmount-revoke.
+- `MusicCard.tsx` — shared helper + "add to playlist"; `onPlay` prop so the feed
+  can enqueue the whole list.
+- `PlaybackContext.tsx` — `shuffle`/`toggleShuffle`, exposed `queue`/`currentIndex`,
+  `addToQueue`/`playNext`/`playAt`. Shuffle keeps the current track first; native
+  re-sends `setQueue` (brief restart, accepted — native untested).
+- `MiniPlayer.tsx` — shuffle toggle + "Up next" queue popover.
+- `MusicFeed.tsx` — `PlaylistStrip` on top; Discover/Following play as a queue.
+- `App.tsx` — route `feeds/music/:playlistId` → `PlaylistDetail`; `PlaylistsProvider`.
+
+### Deferred
+- **Native local-in-playlist**: native local tracks are MediaStore content URIs
+  with no readily-hashable bytes, so they carry no fingerprint and don't offer
+  "add to playlist" yet (Nostr tracks in playlists work on native). The path: lazy
+  `fetch(convertFileSrc(uri))` → same `computeFingerprint` + a persisted
+  fingerprint→uri cache for resolution.
+- "My public playlists" view (list your published 34139s) — publish is one-way for now.
+- Drag-reorder UI (the context exposes `reorderTracks`; detail only has remove).
 
 ## Phase 3 — publish a track (planned)
 - 3rd "Music" tab in `EventForm.tsx` → `MusicTemplateForm`: audio upload (Blossom) +

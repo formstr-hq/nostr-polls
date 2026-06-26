@@ -15,17 +15,16 @@ import MusicNoteIcon from "@mui/icons-material/MusicNote";
 import { Event, nip19 } from "nostr-tools";
 import { useAppContext } from "../../hooks/useAppContext";
 import { usePlayback } from "../../contexts/PlaybackContext";
+import {
+  KIND_MUSIC,
+  tagValue,
+  tagValues,
+  trackCoord,
+} from "./musicTrack";
+import AddToPlaylistButton from "./AddToPlaylistButton";
 
-// Music track events are kind 36787 — an addressable Wavlake/"gruuv" track. The
-// event itself carries all the metadata we render (title/artist/cover/audio),
-// so unlike MovieCard there's no community-metadata aggregation here.
-export const KIND_MUSIC = 36787;
-
-const tagValue = (event: Event, name: string): string | undefined =>
-  event.tags.find((t) => t[0] === name)?.[1];
-
-const tagValues = (event: Event, name: string): string[] =>
-  event.tags.filter((t) => t[0] === name && t[1]).map((t) => t[1]);
+// Re-exported for the many call sites that import the music kind from here.
+export { KIND_MUSIC };
 
 const formatTime = (s: number): string => {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -36,9 +35,12 @@ const formatTime = (s: number): string => {
 
 interface MusicCardProps {
   event: Event;
+  // When provided, starting playback defers to the parent so it can enqueue the
+  // whole feed (next/prev walk it). Falls back to playing this track alone.
+  onPlay?: () => void;
 }
 
-export const MusicCard: React.FC<MusicCardProps> = ({ event }) => {
+export const MusicCard: React.FC<MusicCardProps> = ({ event, onPlay }) => {
   const { fetchUserProfileThrottled, profiles } = useAppContext();
   const {
     current,
@@ -65,8 +67,7 @@ export const MusicCard: React.FC<MusicCardProps> = ({ event }) => {
   const playable = sources.length > 0;
 
   // Stable identity across the feed and inline embeds — the addressable coordinate.
-  const dTag = tagValue(event, "d") || event.id;
-  const trackId = `${KIND_MUSIC}:${event.pubkey}:${dTag}`;
+  const trackId = trackCoord(event);
   const isCurrent = current?.id === trackId;
   const isPlaying = isCurrent && playing;
 
@@ -82,6 +83,7 @@ export const MusicCard: React.FC<MusicCardProps> = ({ event }) => {
   const handleToggle = () => {
     if (!playable) return;
     if (isCurrent) toggle();
+    else if (onPlay) onPlay();
     else playTrack({ id: trackId, sources, title, artist: displayArtist, image });
   };
 
@@ -175,6 +177,10 @@ export const MusicCard: React.FC<MusicCardProps> = ({ event }) => {
           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 36 }}>
             {formatTime(sliderMax)}
           </Typography>
+          <AddToPlaylistButton
+            track={{ type: "nostr", coord: trackId }}
+            sourceEventId={event.id}
+          />
         </Box>
 
         {genre && (

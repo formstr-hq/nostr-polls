@@ -1,11 +1,21 @@
 import React, { useState } from "react";
-import { Box, IconButton, Popover, Slider, Typography } from "@mui/material";
+import {
+  Box,
+  IconButton,
+  List,
+  ListItemButton,
+  Popover,
+  Slider,
+  Typography,
+} from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import SkipNextIcon from "@mui/icons-material/SkipNext";
 import SkipPreviousIcon from "@mui/icons-material/SkipPrevious";
 import CloseIcon from "@mui/icons-material/Close";
 import MusicNoteIcon from "@mui/icons-material/MusicNote";
+import ShuffleIcon from "@mui/icons-material/Shuffle";
+import QueueMusicIcon from "@mui/icons-material/QueueMusic";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import VolumeDownIcon from "@mui/icons-material/VolumeDown";
 import VolumeOffIcon from "@mui/icons-material/VolumeOff";
@@ -29,11 +39,16 @@ const MiniPlayer: React.FC = () => {
     position,
     duration,
     volume,
+    shuffle,
+    queue,
+    currentIndex,
     hasNext,
     hasPrev,
     toggle,
+    toggleShuffle,
     next,
     prev,
+    playAt,
     seek,
     setVolume,
     stop,
@@ -44,6 +59,8 @@ const MiniPlayer: React.FC = () => {
   // level to restore on unmute.
   const [volAnchor, setVolAnchor] = useState<HTMLElement | null>(null);
   const [premuteVolume, setPremuteVolume] = useState(volume || 1);
+  // The upcoming-tracks list opens in its own popover off the queue icon.
+  const [queueAnchor, setQueueAnchor] = useState<HTMLElement | null>(null);
 
   const toggleMute = () => {
     if (volume > 0) {
@@ -154,6 +171,71 @@ const MiniPlayer: React.FC = () => {
         >
           {formatTime(duration)}
         </Typography>
+
+        <IconButton
+          size="small"
+          onClick={toggleShuffle}
+          aria-label="Shuffle"
+          color={shuffle ? "primary" : "default"}
+          sx={{ display: { xs: "none", sm: "inline-flex" } }}
+        >
+          <ShuffleIcon fontSize="small" />
+        </IconButton>
+
+        <IconButton
+          size="small"
+          onClick={(e) => setQueueAnchor(e.currentTarget)}
+          aria-label="Queue"
+          disabled={queue.length <= 1}
+        >
+          <QueueMusicIcon fontSize="small" />
+        </IconButton>
+        <Popover
+          open={Boolean(queueAnchor)}
+          anchorEl={queueAnchor}
+          onClose={() => setQueueAnchor(null)}
+          anchorOrigin={{ vertical: "top", horizontal: "center" }}
+          transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+        >
+          <Box sx={{ width: 280, maxHeight: 320, overflowY: "auto" }}>
+            <Typography variant="overline" sx={{ px: 2, pt: 1, display: "block", color: "text.secondary" }}>
+              Up next
+            </Typography>
+            <List dense disablePadding>
+              {queue.map((t, i) => (
+                <ListItemButton
+                  key={`${t.id}-${i}`}
+                  selected={i === currentIndex}
+                  onClick={() => {
+                    playAt(i);
+                    setQueueAnchor(null);
+                  }}
+                  sx={{ gap: 1 }}
+                >
+                  <Box sx={{ width: 16, textAlign: "right", flexShrink: 0 }}>
+                    {i === currentIndex ? (
+                      <PlayArrowIcon sx={{ fontSize: 14 }} color="primary" />
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">
+                        {i + 1}
+                      </Typography>
+                    )}
+                  </Box>
+                  <Box minWidth={0} flex={1}>
+                    <Typography variant="body2" noWrap sx={{ fontWeight: i === currentIndex ? 600 : 400 }}>
+                      {t.title}
+                    </Typography>
+                    {t.artist && (
+                      <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+                        {t.artist}
+                      </Typography>
+                    )}
+                  </Box>
+                </ListItemButton>
+              ))}
+            </List>
+          </Box>
+        </Popover>
 
         <IconButton
           size="small"

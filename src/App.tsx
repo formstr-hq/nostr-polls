@@ -60,7 +60,10 @@ import FollowPacksFeed from "./components/Feed/FollowPacksFeed";
 import FollowPackDetail from "./components/FollowPacks/FollowPackDetail";
 import ArticlesFeed from "./components/Feed/ArticlesFeed";
 import MusicFeed from "./components/Feed/MusicFeed";
+import PlaylistDetail from "./components/Music/PlaylistDetail";
+import SharedPlaylistDetail from "./components/Music/SharedPlaylistDetail";
 import { PlaybackProvider } from "./contexts/PlaybackContext";
+import { PlaylistsProvider } from "./contexts/playlists-context";
 import MiniPlayer from "./components/Music/MiniPlayer";
 import ArticleDetail from "./components/Articles/ArticleDetail";
 import MoviePage from "./components/Movies/MoviePage";
@@ -228,6 +231,8 @@ function AppContent() {
             <Route path="articles" element={<ArticlesFeed />} />
             <Route path="articles/:naddr" element={<ArticleDetail />} />
             <Route path="music" element={<MusicFeed />} />
+            <Route path="music/shared/:naddr" element={<SharedPlaylistDetail />} />
+            <Route path="music/:playlistId" element={<PlaylistDetail />} />
 
             <Route element={<Outlet />}>
               <Route path="movies" element={<MoviesFeed />} />
@@ -322,6 +327,7 @@ const App: React.FC = () => {
                         <MetadataProvider>
                           <VideoPlayerProvider>
                             <PlaybackProvider>
+                            <PlaylistsProvider>
                             <Router>
                               <AndroidNotifications />
                               <FeedScrollProvider>
@@ -331,6 +337,7 @@ const App: React.FC = () => {
                               </FeedScrollProvider>
                               <FloatingVideoPlayer />
                             </Router>
+                            </PlaylistsProvider>
                             </PlaybackProvider>
                           </VideoPlayerProvider>
                         </MetadataProvider>

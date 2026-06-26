@@ -27,13 +27,26 @@ interface PlaybackCtx {
   duration: number;
   /** 0.0–1.0. */
   volume: number;
+  /** Whether upcoming tracks play in a shuffled order. */
+  shuffle: boolean;
+  /** The active play order (what next/prev walk). */
+  queue: PlaybackTrack[];
+  /** Index of the current track within `queue`. */
+  currentIndex: number;
   hasNext: boolean;
   hasPrev: boolean;
   /** Play a list of tracks as a queue (enables next/prev across them). */
   playQueue: (tracks: PlaybackTrack[], startIndex?: number) => void;
   /** Play a single track immediately (replaces the queue). */
   playTrack: (track: PlaybackTrack) => void;
+  /** Append a track to the end of the queue (starts playback if idle). */
+  addToQueue: (track: PlaybackTrack) => void;
+  /** Insert a track right after the current one (starts playback if idle). */
+  playNext: (track: PlaybackTrack) => void;
+  /** Jump to a specific index in the queue. */
+  playAt: (index: number) => void;
   toggle: () => void;
+  toggleShuffle: () => void;
   next: () => void;
   prev: () => void;
   seek: (t: number) => void;
@@ -48,11 +61,18 @@ const PlaybackContext = createContext<PlaybackCtx>({
   position: 0,
   duration: 0,
   volume: 1,
+  shuffle: false,
+  queue: [],
+  currentIndex: -1,
   hasNext: false,
   hasPrev: false,
   playQueue: noop,
   playTrack: noop,
+  addToQueue: noop,
+  playNext: noop,
+  playAt: noop,
   toggle: noop,
+  toggleShuffle: noop,
   next: noop,
   prev: noop,
   seek: noop,
@@ -72,6 +92,16 @@ const initialVolume = (): number => {
   return isFinite(stored) && stored >= 0 && stored <= 1 ? stored : 1;
 };
 
+// Fisher–Yates, non-mutating.
+const shuffled = <T,>(arr: T[]): T[] => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
 export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
@@ -79,14 +109,22 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
   // Queue + cursor live in refs so the imperative controls below read current
   // values without being re-created on every position tick.
   const queueRef = useRef<PlaybackTrack[]>([]);
+  // The order as last set by playQueue, used to restore order when shuffle is
+  // turned back off. Manual queue edits append to it too.
+  const originalRef = useRef<PlaybackTrack[]>([]);
   const indexRef = useRef<number>(-1);
   const srcIndexRef = useRef<number>(0);
+  const shuffleRef = useRef<boolean>(false);
 
   const [current, setCurrent] = useState<PlaybackTrack | null>(null);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState<number>(initialVolume);
+  const [shuffle, setShuffle] = useState(false);
+  // Mirror of queueRef/indexRef for consumers (the MiniPlayer queue view).
+  const [queue, setQueueState] = useState<PlaybackTrack[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(-1);
   // Native next/prev availability (web derives these from the queue refs).
   const [nav, setNav] = useState({ hasNext: false, hasPrev: false });
 
@@ -102,6 +140,7 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
         if (track) {
           indexRef.current = s.index;
           setCurrent(track);
+          setCurrentIndex(s.index);
         }
       }),
       MusicPlayback.addListener("position", (s) => {
@@ -114,6 +153,32 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
+  // Push the active order down to the native service. Note: the plugin's setQueue
+  // restarts from `startIndex`, so this is used for (re)starting a queue and for
+  // shuffle toggles — an explicit user action where a brief restart is tolerable.
+  const syncNative = useCallback(
+    (order: PlaybackTrack[], startIndex: number) => {
+      void (async () => {
+        try {
+          await MusicPlayback.ensureNotificationPermission();
+        } catch {
+          /* proceed regardless; playback still works, just without controls */
+        }
+        await MusicPlayback.setQueue({
+          tracks: order.map((t) => ({
+            id: t.id,
+            sources: t.sources,
+            title: t.title,
+            artist: t.artist,
+            image: t.image,
+          })),
+          startIndex,
+        });
+      })();
+    },
+    []
+  );
+
   const load = useCallback((index: number) => {
     const audio = audioRef.current;
     const track = queueRef.current[index];
@@ -122,45 +187,47 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
     srcIndexRef.current = 0;
     audio.src = track.sources[0];
     setCurrent(track);
+    setCurrentIndex(index);
     setPosition(0);
     setDuration(0);
     audio.play().catch(() => setPlaying(false));
   }, []);
 
+  // Commit a new order + cursor to refs and mirror state, then start the engine.
+  const startOrder = useCallback(
+    (order: PlaybackTrack[], index: number) => {
+      queueRef.current = order;
+      indexRef.current = index;
+      setQueueState(order);
+      setCurrentIndex(index);
+      if (NATIVE) {
+        setCurrent(order[index] ?? null);
+        setPosition(0);
+        setDuration(0);
+        syncNative(order, index);
+      } else {
+        load(index);
+      }
+    },
+    [load, syncNative]
+  );
+
   const playQueue = useCallback(
     (tracks: PlaybackTrack[], startIndex = 0) => {
       if (!tracks.length) return;
-      queueRef.current = tracks;
-      if (NATIVE) {
-        indexRef.current = startIndex;
-        setCurrent(tracks[startIndex] ?? null);
-        setPosition(0);
-        setDuration(0);
-        // Secure the notification permission first: Media3 promotes the service
-        // to foreground via its media notification, so without the grant the OS
-        // kills the service shortly after it starts.
-        void (async () => {
-          try {
-            await MusicPlayback.ensureNotificationPermission();
-          } catch {
-            /* proceed regardless; playback still works, just without controls */
-          }
-          await MusicPlayback.setQueue({
-            tracks: tracks.map((t) => ({
-              id: t.id,
-              sources: t.sources,
-              title: t.title,
-              artist: t.artist,
-              image: t.image,
-            })),
-            startIndex,
-          });
-        })();
-        return;
+      originalRef.current = tracks;
+      // Honour the current shuffle mode: keep the chosen track first, shuffle the
+      // rest, so starting a shuffled playlist plays the picked song then a random
+      // walk of the others.
+      if (shuffleRef.current) {
+        const first = tracks[startIndex];
+        const rest = shuffled(tracks.filter((_, i) => i !== startIndex));
+        startOrder([first, ...rest], 0);
+      } else {
+        startOrder(tracks, startIndex);
       }
-      load(startIndex);
     },
-    [load]
+    [startOrder]
   );
 
   const playTrack = useCallback(
@@ -169,6 +236,88 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
     },
     [playQueue]
   );
+
+  const addToQueue = useCallback(
+    (track: PlaybackTrack) => {
+      if (indexRef.current < 0 || !queueRef.current.length) {
+        playQueue([track], 0);
+        return;
+      }
+      queueRef.current = [...queueRef.current, track];
+      originalRef.current = [...originalRef.current, track];
+      setQueueState(queueRef.current);
+      // Web walks queueRef directly, so the appended track is reachable. Native's
+      // service owns its own queue and has no append command, so it won't see the
+      // addition until the queue is next (re)started — a known native limitation.
+    },
+    [playQueue]
+  );
+
+  const playNext = useCallback(
+    (track: PlaybackTrack) => {
+      if (indexRef.current < 0 || !queueRef.current.length) {
+        playQueue([track], 0);
+        return;
+      }
+      const at = indexRef.current + 1;
+      queueRef.current = [
+        ...queueRef.current.slice(0, at),
+        track,
+        ...queueRef.current.slice(at),
+      ];
+      originalRef.current = [...originalRef.current, track];
+      setQueueState(queueRef.current);
+    },
+    [playQueue]
+  );
+
+  const playAt = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= queueRef.current.length) return;
+      if (NATIVE) {
+        // No "play at index" command on the plugin — re-send from this index.
+        syncNative(queueRef.current, index);
+        indexRef.current = index;
+        setCurrentIndex(index);
+        setCurrent(queueRef.current[index] ?? null);
+        return;
+      }
+      load(index);
+    },
+    [load, syncNative]
+  );
+
+  const toggleShuffle = useCallback(() => {
+    const nextShuffle = !shuffleRef.current;
+    shuffleRef.current = nextShuffle;
+    setShuffle(nextShuffle);
+
+    const cur = queueRef.current[indexRef.current];
+    if (!cur) return; // nothing playing — mode flag is enough for the next play
+
+    let order: PlaybackTrack[];
+    let index: number;
+    if (nextShuffle) {
+      // Keep the current track first; shuffle everything else.
+      const rest = shuffled(
+        queueRef.current.filter((_, i) => i !== indexRef.current)
+      );
+      order = [cur, ...rest];
+      index = 0;
+    } else {
+      // Restore the original order, continuing from the current track's slot.
+      order = originalRef.current.length ? originalRef.current : queueRef.current;
+      const found = order.findIndex((t) => t.id === cur.id);
+      index = found >= 0 ? found : 0;
+    }
+    queueRef.current = order;
+    indexRef.current = index;
+    setQueueState(order);
+    setCurrentIndex(index);
+    // The current track keeps playing on web (we don't reload it); only the
+    // upcoming order changes. Native re-sends the queue (brief restart).
+    if (NATIVE) syncNative(order, index);
+  }, [syncNative]);
 
   const toggle = useCallback(() => {
     if (NATIVE) {
@@ -214,7 +363,12 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
   const setVolume = useCallback((v: number) => {
     const clamped = Math.max(0, Math.min(1, v));
     setVolumeState(clamped);
-    localStorage.setItem(VOLUME_KEY, String(clamped));
+    try {
+      localStorage.setItem(VOLUME_KEY, String(clamped));
+    } catch {
+      // localStorage may be full (QuotaExceededError) or unavailable; persisting
+      // the volume is best-effort and must not break the slider / playback.
+    }
     if (NATIVE) {
       void MusicPlayback.setVolume({ volume: clamped });
       return;
@@ -234,11 +388,14 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     }
     queueRef.current = [];
+    originalRef.current = [];
     indexRef.current = -1;
     setCurrent(null);
     setPlaying(false);
     setPosition(0);
     setDuration(0);
+    setQueueState([]);
+    setCurrentIndex(-1);
     setNav({ hasNext: false, hasPrev: false });
   }, []);
 
@@ -270,11 +427,18 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
         position,
         duration,
         volume,
+        shuffle,
+        queue,
+        currentIndex,
         hasNext,
         hasPrev,
         playQueue,
         playTrack,
+        addToQueue,
+        playNext,
+        playAt,
         toggle,
+        toggleShuffle,
         next,
         prev,
         seek,

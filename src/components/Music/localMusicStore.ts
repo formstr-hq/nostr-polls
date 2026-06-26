@@ -11,6 +11,12 @@ const VERSION = 1;
 export interface StoredEntry {
   id: string;
   name: string;
+  // Stable, content-derived identity: the SHA-256 of the file bytes, computed once
+  // at add time. This is what a playlist stores for a local track so it can be
+  // matched back to the actual file on the owning device, surviving re-adds and
+  // renames (the bytes are unchanged). Absent only for entries saved before this
+  // field existed — those are re-fingerprinted lazily on next access.
+  fingerprint?: string;
   // Exactly one of these is set. `handle` (FileSystemFileHandle) is typed loosely
   // so this compiles without the FSA lib; `blob` is the copy fallback.
   handle?: any;
@@ -62,6 +68,30 @@ export async function deleteEntry(id: string): Promise<void> {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+}
+
+// First stored entry whose fingerprint matches, or undefined. Used to resolve a
+// playlist's local-track reference back to a file on this device.
+export async function getEntryByFingerprint(
+  fingerprint: string
+): Promise<StoredEntry | undefined> {
+  const all = await getAllEntries();
+  return all.find((e) => e.fingerprint === fingerprint);
+}
+
+// Content fingerprint = SHA-256 of the whole file, as lowercase hex. Stable for
+// the same bytes regardless of filename, so re-adding a song still matches its
+// playlist entries. WebCrypto has no streaming digest, so the file is read whole;
+// callers fingerprint sequentially (one file in memory at a time).
+export async function computeFingerprint(file: Blob): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  const bytes = new Uint8Array(digest);
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return hex;
 }
 
 // Ensure read permission for a stored handle, prompting if needed. MUST be called

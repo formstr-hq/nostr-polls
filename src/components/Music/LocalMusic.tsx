@@ -4,6 +4,7 @@ import {
   Button,
   CircularProgress,
   IconButton,
+  LinearProgress,
   List,
   ListItemButton,
   Stack,
@@ -25,9 +26,16 @@ import {
   getAllEntries,
   putEntries,
   deleteEntry,
-  ensureReadPermission,
+  computeFingerprint,
   StoredEntry,
 } from "./localMusicStore";
+import {
+  registerEntry,
+  registerUrl,
+  resolveUrl,
+  release,
+} from "./localTrackResolver";
+import AddToPlaylistButton from "./AddToPlaylistButton";
 
 interface LocalTrack {
   id: string;
@@ -36,6 +44,10 @@ interface LocalTrack {
   artist?: string;
   album?: string;
   durationMs?: number;
+  // Content fingerprint — present for web entries added with the new store; lets a
+  // track be referenced from a playlist. Absent for native (MediaStore) tracks and
+  // legacy entries, which therefore don't offer "add to playlist".
+  fingerprint?: string;
   // Display-only album-art URL (native: convertFileSrc'd content URI). Absent on
   // web and for native tracks with no embedded cover.
   artworkUrl?: string;
@@ -67,10 +79,27 @@ const newId = (): string =>
     ? crypto.randomUUID()
     : `${Math.floor(performance.now())}-${Math.floor(performance.now() * 1000)}`;
 
-const LocalMusic: React.FC = () => {
+const toLocalTrack = (e: StoredEntry): LocalTrack => ({
+  id: e.id,
+  name: e.name,
+  fingerprint: e.fingerprint,
+  ...parseName(e.name),
+});
+
+interface LocalMusicProps {
+  // Rendered at the top of the scroll container so it scrolls away with the list
+  // (used to keep the playlist strips consistent with the other music tabs).
+  header?: React.ReactNode;
+}
+
+const LocalMusic: React.FC<LocalMusicProps> = ({ header }) => {
   const { current, playing, playQueue, toggle } = usePlayback();
   const [tracks, setTracks] = useState<LocalTrack[]>([]);
   const [nativeState, setNativeState] = useState<NativeState>("idle");
+  // Progress of a bulk import while files are fingerprinted one at a time.
+  const [importing, setImporting] = useState<{ done: number; total: number } | null>(
+    null
+  );
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const native = isAndroidNative();
@@ -78,11 +107,6 @@ const LocalMusic: React.FC = () => {
   // Album-art URIs that failed to load (no embedded cover / unreadable); fall back
   // to the music-note placeholder so a missing cover doesn't leave a blank box.
   const [brokenArt, setBrokenArt] = useState<Set<string>>(new Set());
-  // id → FileSystemFileHandle (FSA) for re-reading the referenced file on demand.
-  const handlesRef = useRef<Map<string, any>>(new Map());
-  // id → playable URL (object URL for web blobs/handles, convertFileSrc for native
-  // content URIs). Each file is read / converted at most once.
-  const urlCacheRef = useRef<Map<string, string>>(new Map());
 
   // ── Native (Android MediaStore) ──────────────────────────────────────────
   const scanNative = useCallback(async () => {
@@ -95,7 +119,7 @@ const LocalMusic: React.FC = () => {
       // Hand ExoPlayer the raw content:// URI — it reads those directly. (Do NOT
       // convertFileSrc here: that yields a localhost URL only the WebView's
       // Capacitor server can resolve, which the native player can't fetch.)
-      nativeTracks.forEach((t) => urlCacheRef.current.set(t.id, t.uri));
+      nativeTracks.forEach((t) => registerUrl(t.id, t.uri));
       setTracks(
         nativeTracks.map((t) => ({
           id: t.id,
@@ -138,34 +162,51 @@ const LocalMusic: React.FC = () => {
     let alive = true;
     getAllEntries().then((entries) => {
       if (!alive) return;
-      entries.forEach((e) => {
-        if (e.handle) handlesRef.current.set(e.id, e.handle);
-        else if (e.blob) urlCacheRef.current.set(e.id, URL.createObjectURL(e.blob));
-      });
-      setTracks(entries.map((e) => ({ id: e.id, name: e.name, ...parseName(e.name) })));
+      entries.forEach(registerEntry);
+      setTracks(entries.map(toLocalTrack));
     }).catch(() => {});
     return () => { alive = false; };
   }, [native]);
 
-  useEffect(() => {
-    const urlCache = urlCacheRef.current;
-    return () => {
-      // convertFileSrc URLs aren't blobs; revokeObjectURL is a harmless no-op there.
-      urlCache.forEach((u) => URL.revokeObjectURL(u));
-    };
+  const addEntries = useCallback(async (entries: StoredEntry[]) => {
+    entries.forEach(registerEntry);
+    await putEntries(entries);
+    setTracks((prev) => [...prev, ...entries.map(toLocalTrack)]);
   }, []);
 
-  const addEntries = useCallback(async (entries: StoredEntry[]) => {
-    entries.forEach((e) => {
-      if (e.handle) handlesRef.current.set(e.id, e.handle);
-      else if (e.blob) urlCacheRef.current.set(e.id, URL.createObjectURL(e.blob));
-    });
-    await putEntries(entries);
-    setTracks((prev) => [
-      ...prev,
-      ...entries.map((e) => ({ id: e.id, name: e.name, ...parseName(e.name) })),
-    ]);
-  }, []);
+  // Import items one at a time, fingerprinting each (peak memory = one file), with
+  // a progress readout for big folder picks. `build` produces a StoredEntry —
+  // including its SHA-256 — from a handle or a File.
+  const importSequentially = useCallback(
+    async <T,>(items: T[], build: (item: T) => Promise<StoredEntry>) => {
+      if (!items.length) return;
+      setImporting({ done: 0, total: items.length });
+      const built: StoredEntry[] = [];
+      for (let i = 0; i < items.length; i++) {
+        try {
+          built.push(await build(items[i]));
+        } catch {
+          /* unreadable file — skip it */
+        }
+        setImporting({ done: i + 1, total: items.length });
+      }
+      setImporting(null);
+      if (built.length) await addEntries(built);
+    },
+    [addEntries]
+  );
+
+  const buildFromHandle = async (handle: any): Promise<StoredEntry> => {
+    // The picker just granted read, so getFile() here needs no extra prompt.
+    const file = await handle.getFile();
+    const fingerprint = await computeFingerprint(file);
+    return { id: newId(), name: handle.name, handle, fingerprint };
+  };
+
+  const buildFromFile = async (file: File): Promise<StoredEntry> => {
+    const fingerprint = await computeFingerprint(file);
+    return { id: newId(), name: file.name, blob: file, fingerprint };
+  };
 
   // FSA: pick individual audio files, persisted as references (no copy).
   const pickFiles = useCallback(async () => {
@@ -174,47 +215,31 @@ const LocalMusic: React.FC = () => {
         multiple: true,
         types: [{ description: "Audio", accept: { "audio/*": [".mp3", ".m4a", ".flac", ".wav", ".ogg", ".aac", ".opus"] } }],
       });
-      await addEntries(handles.map((h: any) => ({ id: newId(), name: h.name, handle: h })));
+      await importSequentially(handles as any[], buildFromHandle);
     } catch { /* user cancelled */ }
-  }, [addEntries]);
+  }, [importSequentially]);
 
   // FSA: pick a folder; keep references to its audio files (no copy).
   const pickFolder = useCallback(async () => {
     try {
       const dir = await (window as any).showDirectoryPicker();
-      const entries: StoredEntry[] = [];
+      const handles: any[] = [];
       for await (const entry of dir.values()) {
         if (entry.kind === "file" && AUDIO_EXT.test(entry.name)) {
-          entries.push({ id: newId(), name: entry.name, handle: entry });
+          handles.push(entry);
         }
       }
-      await addEntries(entries);
+      await importSequentially(handles, buildFromHandle);
     } catch { /* user cancelled */ }
-  }, [addEntries]);
+  }, [importSequentially]);
 
   // Fallback (no FSA — Firefox/Safari): persist the File blob itself (a copy),
   // since those browsers expose no handle to reference.
   const addFromInput = useCallback((fileList: FileList | null) => {
     if (!fileList) return;
     const audioFiles = Array.from(fileList).filter((f) => f.type.startsWith("audio/"));
-    if (audioFiles.length) {
-      void addEntries(audioFiles.map((f) => ({ id: newId(), name: f.name, blob: f })));
-    }
-  }, [addEntries]);
-
-  // Resolve a track to a playable URL. Native + blob tracks are already cached;
-  // FSA handles are read (and permission-confirmed) on first play.
-  const resolveUrl = useCallback(async (id: string): Promise<string | null> => {
-    const cached = urlCacheRef.current.get(id);
-    if (cached) return cached;
-    const handle = handlesRef.current.get(id);
-    if (!handle) return null;
-    if (!(await ensureReadPermission(handle))) return null;
-    const file = await handle.getFile();
-    const url = URL.createObjectURL(file);
-    urlCacheRef.current.set(id, url);
-    return url;
-  }, []);
+    if (audioFiles.length) void importSequentially(audioFiles, buildFromFile);
+  }, [importSequentially]);
 
   const playFrom = useCallback(async (index: number) => {
     // Resolve every track we can, then play the chosen one within that queue so
@@ -229,7 +254,7 @@ const LocalMusic: React.FC = () => {
       queue.push({ id: t.id, sources: [url], title: t.title, artist: t.artist });
     });
     if (queue.length) playQueue(queue, startAt);
-  }, [tracks, resolveUrl, playQueue]);
+  }, [tracks, playQueue]);
 
   const onRowClick = useCallback((index: number, id: string) => {
     if (current?.id === id) toggle();
@@ -237,15 +262,15 @@ const LocalMusic: React.FC = () => {
   }, [current, toggle, playFrom]);
 
   const removeTrack = useCallback(async (id: string) => {
-    handlesRef.current.delete(id);
-    const url = urlCacheRef.current.get(id);
-    if (url) { URL.revokeObjectURL(url); urlCacheRef.current.delete(id); }
+    release(id);
     await deleteEntry(id);
     setTracks((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   return (
     <Box sx={{ maxWidth: 700, mx: "auto", p: 2, height: "100%", overflowY: "auto" }}>
+      {/* Bleed past the container padding so the strips align with the feed tabs. */}
+      {header && <Box sx={{ mx: -2, mt: -2, mb: 1 }}>{header}</Box>}
       <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
         {native ? (
           <Button
@@ -260,15 +285,15 @@ const LocalMusic: React.FC = () => {
           </Button>
         ) : supportsFsa ? (
           <>
-            <Button variant="outlined" size="small" startIcon={<LibraryMusicIcon />} onClick={pickFiles} sx={{ textTransform: "none", borderRadius: 2 }}>
+            <Button variant="outlined" size="small" startIcon={<LibraryMusicIcon />} onClick={pickFiles} disabled={!!importing} sx={{ textTransform: "none", borderRadius: 2 }}>
               Add files
             </Button>
-            <Button variant="outlined" size="small" startIcon={<FolderOpenIcon />} onClick={pickFolder} sx={{ textTransform: "none", borderRadius: 2 }}>
+            <Button variant="outlined" size="small" startIcon={<FolderOpenIcon />} onClick={pickFolder} disabled={!!importing} sx={{ textTransform: "none", borderRadius: 2 }}>
               Add folder
             </Button>
           </>
         ) : (
-          <Button variant="outlined" size="small" startIcon={<LibraryMusicIcon />} onClick={() => fileInputRef.current?.click()} sx={{ textTransform: "none", borderRadius: 2 }}>
+          <Button variant="outlined" size="small" startIcon={<LibraryMusicIcon />} onClick={() => fileInputRef.current?.click()} disabled={!!importing} sx={{ textTransform: "none", borderRadius: 2 }}>
             Add files
           </Button>
         )}
@@ -281,6 +306,18 @@ const LocalMusic: React.FC = () => {
           onChange={(e) => { addFromInput(e.target.files); e.target.value = ""; }}
         />
       </Stack>
+
+      {importing && (
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+            Importing {importing.done} / {importing.total}…
+          </Typography>
+          <LinearProgress
+            variant="determinate"
+            value={importing.total ? (importing.done / importing.total) * 100 : 0}
+          />
+        </Box>
+      )}
 
       {!native && (
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
@@ -377,6 +414,20 @@ const LocalMusic: React.FC = () => {
                   <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
                     {duration}
                   </Typography>
+                )}
+                {t.fingerprint && (
+                  <Box onClick={(e) => e.stopPropagation()}>
+                    <AddToPlaylistButton
+                      track={{
+                        type: "local",
+                        fingerprint: t.fingerprint,
+                        title: t.title,
+                        artist: t.artist,
+                        durationMs: t.durationMs,
+                        filename: t.name,
+                      }}
+                    />
+                  </Box>
                 )}
                 {!native && (
                   <IconButton size="small" aria-label="Remove" onClick={(e) => { e.stopPropagation(); void removeTrack(t.id); }}>
