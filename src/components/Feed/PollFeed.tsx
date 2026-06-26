@@ -12,6 +12,7 @@ import RepeatIcon from "@mui/icons-material/Repeat";
 import OverlappingAvatars from "../Common/OverlappingAvatars";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
+import { safeSetItem } from "../../utils/localStorage";
 
 // Minimal closer shape the feed tracks. The worker owns relays/chunking, so the
 // app only needs to be able to drop its interest.
@@ -97,7 +98,7 @@ export const PollFeed = () => {
   const { registerRefresh } = useFeedActions();
 
   useEffect(() => {
-    localStorage.setItem("pollerama:pollSource", eventSource);
+    safeSetItem("pollerama:pollSource", eventSource);
     setItems([
       {
         key: "global",

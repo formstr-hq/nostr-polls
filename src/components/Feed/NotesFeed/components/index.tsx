@@ -3,6 +3,7 @@ import { Typography, CircularProgress, Chip, Box } from "@mui/material";
 import RateEventModal from "../../../Ratings/RateEventModal";
 import { useFeedActions } from "../../../../contexts/FeedActionsContext";
 import { useSubNav } from "../../../../contexts/SubNavContext";
+import { safeSetItem } from "../../../../utils/localStorage";
 
 const FollowingFeed = lazy(() => import("./FollowingFeed"));
 const ReactedFeed = lazy(() => import("./ReactedFeed"));
@@ -25,7 +26,7 @@ const NotesFeed = () => {
 
   const handleSetActiveTab = (tab: NotesTab) => {
     setActiveTab(tab);
-    localStorage.setItem(NOTES_TAB_KEY, tab);
+    safeSetItem(NOTES_TAB_KEY, tab);
   };
   const [modalOpen, setModalOpen] = useState(false);
   const [noteMode, setNoteMode] = useState<NoteMode>("notes");

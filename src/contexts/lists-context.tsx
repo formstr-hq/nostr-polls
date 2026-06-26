@@ -16,7 +16,16 @@ import { collectOnce } from "../dataLayer/collect";
 import { useRelayRefresh } from "../dataLayer/hooks";
 import { readCachedContacts, writeCachedContacts } from "../nostr/contactsCache";
 import { signerManager } from "../singletons/Signer/SignerManager";
+import {
+  getWotCache,
+  putWotCache,
+  clearWotCacheTime,
+  WotCacheRecord,
+} from "../utils/wotCache";
 
+// Legacy localStorage keys for the WoT cache. The cache now lives in IndexedDB
+// (see ../utils/wotCache) because the serialized index + union can exceed the
+// ~5MB localStorage quota; these are read once to migrate, then deleted.
 const WOT_STORAGE_KEY_PREFIX = `pollerama:webOfTrust`;
 const WOT_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
 
@@ -24,7 +33,7 @@ const WOT_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
 // the user's own follows that follow them. It powers the "followed by … you
 // follow" row on profiles, the per-pubkey trust score, and follow suggestions.
 // Persisted in a compact, index-referenced form (each source referenced by
-// integer) so it stays small in localStorage even on large follow graphs. The
+// integer) to keep the cached blob small even on large follow graphs. The
 // compact form is produced in `src/utils/wot-worker.ts`; only the inverse
 // (rebuilding the in-memory Map) is needed on the main thread.
 type SerializedNetworkIndex = { follows: string[]; edges: Record<string, number[]> };
@@ -44,6 +53,55 @@ function deserializeNetworkIndex(json: string): Map<string, Set<string>> {
     map.set(target, new Set(sources));
   }
   return map;
+}
+
+// Read a pre-IndexedDB WoT cache out of localStorage (if any) and delete those
+// keys to reclaim quota. Returns the migrated record, or null if there was
+// nothing usable. Always removes the legacy keys — freeing the (often multi-MB)
+// space is the whole point, even when the contents are stale or unparseable.
+function migrateLegacyWotCache(pubkey: string): WotCacheRecord | null {
+  const unionKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}`;
+  const timeKey = `${unionKey}_time`;
+  const indexKey = `${unionKey}_index`;
+  const recsKey = `${unionKey}_recs`;
+
+  let record: WotCacheRecord | null = null;
+  try {
+    const rawUnion = localStorage.getItem(unionKey);
+    const rawTime = localStorage.getItem(timeKey);
+    if (rawUnion && rawTime) {
+      const union = JSON.parse(rawUnion);
+      let recommendations: WotRecommendation[] = [];
+      try {
+        const rawRecs = localStorage.getItem(recsKey);
+        recommendations = rawRecs ? JSON.parse(rawRecs) : [];
+      } catch {
+        recommendations = [];
+      }
+      if (Array.isArray(union)) {
+        record = {
+          pubkey,
+          union,
+          serializedIndex: localStorage.getItem(indexKey) ?? "",
+          recommendations,
+          time: Number(rawTime) || 0,
+        };
+      }
+    }
+  } catch {
+    record = null;
+  }
+
+  try {
+    localStorage.removeItem(unionKey);
+    localStorage.removeItem(timeKey);
+    localStorage.removeItem(indexKey);
+    localStorage.removeItem(recsKey);
+  } catch {
+    // best-effort cleanup
+  }
+
+  return record;
 }
 
 interface ListContextInterface {
@@ -393,163 +451,166 @@ export function ListProvider({ children }: { children: ReactNode }) {
     // until EOSE, so the triggering effect could otherwise fire again mid-fetch.
     if (wotInFlightRef.current) return;
     wotAttemptedRef.current = true;
+    // Claim the in-flight slot synchronously, before the async cache read below,
+    // so the triggering effect can't re-enter during the await.
+    wotInFlightRef.current = true;
 
     const pubkey = user.pubkey;
-    const unionKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}`;
-    const timeKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_time`;
-    const indexKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_index`;
-    const recsKey = `${WOT_STORAGE_KEY_PREFIX}${pubkey}_recs`;
-
-    const storedTime = localStorage.getItem(timeKey);
-    if (storedTime) setWotLastComputed(Number(storedTime));
-    let cachedUnion: string[] | null = null;
-    try {
-      const raw = localStorage.getItem(unionKey);
-      cachedUnion = raw ? JSON.parse(raw) : null;
-    } catch {
-      cachedUnion = null;
-    }
-    // Only trust a non-empty cache within TTL. An empty array is never a valid
-    // result — treat it as a cache miss and re-fetch rather than leaving the
-    // user with an empty web of trust for the next 5 days.
-    const cacheValid =
-      Array.isArray(cachedUnion) &&
-      cachedUnion.length > 0 &&
-      storedTime &&
-      Date.now() - Number(storedTime) < WOT_TTL;
-
-    if (cacheValid) {
-      // The union set powers the "in your wider network" check — restore it now.
-      setUser((prev: User | null) =>
-        prev ? { ...prev, webOfTrust: new Set(cachedUnion!) } : null,
-      );
-
-      const storedIndex = localStorage.getItem(indexKey);
-      if (storedIndex) {
-        try {
-          networkIndexRef.current = deserializeNetworkIndex(storedIndex);
-          // Restore cached follow suggestions if present. Absent for users whose
-          // cache predates this feature — they'll populate on the next compute
-          // (TTL refresh or the Recompute button), so we don't force a refetch.
-          try {
-            const storedRecs = localStorage.getItem(recsKey);
-            recommendationsRef.current = storedRecs ? JSON.parse(storedRecs) : [];
-          } catch {
-            recommendationsRef.current = [];
-          }
-          setWotIndexVersion((v) => v + 1);
-          return; // Fully hydrated from cache — no network needed.
-        } catch {
-          // Corrupt index — fall through and rebuild it.
-        }
-      }
-      // Existing flat-list user (cached union but no index): silently backfill
-      // the index below. The union is already live, so this isn't user-visible.
-    }
+    const follows = user.follows;
+    const seedFromUser = user.webOfTrust ? Array.from(user.webOfTrust) : [];
 
     // Background fetch: pull kind-3 lists from every follow and build both the
     // union set and the inverted "network index". The aggregation + serialization
     // run in a dedicated worker (see src/utils/wot-worker.ts) — doing it inline
     // used to loop every `p` tag of up to 500 lists on the UI thread and hang it.
     // The main thread here only forwards raw events and persists the result.
-    wotInFlightRef.current = true;
-    setWotProfileCount(0);
-    setIsFetchingWoT(true); // Drives the non-blocking progress in Network settings.
+    const startFetch = (seedUnion: string[]) => {
+      setWotProfileCount(0);
+      setIsFetchingWoT(true); // Drives the non-blocking progress in Network settings.
 
-    const filter: Filter = { kinds: [3], authors: user.follows, limit: 500 };
+      const filter: Filter = { kinds: [3], authors: follows, limit: 500 };
 
-    const worker = new Worker(new URL("../utils/wot-worker", import.meta.url));
-    wotWorkerRef.current = worker;
-    // Seed the union with whatever we already have so a sparse fetch can only
-    // ever add to the web of trust, never shrink it (e.g. a backfill that comes
-    // back with fewer contact lists must not wipe a good cached union). `follows`
-    // + `self` let the worker exclude already-followed/own pubkeys from the
-    // follow-recommendation list it builds at commit.
-    worker.postMessage({
-      type: "init",
-      seedUnion: Array.from(new Set<string>(cachedUnion ?? user.webOfTrust ?? [])),
-      follows: user.follows,
-      self: user.pubkey,
-    });
+      const worker = new Worker(new URL("../utils/wot-worker", import.meta.url));
+      wotWorkerRef.current = worker;
+      // Seed the union with whatever we already have so a sparse fetch can only
+      // ever add to the web of trust, never shrink it (e.g. a backfill that comes
+      // back with fewer contact lists must not wipe a good cached union). `follows`
+      // + `self` let the worker exclude already-followed/own pubkeys from the
+      // follow-recommendation list it builds at commit.
+      worker.postMessage({
+        type: "init",
+        seedUnion: Array.from(new Set<string>(seedUnion)),
+        follows,
+        self: pubkey,
+      });
 
-    // Under the dataLayer contract the local EOSE fires before the worker's
-    // upstream fetch returns the contact lists, so we can't commit on EOSE
-    // (that would persist an empty/stale union and tear down the fetch). Instead
-    // we keep the interest open and ask the worker to commit once the stream
-    // goes quiet, with a hard cap so the computation can never hang.
-    let committed = false;
-    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+      // Under the dataLayer contract the local EOSE fires before the worker's
+      // upstream fetch returns the contact lists, so we can't commit on EOSE
+      // (that would persist an empty/stale union and tear down the fetch). Instead
+      // we keep the interest open and ask the worker to commit once the stream
+      // goes quiet, with a hard cap so the computation can never hang.
+      let committed = false;
+      let quietTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const commit = () => {
-      if (committed) return;
-      committed = true;
-      if (quietTimer) clearTimeout(quietTimer);
-      clearTimeout(hardTimer);
-      handle.unobserve();
-      // The worker replies with the finished union + serialized index; everything
-      // heavy (Set/Map building, JSON stringify) already happened off-thread.
-      worker.postMessage({ type: "commit" });
-    };
-
-    worker.onmessage = (e: MessageEvent) => {
-      const msg = e.data;
-      if (msg.type === "progress") {
-        setWotProfileCount(msg.size);
-        return;
-      }
-      if (msg.type !== "result") return;
-
-      worker.terminate();
-      if (wotWorkerRef.current === worker) wotWorkerRef.current = null;
-      wotInFlightRef.current = false;
-      setIsFetchingWoT(false);
-      setWotProfileCount(msg.size);
-
-      const union: string[] = msg.union;
-      const recommendations: WotRecommendation[] = msg.recommendations ?? [];
-      // Don't persist an empty result — leave any existing cache intact so
-      // the next session retries instead of being stuck empty.
-      if (union.length > 0) {
-        const now = Date.now();
-        try {
-          localStorage.setItem(unionKey, JSON.stringify(union));
-          localStorage.setItem(timeKey, now.toString());
-          localStorage.setItem(indexKey, msg.serializedIndex);
-          localStorage.setItem(recsKey, JSON.stringify(recommendations));
-        } catch {
-          // localStorage quota exceeded — keep the index in memory for this
-          // session; it'll be recomputed next load.
-        }
-        setWotLastComputed(now);
-      }
-
-      recommendationsRef.current = recommendations;
-      networkIndexRef.current = deserializeNetworkIndex(msg.serializedIndex);
-      setWotIndexVersion((v) => v + 1);
-      setUser((prev) =>
-        prev ? ({ ...prev, webOfTrust: new Set(union) } as User) : null,
-      );
-    };
-
-    const handle = dataLayer.observe([filter], {
-      onEvent: (event: Event) => {
-        // Forward to the worker; it owns the union/index aggregation. We keep
-        // main-thread work to a single postMessage per event.
-        worker.postMessage({
-          type: "event",
-          pubkey: event.pubkey,
-          tags: event.tags,
-        });
-        // Commit ~1.5s after the stream goes quiet.
+      const commit = () => {
+        if (committed) return;
+        committed = true;
         if (quietTimer) clearTimeout(quietTimer);
-        quietTimer = setTimeout(commit, 1500);
-      },
-    });
+        clearTimeout(hardTimer);
+        handle.unobserve();
+        // The worker replies with the finished union + serialized index; everything
+        // heavy (Set/Map building, JSON stringify) already happened off-thread.
+        worker.postMessage({ type: "commit" });
+      };
 
-    // Hard cap: commit no later than 10s even if events keep dribbling in.
-    const hardTimer = setTimeout(commit, 10000);
+      worker.onmessage = (e: MessageEvent) => {
+        const msg = e.data;
+        if (msg.type === "progress") {
+          setWotProfileCount(msg.size);
+          return;
+        }
+        if (msg.type !== "result") return;
 
-    return handle;
+        worker.terminate();
+        if (wotWorkerRef.current === worker) wotWorkerRef.current = null;
+        wotInFlightRef.current = false;
+        setIsFetchingWoT(false);
+        setWotProfileCount(msg.size);
+
+        const union: string[] = msg.union;
+        const recommendations: WotRecommendation[] = msg.recommendations ?? [];
+        // Don't persist an empty result — leave any existing cache intact so
+        // the next session retries instead of being stuck empty. The cache lives
+        // in IndexedDB (see ../utils/wotCache); putWotCache swallows its own
+        // errors, so the in-memory index below is always set regardless.
+        if (union.length > 0) {
+          const now = Date.now();
+          void putWotCache({
+            pubkey,
+            union,
+            serializedIndex: msg.serializedIndex,
+            recommendations,
+            time: now,
+          });
+          setWotLastComputed(now);
+        }
+
+        recommendationsRef.current = recommendations;
+        networkIndexRef.current = deserializeNetworkIndex(msg.serializedIndex);
+        setWotIndexVersion((v) => v + 1);
+        setUser((prev) =>
+          prev ? ({ ...prev, webOfTrust: new Set(union) } as User) : null,
+        );
+      };
+
+      const handle = dataLayer.observe([filter], {
+        onEvent: (event: Event) => {
+          // Forward to the worker; it owns the union/index aggregation. We keep
+          // main-thread work to a single postMessage per event.
+          worker.postMessage({
+            type: "event",
+            pubkey: event.pubkey,
+            tags: event.tags,
+          });
+          // Commit ~1.5s after the stream goes quiet.
+          if (quietTimer) clearTimeout(quietTimer);
+          quietTimer = setTimeout(commit, 1500);
+        },
+      });
+
+      // Hard cap: commit no later than 10s even if events keep dribbling in.
+      const hardTimer = setTimeout(commit, 10000);
+    };
+
+    // Read the cache (IndexedDB, async), migrating any legacy localStorage copy
+    // on first run, then either hydrate from it or kick off the worker fetch.
+    void (async () => {
+      let cached = await getWotCache(pubkey);
+      if (!cached) {
+        const migrated = migrateLegacyWotCache(pubkey);
+        if (migrated) {
+          cached = migrated;
+          void putWotCache(migrated);
+        }
+      }
+
+      if (cached?.time) setWotLastComputed(cached.time);
+
+      // Only trust a non-empty cache within TTL. An empty array is never a valid
+      // result — treat it as a cache miss and re-fetch rather than leaving the
+      // user with an empty web of trust for the next 5 days.
+      const cacheValid =
+        !!cached &&
+        Array.isArray(cached.union) &&
+        cached.union.length > 0 &&
+        cached.time > 0 &&
+        Date.now() - cached.time < WOT_TTL;
+
+      if (cacheValid) {
+        // The union set powers the "in your wider network" check — restore it now.
+        setUser((prev: User | null) =>
+          prev ? { ...prev, webOfTrust: new Set(cached!.union) } : null,
+        );
+
+        if (cached!.serializedIndex) {
+          try {
+            networkIndexRef.current = deserializeNetworkIndex(cached!.serializedIndex);
+            // Restore cached follow suggestions if present. Absent for users whose
+            // cache predates this feature — they'll populate on the next compute.
+            recommendationsRef.current = cached!.recommendations ?? [];
+            setWotIndexVersion((v) => v + 1);
+            wotInFlightRef.current = false;
+            return; // Fully hydrated from cache — no network needed.
+          } catch {
+            // Corrupt index — fall through and rebuild it.
+          }
+        }
+        // Existing flat-list user (cached union but no index): silently backfill
+        // the index below. The union is already live, so this isn't user-visible.
+      }
+
+      startFetch(cached?.union ?? seedFromUser);
+    })();
   };
 
   // Manual refresh from the Network settings panel. Busts the cache timestamp so
@@ -557,7 +618,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
   // is seeded from the existing cache, so a recompute can only grow it.
   const recomputeWebOfTrust = () => {
     if (!user?.pubkey || wotInFlightRef.current) return;
-    localStorage.removeItem(`${WOT_STORAGE_KEY_PREFIX}${user.pubkey}_time`);
+    void clearWotCacheTime(user.pubkey);
     wotAttemptedRef.current = false;
     subscribeToContacts();
   };

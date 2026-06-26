@@ -3,6 +3,20 @@ import { generateSecretKey } from "nostr-tools";
 import { User } from "../contexts/user-context";
 import { USER_DATA_TTL_HOURS } from "./constants";
 
+// A write that must never break the UI. localStorage has a hard ~5MB per-origin
+// quota (Firefox is the strictest); once it's full, setItem throws
+// QuotaExceededError. Persisting a UI preference (e.g. the active feed tab) is
+// best-effort — if it fails, the in-memory state still updates, so swallow the
+// error rather than letting it kill the click handler. Returns whether it stuck.
+export function safeSetItem(key: string, value: string): boolean {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const LOCAL_STORAGE_KEYS = "pollerama:keys";
 const LOCAL_BUNKER_URI = "pollerama:bunkerUri";
 const LOCAL_APP_SECRET_KEY = "bunker:clientSecretKey";

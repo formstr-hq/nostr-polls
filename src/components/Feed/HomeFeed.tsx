@@ -5,6 +5,7 @@ import { useRelays } from "../../hooks/useRelays";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useReports } from "../../hooks/useReports";
 import { useSubNav } from "../../contexts/SubNavContext";
+import { safeSetItem } from "../../utils/localStorage";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { dataLayer } from "@formstr/local-relay";
@@ -406,7 +407,7 @@ const HomeFeed: React.FC = () => {
   // fetch then buffers anything newer as "+N new" rather than auto-merging
   // (which shifts the list and causes the user to skip posts).
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, source);
+    safeSetItem(STORAGE_KEY, source);
     cursorRef.current = undefined;
     pendingRef.current.clear();
     setPendingCount(0);

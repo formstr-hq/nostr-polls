@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { EventTemplate } from "nostr-tools";
@@ -50,6 +51,17 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
   const [playlists, setPlaylists] = useState<
     Map<string, LocalPlaylist> | undefined
   >();
+  // Authoritative copy of the map, updated synchronously by commit/delete. State
+  // updates are async, so a create-then-addTrack sequence (the "New playlist…"
+  // flow) would otherwise have addTrack read a stale `playlists` that doesn't yet
+  // contain the just-created playlist — and silently no-op. The ref always holds
+  // the latest, so mutate() resolves the record reliably.
+  const playlistsRef = useRef<Map<string, LocalPlaylist> | undefined>(undefined);
+
+  const applyMap = useCallback((map: Map<string, LocalPlaylist>) => {
+    playlistsRef.current = map;
+    setPlaylists(map);
+  }, []);
 
   // Playlists are device-local, not per-account, so load once on mount.
   useEffect(() => {
@@ -61,28 +73,33 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
         all
           .sort((a, b) => b.updated_at - a.updated_at)
           .forEach((pl) => map.set(pl.id, pl));
-        setPlaylists(map);
+        applyMap(map);
       })
-      .catch(() => alive && setPlaylists(new Map()));
+      .catch(() => alive && applyMap(new Map()));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [applyMap]);
 
   // Persist a playlist and reflect it in the in-memory map.
-  const commit = useCallback(async (pl: LocalPlaylist) => {
-    await putPlaylist(pl);
-    setPlaylists((prev) => new Map(prev ?? []).set(pl.id, pl));
-  }, []);
+  const commit = useCallback(
+    async (pl: LocalPlaylist) => {
+      await putPlaylist(pl);
+      applyMap(new Map(playlistsRef.current ?? []).set(pl.id, pl));
+    },
+    [applyMap]
+  );
 
-  // Read the current record from state, apply a change, persist. No-op if missing.
+  // Read the current record from the ref, apply a change, persist. No-op if
+  // missing. Reads the ref (not `playlists` state) so back-to-back mutations and
+  // create-then-mutate sequences see each other's writes immediately.
   const mutate = useCallback(
     async (id: string, change: (pl: LocalPlaylist) => LocalPlaylist) => {
-      const existing = playlists?.get(id);
+      const existing = playlistsRef.current?.get(id);
       if (!existing) return;
       await commit({ ...change(existing), updated_at: Date.now() });
     },
-    [playlists, commit]
+    [commit]
   );
 
   const createPlaylist = useCallback(
@@ -132,19 +149,19 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
     [mutate]
   );
 
-  const deletePlaylist = useCallback(async (id: string) => {
-    await deletePlaylistRecord(id);
-    setPlaylists((prev) => {
-      if (!prev) return prev;
-      const next = new Map(prev);
+  const deletePlaylist = useCallback(
+    async (id: string) => {
+      await deletePlaylistRecord(id);
+      const next = new Map(playlistsRef.current ?? []);
       next.delete(id);
-      return next;
-    });
-  }, []);
+      applyMap(next);
+    },
+    [applyMap]
+  );
 
   const publishPlaylist = useCallback(
     async (id: string): Promise<PublishResult> => {
-      const pl = playlists?.get(id);
+      const pl = playlistsRef.current?.get(id);
       if (!pl) throw new Error("Playlist not found");
 
       const nostrRefs = pl.tracks.filter((t) => t.type === "nostr");
@@ -179,7 +196,7 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
       await commit({ ...pl, publishedNaddr: naddr, updated_at: Date.now() });
       return { naddr, removedLocalCount };
     },
-    [playlists, commit]
+    [commit]
   );
 
   return (

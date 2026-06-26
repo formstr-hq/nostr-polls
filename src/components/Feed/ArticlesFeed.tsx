@@ -7,6 +7,7 @@ import { useUserContext } from "../../hooks/useUserContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { ArticleCard } from "../Articles/ArticleCard";
+import { safeSetItem } from "../../utils/localStorage";
 import UnifiedFeed from "./UnifiedFeed";
 
 const STORAGE_KEY = "pollerama:articlesSource";
@@ -32,8 +33,8 @@ const ArticlesFeed: React.FC = () => {
 
   useEffect(() => {
     const select = (s: Source) => {
-      localStorage.setItem(STORAGE_KEY, s);
       setSource(s);
+      safeSetItem(STORAGE_KEY, s);
       setArticles([]);
       seen.current.clear();
       cursorRef.current = undefined;

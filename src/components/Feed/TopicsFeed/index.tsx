@@ -24,6 +24,7 @@ import { useUserContext } from "../../../hooks/useUserContext";
 import { useSubNav } from "../../../contexts/SubNavContext";
 import { useBackClose } from "../../../hooks/useBackClose";
 import { useFeedActions } from "../../../contexts/FeedActionsContext";
+import { safeSetItem } from "../../../utils/localStorage";
 
 const TopicsFeed: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"discover" | "myTopics" | "interests">(() => {
@@ -52,8 +53,8 @@ const TopicsFeed: React.FC = () => {
   useBackClose(searchOpen, handleCloseSearch);
 
   const handleTabChange = useCallback((tab: "discover" | "myTopics" | "interests") => {
-    localStorage.setItem("pollerama:lastTopicsTab", tab);
     setActiveTab(tab);
+    safeSetItem("pollerama:lastTopicsTab", tab);
   }, []);
 
   useEffect(() => {

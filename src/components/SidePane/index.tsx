@@ -22,6 +22,7 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import { SvgIconComponent } from "@mui/icons-material";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useSubNav } from "../../contexts/SubNavContext";
+import { safeSetItem } from "../../utils/localStorage";
 
 // Static sub-item definitions — used for the mobile popup regardless of which
 // feed is currently mounted. Active state is read from localStorage so we can
@@ -141,7 +142,7 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
     if (!menuFeed) return;
 
     const storageKey = FEED_STORAGE_KEYS[menuFeed];
-    if (storageKey) localStorage.setItem(storageKey, subKey);
+    if (storageKey) safeSetItem(storageKey, subKey);
 
     if (menuFeed === currentFeed) {
       // Feed is active — use the SubNavContext item's onClick to update live state

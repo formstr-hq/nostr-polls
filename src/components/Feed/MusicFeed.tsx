@@ -11,6 +11,7 @@ import PlaylistStrip from "../Music/PlaylistStrip";
 import FollowingPlaylists from "../Music/FollowingPlaylists";
 import { eventToPlaybackTrack } from "../Music/musicTrack";
 import { usePlayback, PlaybackTrack } from "../../contexts/PlaybackContext";
+import { safeSetItem } from "../../utils/localStorage";
 import UnifiedFeed from "./UnifiedFeed";
 
 const STORAGE_KEY = "pollerama:musicSource";
@@ -114,8 +115,10 @@ const MusicFeed: React.FC = () => {
 
   useEffect(() => {
     const select = (s: Source) => {
-      localStorage.setItem(STORAGE_KEY, s);
+      // setSource first: switching tabs must work even if persisting the
+      // preference fails (a full localStorage quota throws — see safeSetItem).
       setSource(s);
+      safeSetItem(STORAGE_KEY, s);
     };
 
     setItems([

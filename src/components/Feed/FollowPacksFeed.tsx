@@ -7,6 +7,7 @@ import { useListContext } from "../../hooks/useListContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { FollowPackCard } from "../FollowPacks/FollowPackCard";
 import { WhoToFollow } from "../Profile/WhoToFollow";
+import { safeSetItem } from "../../utils/localStorage";
 
 const STORAGE_KEY = "pollerama:followPacksSource";
 const BATCH_SIZE = 20;
@@ -35,8 +36,8 @@ const FollowPacksFeed: React.FC = () => {
   // Register sub-nav items
   useEffect(() => {
     const select = (s: Source) => {
-      localStorage.setItem(STORAGE_KEY, s);
       setSource(s);
+      safeSetItem(STORAGE_KEY, s);
       setPacks([]);
       seen.current.clear();
       setCursor(undefined);
