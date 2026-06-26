@@ -1,3 +1,14 @@
+# 1.10.3
+
+- Playlists: build your own playlists right on your device — no account needed — mixing tracks from Nostr and your own local files. Create, rename, reorder, shuffle, and "play all".
+- Add to playlist in a tap: every track in the Music feed now has a quick add-to-playlist button.
+- Share your playlists: publish any playlist to Nostr so others can find and play it.
+- Playlists from people you follow: a new shelf on the Music feed shows public playlists shared by accounts you follow — open one to play it, see who made it, save your own copy, or zap the creator.
+- Fixed playlist tracks getting stuck on "Loading…": tracks now resolve from the relays that actually host them (using the playlist's relay hints), and those hints are saved when you add a track and included when you publish.
+- Fixed the Music feed not loading more as you scroll — infinite scroll now pulls the next page when you reach the end.
+- The playlist shelves now scroll away with the feed instead of staying pinned to the top.
+- Fixed the volume slider crashing playback when device storage was full.
+
 # 1.10.0
 
 - New Music feed: discover tracks from across Nostr and from people you follow, with a built-in player. A mini player docks at the bottom and keeps playing as you move between feeds.
