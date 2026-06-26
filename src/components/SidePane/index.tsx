@@ -16,6 +16,7 @@ import TagIcon from "@mui/icons-material/Tag";
 import ArticleIcon from "@mui/icons-material/Article";
 import BookIcon from "@mui/icons-material/MenuBook";
 import MovieIcon from "@mui/icons-material/Movie";
+import MusicNoteIcon from "@mui/icons-material/MusicNote";
 import PeopleIcon from "@mui/icons-material/People";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import { SvgIconComponent } from "@mui/icons-material";
@@ -55,6 +56,11 @@ const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
     { key: "global", label: "Global" },
     { key: "following", label: "Following" },
   ],
+  music: [
+    { key: "discover", label: "Discover" },
+    { key: "following", label: "Following" },
+    { key: "local", label: "Local" },
+  ],
 };
 
 const FEED_STORAGE_KEYS: Record<string, string> = {
@@ -64,6 +70,7 @@ const FEED_STORAGE_KEYS: Record<string, string> = {
   topics: "pollerama:lastTopicsTab",
   "follow-packs": "pollerama:followPacksSource",
   articles: "pollerama:articlesSource",
+  music: "pollerama:musicSource",
 };
 
 const FEED_DEFAULT_SUB: Record<string, string> = {
@@ -73,6 +80,7 @@ const FEED_DEFAULT_SUB: Record<string, string> = {
   topics: "interests",
   "follow-packs": "global",
   articles: "global",
+  music: "discover",
 };
 
 const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = [
@@ -81,6 +89,7 @@ const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = 
   { value: "topics",       label: "Topics",       Icon: TagIcon },
   { value: "notes",        label: "Notes",        Icon: ArticleIcon },
   { value: "articles",     label: "Articles",     Icon: BookIcon },
+  { value: "music",        label: "Music",        Icon: MusicNoteIcon },
   { value: "movies",       label: "Movies",       Icon: MovieIcon },
   { value: "follow-packs", label: "Packs",        Icon: PeopleIcon },
 ];

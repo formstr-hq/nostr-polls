@@ -59,6 +59,9 @@ import MoviesFeed from "./components/Feed/MoviesFeed";
 import FollowPacksFeed from "./components/Feed/FollowPacksFeed";
 import FollowPackDetail from "./components/FollowPacks/FollowPackDetail";
 import ArticlesFeed from "./components/Feed/ArticlesFeed";
+import MusicFeed from "./components/Feed/MusicFeed";
+import { PlaybackProvider } from "./contexts/PlaybackContext";
+import MiniPlayer from "./components/Music/MiniPlayer";
 import ArticleDetail from "./components/Articles/ArticleDetail";
 import MoviePage from "./components/Movies/MoviePage";
 import { Nip89Provider } from "./contexts/Nip89Context";
@@ -224,6 +227,7 @@ function AppContent() {
             <Route path="follow-packs/:naddr" element={<FollowPackDetail />} />
             <Route path="articles" element={<ArticlesFeed />} />
             <Route path="articles/:naddr" element={<ArticleDetail />} />
+            <Route path="music" element={<MusicFeed />} />
 
             <Route element={<Outlet />}>
               <Route path="movies" element={<MoviesFeed />} />
@@ -244,6 +248,9 @@ function AppContent() {
         </Routes>
         </Box>
       </Box>
+      {/* Docked at the bottom of the app column: it shrinks the content above
+          rather than overlaying it, so it never hides feed items. */}
+      <MiniPlayer />
     </div>
   );
 }
@@ -314,6 +321,7 @@ const App: React.FC = () => {
                         <CssBaseline />
                         <MetadataProvider>
                           <VideoPlayerProvider>
+                            <PlaybackProvider>
                             <Router>
                               <AndroidNotifications />
                               <FeedScrollProvider>
@@ -323,6 +331,7 @@ const App: React.FC = () => {
                               </FeedScrollProvider>
                               <FloatingVideoPlayer />
                             </Router>
+                            </PlaybackProvider>
                           </VideoPlayerProvider>
                         </MetadataProvider>
                         </ReportsProvider>
