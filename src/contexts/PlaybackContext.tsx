@@ -2,9 +2,12 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
 } from "react";
+import { Capacitor } from "@capacitor/core";
+import { MusicPlayback } from "../plugins/musicPlayback";
 
 // A single unified track shape for everything the player can play: Nostr tracks
 // (kind 36787) and local device files alike. `sources` is the primary URL plus
@@ -22,6 +25,8 @@ interface PlaybackCtx {
   playing: boolean;
   position: number;
   duration: number;
+  /** 0.0–1.0. */
+  volume: number;
   hasNext: boolean;
   hasPrev: boolean;
   /** Play a list of tracks as a queue (enables next/prev across them). */
@@ -32,6 +37,7 @@ interface PlaybackCtx {
   next: () => void;
   prev: () => void;
   seek: (t: number) => void;
+  setVolume: (v: number) => void;
   stop: () => void;
 }
 
@@ -41,6 +47,7 @@ const PlaybackContext = createContext<PlaybackCtx>({
   playing: false,
   position: 0,
   duration: 0,
+  volume: 1,
   hasNext: false,
   hasPrev: false,
   playQueue: noop,
@@ -49,8 +56,21 @@ const PlaybackContext = createContext<PlaybackCtx>({
   next: noop,
   prev: noop,
   seek: noop,
+  setVolume: noop,
   stop: noop,
 });
+
+// On native, ExoPlayer in a foreground service does the actual playback (so it
+// keeps going when the app is backgrounded / closed) and owns the queue; this
+// context becomes a thin controller that mirrors native state. On web, the
+// <audio> element below is the engine.
+const NATIVE = Capacitor.isNativePlatform();
+
+const VOLUME_KEY = "pollerama:musicVolume";
+const initialVolume = (): number => {
+  const stored = Number(localStorage.getItem(VOLUME_KEY));
+  return isFinite(stored) && stored >= 0 && stored <= 1 ? stored : 1;
+};
 
 export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -66,6 +86,33 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolumeState] = useState<number>(initialVolume);
+  // Native next/prev availability (web derives these from the queue refs).
+  const [nav, setNav] = useState({ hasNext: false, hasPrev: false });
+
+  // ── Native: mirror ExoPlayer state pushed up from the service ──────────────
+  useEffect(() => {
+    if (!NATIVE) return;
+    const handles = [
+      MusicPlayback.addListener("sync", (s) => {
+        setPlaying(s.playing);
+        setDuration(s.duration);
+        setNav({ hasNext: s.hasNext, hasPrev: s.hasPrev });
+        const track = queueRef.current[s.index];
+        if (track) {
+          indexRef.current = s.index;
+          setCurrent(track);
+        }
+      }),
+      MusicPlayback.addListener("position", (s) => {
+        setPosition(s.position);
+        if (s.duration) setDuration(s.duration);
+      }),
+    ];
+    return () => {
+      handles.forEach((h) => h.then((l) => l.remove()));
+    };
+  }, []);
 
   const load = useCallback((index: number) => {
     const audio = audioRef.current;
@@ -80,45 +127,101 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
     audio.play().catch(() => setPlaying(false));
   }, []);
 
-  const playQueue = useCallback((tracks: PlaybackTrack[], startIndex = 0) => {
-    if (!tracks.length) return;
-    queueRef.current = tracks;
-    load(startIndex);
-  }, [load]);
+  const playQueue = useCallback(
+    (tracks: PlaybackTrack[], startIndex = 0) => {
+      if (!tracks.length) return;
+      queueRef.current = tracks;
+      if (NATIVE) {
+        indexRef.current = startIndex;
+        setCurrent(tracks[startIndex] ?? null);
+        setPosition(0);
+        setDuration(0);
+        void MusicPlayback.setQueue({
+          tracks: tracks.map((t) => ({
+            id: t.id,
+            sources: t.sources,
+            title: t.title,
+            artist: t.artist,
+            image: t.image,
+          })),
+          startIndex,
+        });
+        return;
+      }
+      load(startIndex);
+    },
+    [load]
+  );
 
-  const playTrack = useCallback((track: PlaybackTrack) => {
-    queueRef.current = [track];
-    load(0);
-  }, [load]);
+  const playTrack = useCallback(
+    (track: PlaybackTrack) => {
+      playQueue([track], 0);
+    },
+    [playQueue]
+  );
 
   const toggle = useCallback(() => {
+    if (NATIVE) {
+      if (!current) return;
+      if (playing) void MusicPlayback.pause();
+      else void MusicPlayback.play();
+      return;
+    }
     const audio = audioRef.current;
     if (!audio || !current) return;
     if (audio.paused) audio.play().catch(() => setPlaying(false));
     else audio.pause();
-  }, [current]);
+  }, [current, playing]);
 
   const next = useCallback(() => {
+    if (NATIVE) {
+      void MusicPlayback.skipNext();
+      return;
+    }
     if (indexRef.current + 1 < queueRef.current.length) load(indexRef.current + 1);
   }, [load]);
 
   const prev = useCallback(() => {
+    if (NATIVE) {
+      void MusicPlayback.skipPrev();
+      return;
+    }
     if (indexRef.current - 1 >= 0) load(indexRef.current - 1);
   }, [load]);
 
   const seek = useCallback((t: number) => {
+    if (NATIVE) {
+      setPosition(t);
+      void MusicPlayback.seekTo({ position: t });
+      return;
+    }
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = t;
     setPosition(t);
   }, []);
 
+  const setVolume = useCallback((v: number) => {
+    const clamped = Math.max(0, Math.min(1, v));
+    setVolumeState(clamped);
+    localStorage.setItem(VOLUME_KEY, String(clamped));
+    if (NATIVE) {
+      void MusicPlayback.setVolume({ volume: clamped });
+      return;
+    }
+    if (audioRef.current) audioRef.current.volume = clamped;
+  }, []);
+
   const stop = useCallback(() => {
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
+    if (NATIVE) {
+      void MusicPlayback.stop();
+    } else {
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      }
     }
     queueRef.current = [];
     indexRef.current = -1;
@@ -126,10 +229,12 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
     setPlaying(false);
     setPosition(0);
     setDuration(0);
+    setNav({ hasNext: false, hasPrev: false });
   }, []);
 
   // On a load error, fall through to the next mirror; give up only when every
-  // source for the current track has failed.
+  // source for the current track has failed. (Web only — native does this in
+  // the service.)
   const handleError = useCallback(() => {
     const audio = audioRef.current;
     const track = queueRef.current[indexRef.current];
@@ -142,8 +247,10 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, []);
 
-  const hasNext = indexRef.current + 1 < queueRef.current.length;
-  const hasPrev = indexRef.current > 0;
+  const hasNext = NATIVE
+    ? nav.hasNext
+    : indexRef.current + 1 < queueRef.current.length;
+  const hasPrev = NATIVE ? nav.hasPrev : indexRef.current > 0;
 
   return (
     <PlaybackContext.Provider
@@ -152,6 +259,7 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
         playing,
         position,
         duration,
+        volume,
         hasNext,
         hasPrev,
         playQueue,
@@ -160,22 +268,32 @@ export const PlaybackProvider: React.FC<{ children: React.ReactNode }> = ({
         next,
         prev,
         seek,
+        setVolume,
         stop,
       }}
     >
       {children}
-      {/* One audio element for the whole app. Rendered above the Router so it
-          keeps playing as the user navigates between feeds. */}
-      <audio
-        ref={audioRef}
-        preload="metadata"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => next()}
-        onTimeUpdate={(e) => setPosition((e.target as HTMLAudioElement).currentTime)}
-        onLoadedMetadata={(e) => setDuration((e.target as HTMLAudioElement).duration)}
-        onError={handleError}
-      />
+      {/* One audio element for the whole app, used on web. Rendered above the
+          Router so it keeps playing as the user navigates between feeds. On
+          native this stays idle — ExoPlayer in the service is the engine. */}
+      {!NATIVE && (
+        <audio
+          ref={audioRef}
+          preload="metadata"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => next()}
+          onTimeUpdate={(e) =>
+            setPosition((e.target as HTMLAudioElement).currentTime)
+          }
+          onLoadedMetadata={(e) => {
+            const el = e.target as HTMLAudioElement;
+            el.volume = volume;
+            setDuration(el.duration);
+          }}
+          onError={handleError}
+        />
+      )}
     </PlaybackContext.Provider>
   );
 };

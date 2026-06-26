@@ -7,8 +7,8 @@ android {
         applicationId "com.formstr.pollerama"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 77
-        versionName "1.9.5"
+        versionCode 78
+        versionName "1.10.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -52,6 +52,10 @@ dependencies {
     implementation project(':capacitor-cordova-android-plugins')
     implementation "androidx.work:work-runtime:2.9.0"
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    // Background music playback: ExoPlayer engine + MediaSession (lock-screen /
+    // notification controls, headset buttons) hosted in a foreground service.
+    implementation "androidx.media3:media3-exoplayer:1.4.1"
+    implementation "androidx.media3:media3-session:1.4.1"
 }
 
 apply from: 'capacitor.build.gradle'

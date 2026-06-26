@@ -78,11 +78,45 @@ Web side built and user-verified. Android MediaStore plugin written but **untest
   (`maxSdkVersion=32`). The plugin's `@Permission` alias lists both strings; the
   granted-check uses the OS-correct one.
 
+### Background playback (native) — written, untested
+Music keeps playing when the app is backgrounded or swiped from recents, with
+lock-screen / notification controls and headset-button handling.
+- `PlaybackService.java` — a Media3 `MediaSessionService` hosting `ExoPlayer` +
+  `MediaSession`. Owns the queue natively (auto-advance, next/prev), does the
+  per-item fallback-mirror retry on player error, ticks position 1×/s, and
+  forwards state to the plugin. `onTaskRemoved` keeps the service alive while
+  playing and stops it when paused.
+- `MusicPlaybackPlugin.java` (Capacitor plugin `MusicPlayback`) — relays
+  setQueue/play/pause/skipNext/skipPrev/seekTo/setVolume/stop to the service and
+  emits `sync` / `position` events to JS. Stages the queue + boots the service
+  when first asked (`startForegroundService` → `flushPending`).
+- Registered in `MainActivity.java`; deps in `app/build.gradle`
+  (`media3-exoplayer` + `media3-session` 1.4.1); manifest gets the service
+  declaration + `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_MEDIA_PLAYBACK`.
+- JS: `src/plugins/musicPlayback.ts` bridge; `PlaybackContext.tsx` branches on
+  `Capacitor.isNativePlatform()` — native routes commands to the plugin and
+  mirrors state from its events; web keeps the `<audio>` engine. Positions are
+  in seconds on both sides.
+
+### Volume control (web + native)
+`PlaybackContext` exposes `volume` + `setVolume` (persisted to
+`localStorage["pollerama:musicVolume"]`; `audio.volume` on web,
+`player.setVolume` native). `MiniPlayer` has a volume icon → popover with a
+vertical slider + mute toggle.
+
 **To build/test native**
 ```
 npx cap sync android
 npx cap run android        # or build the APK in Android Studio
 ```
+Background-playback checks, in priority order:
+1. Play a track, press Home / lock the screen → audio continues; a media
+   notification with cover art + play/pause/skip appears (and lock-screen
+   controls).
+2. Swipe the app from recents **while playing** → keeps playing; **while paused**
+   → service + notification go away.
+3. Headset/Bluetooth play-pause buttons and "becoming noisy" (unplug → pause).
+4. Volume slider in the MiniPlayer changes ExoPlayer output.
 Verify on device, in priority order:
 1. **`content://` playback via `Capacitor.convertFileSrc`** — riskiest unknown. If
    tracks list but won't play, the local server isn't resolving content URIs; add a

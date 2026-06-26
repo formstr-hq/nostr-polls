@@ -1,3 +1,11 @@
+# 1.10.0
+
+- New Music feed: discover tracks from across Nostr and from people you follow, with a built-in player. A mini player docks at the bottom and keeps playing as you move between feeds.
+- Background playback on Android: music keeps playing when you leave the app or lock the screen, with play/pause/skip controls on the lock screen and notification, plus headphone-button support.
+- Volume control: set the playback volume right from the mini player, and it's remembered for next time.
+- Play your own music: browse and play the audio already on your device (Android), or add local files in the browser.
+- Search now finds more: full-text search across the network returns notes, profiles, and polls.
+
 # 1.9.5
 
 - Direct messages now arrive on time on Android: gift-wrapped DMs (which carry a randomized, sometimes back-dated timestamp) were being skipped by the background notifier, so messages could show up days late or not at all — they're now caught and notified as they land.

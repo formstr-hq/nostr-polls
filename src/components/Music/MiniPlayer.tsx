@@ -1,11 +1,15 @@
-import React from "react";
-import { Box, IconButton, Slider, Typography } from "@mui/material";
+import React, { useState } from "react";
+import { Box, IconButton, Popover, Slider, Typography } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import SkipNextIcon from "@mui/icons-material/SkipNext";
 import SkipPreviousIcon from "@mui/icons-material/SkipPrevious";
 import CloseIcon from "@mui/icons-material/Close";
 import MusicNoteIcon from "@mui/icons-material/MusicNote";
+import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import VolumeDownIcon from "@mui/icons-material/VolumeDown";
+import VolumeOffIcon from "@mui/icons-material/VolumeOff";
+import VolumeMuteIcon from "@mui/icons-material/VolumeMute";
 import { usePlayback } from "../../contexts/PlaybackContext";
 
 const formatTime = (s: number): string => {
@@ -24,14 +28,40 @@ const MiniPlayer: React.FC = () => {
     playing,
     position,
     duration,
+    volume,
     hasNext,
     hasPrev,
     toggle,
     next,
     prev,
     seek,
+    setVolume,
     stop,
   } = usePlayback();
+
+  // The volume control lives in a popover off a single icon so it stays compact
+  // on the packed bar. The icon doubles as a mute toggle, remembering the prior
+  // level to restore on unmute.
+  const [volAnchor, setVolAnchor] = useState<HTMLElement | null>(null);
+  const [premuteVolume, setPremuteVolume] = useState(volume || 1);
+
+  const toggleMute = () => {
+    if (volume > 0) {
+      setPremuteVolume(volume);
+      setVolume(0);
+    } else {
+      setVolume(premuteVolume || 1);
+    }
+  };
+
+  const VolumeIcon =
+    volume === 0
+      ? VolumeOffIcon
+      : volume < 0.33
+      ? VolumeMuteIcon
+      : volume < 0.66
+      ? VolumeDownIcon
+      : VolumeUpIcon;
 
   if (!current) return null;
 
@@ -124,6 +154,48 @@ const MiniPlayer: React.FC = () => {
         >
           {formatTime(duration)}
         </Typography>
+
+        <IconButton
+          size="small"
+          onClick={(e) => setVolAnchor(e.currentTarget)}
+          aria-label="Volume"
+        >
+          <VolumeIcon fontSize="small" />
+        </IconButton>
+        <Popover
+          open={Boolean(volAnchor)}
+          anchorEl={volAnchor}
+          onClose={() => setVolAnchor(null)}
+          anchorOrigin={{ vertical: "top", horizontal: "center" }}
+          transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+        >
+          <Box
+            sx={{
+              px: 1,
+              pt: 2,
+              pb: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 1,
+              height: 140,
+            }}
+          >
+            <Slider
+              size="small"
+              orientation="vertical"
+              value={volume}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(_, v) => setVolume(Array.isArray(v) ? v[0] : v)}
+              aria-label="Volume"
+            />
+            <IconButton size="small" onClick={toggleMute} aria-label={volume === 0 ? "Unmute" : "Mute"}>
+              <VolumeIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        </Popover>
 
         <IconButton size="small" onClick={stop} aria-label="Close player">
           <CloseIcon fontSize="small" />
