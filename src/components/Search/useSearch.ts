@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { nip19, nip05, Event } from "nostr-tools";
-import { collectOnce } from "../../dataLayer/collect";
+import { dataLayer } from "@formstr/local-relay";
 import { searchRelays } from "../../nostr";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -123,48 +123,64 @@ export function useSearch(): UseSearchReturn {
     };
   }, [query, inputType]);
 
-  // NIP-50 free-text search (debounced 400ms)
-  // Runs two parallel queries so profiles and notes each get their own result quota
+  // NIP-50 free-text search (debounced 400ms).
+  //
+  // We STREAM rather than batch: the worker replays its local store first (so
+  // already-cached notes matching the query paint immediately), then the live
+  // tail brings in results from the dedicated search relays as they arrive.
+  // Relay selection — routing the `search` filter to search-capable relays — is
+  // the worker's job; the app just declares the interest. `matchFilter` gates on
+  // the `search` field, so neither the cache replay nor a relay that ignores
+  // `search` can leak unrelated events into the results.
   useEffect(() => {
     if (inputType !== "text") return;
     const trimmed = query.trim();
     if (trimmed.length < 2) return;
 
     let cancelled = false;
+    let handle: { unobserve: () => void } | null = null;
+    let stopLoading: ReturnType<typeof setTimeout> | null = null;
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       setLoading(true);
       setError(null);
       setSearchedRelays(searchRelays);
 
-      try {
-        // NIP-50 free-text search. Relay selection (including routing the
-        // `search` filter to search-capable relays) is the worker's job now —
-        // the app just declares the interest and collects until EOSE/timeout.
-        const events = await collectOnce(
-          [{ search: trimmed, kinds: [0, 1, 1068], limit: 30 }],
-          { timeoutMs: 6000 }
-        ).catch(() => [] as Event[]);
+      const byId = new Map<string, Event>();
+      const commit = () => {
+        if (cancelled) return;
+        const events = Array.from(byId.values());
+        const byNewest = (a: Event, b: Event) => b.created_at - a.created_at;
+        setResults({
+          profiles: events.filter((e) => e.kind === 0),
+          notes: events.filter((e) => e.kind === 1).sort(byNewest),
+          polls: events.filter((e) => e.kind === 1068).sort(byNewest),
+        });
+      };
 
-        if (!cancelled) {
-          setResults({
-            profiles: events.filter((e) => e.kind === 0),
-            notes: events.filter((e) => e.kind === 1),
-            polls: events.filter((e) => e.kind === 1068),
-          });
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setError("Search failed. Try again.");
-        }
-      } finally {
+      handle = dataLayer.observe([{ search: trimmed, kinds: [0, 1, 1068], limit: 30 }], {
+        onEvent: (e: Event) => {
+          if (cancelled) return;
+          byId.set(e.id, e);
+          // First match (typically a local cache hit) clears the spinner so
+          // results show before the search relays have answered.
+          setLoading(false);
+          commit();
+        },
+      });
+
+      // Hard cap: stop the spinner even if nothing ever arrives (e.g. a query
+      // with no local matches and a slow/empty relay response).
+      stopLoading = setTimeout(() => {
         if (!cancelled) setLoading(false);
-      }
+      }, 6000);
     }, 400);
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      if (stopLoading) clearTimeout(stopLoading);
+      handle?.unobserve();
     };
   }, [query, inputType]);
 

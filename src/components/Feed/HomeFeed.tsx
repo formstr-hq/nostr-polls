@@ -13,13 +13,14 @@ import { Notes } from "../Notes";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import { ArticleCard } from "../Articles/ArticleCard";
 import RepostsCard from "./NotesFeed/components/RepostedNoteCard";
+import { MusicCard, KIND_MUSIC } from "../Music/MusicCard";
 
 const KIND_NOTE = 1;
 const KIND_POLL = 1068;
 const KIND_ARTICLE = 30023;
 const KIND_REPOST = 6;
 const KIND_RESPONSE = [1018, 1070];
-const FEED_KINDS = [KIND_NOTE, KIND_POLL, KIND_ARTICLE, KIND_REPOST];
+const FEED_KINDS = [KIND_NOTE, KIND_POLL, KIND_ARTICLE, KIND_REPOST, KIND_MUSIC];
 
 const STORAGE_KEY = "pollerama:homeSource";
 // Per-kind page size. Notes vastly outnumber polls/articles, so giving each
@@ -65,6 +66,8 @@ const HomeItem = React.memo(
       inner = <PollResponseForm pollEvent={event} userResponse={userResponse} />;
     } else if (event.kind === KIND_ARTICLE) {
       inner = <ArticleCard event={event} />;
+    } else if (event.kind === KIND_MUSIC) {
+      inner = <MusicCard event={event} />;
     } else {
       inner = <Notes event={event} />;
     }

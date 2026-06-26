@@ -1467,10 +1467,10 @@
   resolved "https://registry.npmjs.org/@fontsource-variable/raleway/-/raleway-5.2.8.tgz"
   integrity sha512-PahqGI7bkz4a80m91Jt65DRsuFQmRip5vGDbI9sChVSKjLrdDfXbeGIwnTPi/ZVCOoQrbLnqzBOLQpLohnz+WA==
 
-"@formstr/local-relay@^0.4.1":
-  version "0.4.1"
-  resolved "https://registry.yarnpkg.com/@formstr/local-relay/-/local-relay-0.4.1.tgz#1096a4f73e261dd5fc3e607c1726e2d7e670a366"
-  integrity sha512-oUYWTOu97TY72ITeTl3Cmc+oz1bIQmmE2DicirdcGWS0BtMOIqsyXnXtIzIY2GgYf3YlxdziKD5n5zqAC/WsFw==
+"@formstr/local-relay@^0.4.2":
+  version "0.4.2"
+  resolved "https://registry.yarnpkg.com/@formstr/local-relay/-/local-relay-0.4.2.tgz#bddca1d0e8628057a6515556595857a1be4c5658"
+  integrity sha512-qqAVgg9+U3VU5wtDCF61A28mpHvRNNBtICn/lSrXhzLZPes2SwA8mcI+8vbbmdO57y8DwNIAfhs71ea9sfNKMw==
   dependencies:
     nostr-tools "^2.23.5"
 

@@ -17,7 +17,7 @@ import {
   type Event,
 } from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
-import { defaultRelays } from "../nostr";
+import { defaultRelays, searchRelays } from "../nostr";
 import { notifyRelayRefresh, subscribeRelayRefresh } from "./relayRefresh";
 
 let started = false;
@@ -71,6 +71,12 @@ export function bootstrapDataLayer(): DataLayer {
   // interests (DMs/kind-1059, mentions, "global") get their LIVE subscriptions on.
   // Outbox routing per author (kind-10002) happens inside the worker on top of this.
   client.setUserRelays(defaultRelays);
+
+  // NIP-50 free-text search relays. The worker routes `{ search }` interests to
+  // these specifically — the general feed/outbox relays mostly ignore the
+  // `search` field, so without this, search goes dark. A routing-policy input,
+  // applied once at boot (the search relay set is static, not per-account).
+  client.setSearchRelays(searchRelays);
 
   // Feed the user's OWN relays into the worker so DMs are received in REAL TIME.
   // Two ROUTING-POLICY inputs, kept separate (local-relay >= 0.4.0):
