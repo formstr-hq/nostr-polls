@@ -46,8 +46,11 @@ interface LocalTrack {
   durationMs?: number;
   // Content fingerprint — present for web entries added with the new store; lets a
   // track be referenced from a playlist. Absent for native (MediaStore) tracks and
-  // legacy entries, which therefore don't offer "add to playlist".
+  // legacy entries.
   fingerprint?: string;
+  // Native (Android MediaStore) content:// URI — stable per-file and directly
+  // playable, so it's what a playlist stores for a native track. Absent on web.
+  uri?: string;
   // Display-only album-art URL (native: convertFileSrc'd content URI). Absent on
   // web and for native tracks with no embedded cover.
   artworkUrl?: string;
@@ -128,6 +131,9 @@ const LocalMusic: React.FC<LocalMusicProps> = ({ header }) => {
           artist: t.artist && t.artist !== "<unknown>" ? t.artist : undefined,
           album: t.album && t.album !== "<unknown>" ? t.album : undefined,
           durationMs: t.durationMs,
+          // Keep the content:// URI so the track can be added to a playlist (which
+          // stores the URI directly — it's stable and playable on this device).
+          uri: t.uri,
           // Album art DOES go through the WebView (an <img>), so convertFileSrc is
           // correct here — unlike the audio URI above.
           artworkUrl: t.artworkUri
@@ -415,12 +421,16 @@ const LocalMusic: React.FC<LocalMusicProps> = ({ header }) => {
                     {duration}
                   </Typography>
                 )}
-                {t.fingerprint && (
+                {(t.fingerprint || t.uri) && (
                   <Box onClick={(e) => e.stopPropagation()}>
                     <AddToPlaylistButton
                       track={{
                         type: "local",
-                        fingerprint: t.fingerprint,
+                        // Native tracks ref by content:// URI; web tracks by
+                        // content fingerprint. Exactly one is set.
+                        ...(t.uri
+                          ? { uri: t.uri }
+                          : { fingerprint: t.fingerprint }),
                         title: t.title,
                         artist: t.artist,
                         durationMs: t.durationMs,

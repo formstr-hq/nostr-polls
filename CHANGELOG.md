@@ -1,3 +1,11 @@
+# 1.11.0
+
+- Add your own songs to playlists on Android: local tracks from your device can now be added to any playlist, right alongside Nostr tracks.
+- Download tracks: every track in the Music feed now has a download button — saved straight to your device on Android.
+- A fresh coat of paint: every color theme now has a matching accent color, used across the app — the floating create button, sub-navigation, tabs, switches and sliders — so your chosen theme shows up in more places.
+- Make your own theme: pick your own primary and accent colors in Appearance settings to build a custom theme.
+- Images in comments: attach an image or video to a comment, or paste one straight from your clipboard, and preview your comment inline before you post it.
+
 # 1.10.3
 
 - Playlists: build your own playlists right on your device — no account needed — mixing tracks from Nostr and your own local files. Create, rename, reorder, shuffle, and "play all".

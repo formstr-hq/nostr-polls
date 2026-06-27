@@ -12,13 +12,16 @@ export interface ColorPreset {
   lightBg: string;
   /** Dark-mode background. All presets use OLED black (#000000). */
   darkBg: string;
-  /** Optional accent (MUI `secondary`) colors; default to neutral grey. */
+  /** Accent (MUI `secondary`) colors — complements the primary; used throughout. */
   lightSecondary?: string;
   darkSecondary?: string;
 }
 
 /** OLED-friendly pure black used as the dark background for every preset. */
-const OLED_BLACK = '#000000';
+export const OLED_BLACK = '#000000';
+
+/** Neutral light background used for custom themes (matches the warm-grey presets). */
+export const DEFAULT_LIGHT_BG = '#f5f4f1';
 
 export const FONT_PRESETS: FontPreset[] = [
   {
@@ -55,6 +58,9 @@ export const COLOR_PRESETS: ColorPreset[] = [
     darkPrimary: '#FAD13F',
     lightBg: '#f5f4f1',
     darkBg: OLED_BLACK,
+    // Warm amber-bronze — stays in the golden-hour family.
+    lightSecondary: '#B45309',
+    darkSecondary: '#F0A93B',
   },
   {
     id: 'ocean',
@@ -63,6 +69,9 @@ export const COLOR_PRESETS: ColorPreset[] = [
     darkPrimary: '#40c4ff',
     lightBg: '#f0f4f8',
     darkBg: OLED_BLACK,
+    // Sea-green/aqua — the shallows of the same ocean.
+    lightSecondary: '#0E7490',
+    darkSecondary: '#22D3EE',
   },
   {
     id: 'forest',
@@ -71,6 +80,9 @@ export const COLOR_PRESETS: ColorPreset[] = [
     darkPrimary: '#69f0ae',
     lightBg: '#f1f8f1',
     darkBg: OLED_BLACK,
+    // Bark/earth brown — the woodland floor beneath the canopy.
+    lightSecondary: '#92400E',
+    darkSecondary: '#D9A066',
   },
   {
     id: 'dusk',
@@ -79,6 +91,9 @@ export const COLOR_PRESETS: ColorPreset[] = [
     darkPrimary: '#e040fb',
     lightBg: '#f5f0f8',
     darkBg: OLED_BLACK,
+    // Twilight rose — the warm glow on the horizon at dusk.
+    lightSecondary: '#BE185D',
+    darkSecondary: '#F472B6',
   },
   {
     id: 'ember',
@@ -87,6 +102,9 @@ export const COLOR_PRESETS: ColorPreset[] = [
     darkPrimary: '#ff6d00',
     lightBg: '#fff5f0',
     darkBg: OLED_BLACK,
+    // Flame gold — the bright tips of a glowing ember.
+    lightSecondary: '#B45309',
+    darkSecondary: '#FBBF24',
   },
   {
     id: 'midnight',
@@ -95,6 +113,9 @@ export const COLOR_PRESETS: ColorPreset[] = [
     darkPrimary: '#ffffff',
     lightBg: '#ffffff',
     darkBg: OLED_BLACK,
+    // Deep night-sky indigo — the only color in the monochrome theme.
+    lightSecondary: '#3730A3',
+    darkSecondary: '#818CF8',
   },
   {
     id: 'crimson',
@@ -103,6 +124,9 @@ export const COLOR_PRESETS: ColorPreset[] = [
     darkPrimary: '#e35d6a',
     lightBg: '#f7f5f3',
     darkBg: OLED_BLACK,
+    // Regal gold — the classic companion to deep crimson.
+    lightSecondary: '#B8860B',
+    darkSecondary: '#E0B84A',
   },
   {
     id: 'cyberpunk',
@@ -122,4 +146,27 @@ export function getFontPreset(id: string): FontPreset {
 
 export function getColorPreset(id: string): ColorPreset {
   return COLOR_PRESETS.find(c => c.id === id) ?? COLOR_PRESETS[0];
+}
+
+/** Id of the user-defined "make your own" theme. */
+export const CUSTOM_PRESET_ID = 'custom';
+
+/** Fallback colors for a brand-new custom theme (before the user picks any). */
+export const DEFAULT_CUSTOM_PRIMARY = '#7c4dff';
+export const DEFAULT_CUSTOM_SECONDARY = '#00bcd4';
+
+// A ColorPreset from two user-chosen colors. The same primary/secondary are used in
+// both light and dark mode (the user picks the hue; the background stays neutral
+// light / OLED black). Keeps the "make your own" UI to just two swatches.
+export function buildCustomPreset(primary: string, secondary: string): ColorPreset {
+  return {
+    id: CUSTOM_PRESET_ID,
+    name: 'Custom',
+    lightPrimary: primary,
+    darkPrimary: primary,
+    lightBg: DEFAULT_LIGHT_BG,
+    darkBg: OLED_BLACK,
+    lightSecondary: secondary,
+    darkSecondary: secondary,
+  };
 }

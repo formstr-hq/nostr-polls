@@ -49,6 +49,7 @@ import {
   trackRefKey,
 } from "./playlistModel";
 import { hasFingerprint, resolveByFingerprint } from "./localTrackResolver";
+import { isAndroidNative } from "../../utils/platform";
 
 const formatDuration = (ms?: number): string => {
   if (!ms || ms <= 0) return "";
@@ -89,7 +90,7 @@ const PlaylistDetail: React.FC = () => {
 
   const playlist = playlistId ? playlists?.get(playlistId) : undefined;
 
-  // coord → fetched track event; fingerprint → available-on-this-device.
+  // coord → fetched track event; trackRefKey → local-track-available-on-this-device.
   const [events, setEvents] = useState<Map<string, Event>>(new Map());
   const [localAvail, setLocalAvail] = useState<Map<string, boolean>>(new Map());
   const [resolving, setResolving] = useState(false);
@@ -129,7 +130,15 @@ const PlaylistDetail: React.FC = () => {
     void (async () => {
       const avail = new Map<string, boolean>();
       for (const t of playlist.tracks) {
-        if (t.type === "local") avail.set(t.fingerprint, await hasFingerprint(t.fingerprint));
+        if (t.type !== "local") continue;
+        // Native (uri) tracks live on this Android device — present iff we're the
+        // native app. Web (fingerprint) tracks are probed against the local store.
+        const present = t.uri
+          ? isAndroidNative()
+          : t.fingerprint
+          ? await hasFingerprint(t.fingerprint)
+          : false;
+        avail.set(trackRefKey(t), present);
       }
       if (alive) setLocalAvail(avail);
     })();
@@ -161,7 +170,7 @@ const PlaylistDetail: React.FC = () => {
         title: ref.title,
         artist: ref.artist,
         durationMs: ref.durationMs,
-        available: localAvail.get(ref.fingerprint) ?? false,
+        available: localAvail.get(trackRefKey(ref)) ?? false,
       };
     });
   }, [playlist, events, localAvail]);
@@ -173,11 +182,14 @@ const PlaylistDetail: React.FC = () => {
     queueIndexByRow: Map<number, number>;
   }> => {
     const localResolved = await Promise.all(
-      rows.map((r) =>
-        r.ref.type === "local" && r.available
-          ? resolveByFingerprint(r.ref.fingerprint)
-          : Promise.resolve(null)
-      )
+      rows.map((r) => {
+        if (r.ref.type !== "local" || !r.available) return Promise.resolve(null);
+        // Native: the content:// URI is the playable source as-is. Web: resolve the
+        // fingerprint to a handle/blob (may prompt for FSA read permission).
+        if (r.ref.uri) return Promise.resolve({ id: r.ref.uri, url: r.ref.uri });
+        if (r.ref.fingerprint) return resolveByFingerprint(r.ref.fingerprint);
+        return Promise.resolve(null);
+      })
     );
     const queue: PlaybackTrack[] = [];
     const queueIndexByRow = new Map<number, number>();
@@ -191,7 +203,11 @@ const PlaylistDetail: React.FC = () => {
       } else {
         const resolved = localResolved[i];
         if (!resolved) return;
-        localIdByFp.current.set(r.ref.fingerprint, resolved.id);
+        // Web tracks resolve to a generated store id; remember it so we can match
+        // playback state back to the row. Native tracks use the URI as the id.
+        if (r.ref.fingerprint) {
+          localIdByFp.current.set(r.ref.fingerprint, resolved.id);
+        }
         queueIndexByRow.set(i, queue.length);
         queue.push({
           id: resolved.id,
@@ -221,7 +237,8 @@ const PlaylistDetail: React.FC = () => {
     (r: Row): boolean => {
       if (!current) return false;
       if (r.ref.type === "nostr") return current.id === r.ref.coord;
-      return current.id === localIdByFp.current.get(r.ref.fingerprint);
+      if (r.ref.uri) return current.id === r.ref.uri;
+      return current.id === localIdByFp.current.get(r.ref.fingerprint ?? "");
     },
     [current]
   );

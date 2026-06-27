@@ -1,18 +1,42 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { FONT_PRESETS, COLOR_PRESETS, getFontPreset } from '../styles/themes';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  FONT_PRESETS,
+  COLOR_PRESETS,
+  ColorPreset,
+  getFontPreset,
+  getColorPreset,
+  buildCustomPreset,
+  CUSTOM_PRESET_ID,
+  DEFAULT_CUSTOM_PRIMARY,
+  DEFAULT_CUSTOM_SECONDARY,
+} from '../styles/themes';
+
+interface CustomColors {
+  primary: string;
+  secondary: string;
+}
 
 interface AppearanceContextType {
   fontPresetId: string;
   colorPresetId: string;
+  /** The resolved color preset for the current selection (handles "custom"). */
+  colorPreset: ColorPreset;
+  /** The user's saved custom colors (editable in the "make your own" section). */
+  customColors: CustomColors;
   setFontPreset: (id: string) => void;
   setColorPreset: (id: string) => void;
+  /** Save custom primary/secondary and switch to the custom theme. */
+  setCustomColors: (colors: CustomColors) => void;
 }
 
 const AppearanceContext = createContext<AppearanceContextType>({
   fontPresetId: 'shantell',
   colorPresetId: 'golden',
+  colorPreset: COLOR_PRESETS[0],
+  customColors: { primary: DEFAULT_CUSTOM_PRIMARY, secondary: DEFAULT_CUSTOM_SECONDARY },
   setFontPreset: () => {},
   setColorPreset: () => {},
+  setCustomColors: () => {},
 });
 
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
@@ -30,6 +54,10 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     localStorage.setItem('pollerama:colorPreset', random);
     return random;
   });
+  const [customColors, setCustomColorsState] = useState<CustomColors>(() => ({
+    primary: localStorage.getItem('pollerama:customPrimary') || DEFAULT_CUSTOM_PRIMARY,
+    secondary: localStorage.getItem('pollerama:customSecondary') || DEFAULT_CUSTOM_SECONDARY,
+  }));
 
   useEffect(() => {
     document.body.style.fontFamily = getFontPreset(fontPresetId).fontFamily;
@@ -45,8 +73,35 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     setColorPresetId(id);
   }, []);
 
+  // Persist the custom colors and select the custom theme so the change is visible.
+  const setCustomColors = useCallback((colors: CustomColors) => {
+    localStorage.setItem('pollerama:customPrimary', colors.primary);
+    localStorage.setItem('pollerama:customSecondary', colors.secondary);
+    localStorage.setItem('pollerama:colorPreset', CUSTOM_PRESET_ID);
+    setCustomColorsState(colors);
+    setColorPresetId(CUSTOM_PRESET_ID);
+  }, []);
+
+  const colorPreset = useMemo(
+    () =>
+      colorPresetId === CUSTOM_PRESET_ID
+        ? buildCustomPreset(customColors.primary, customColors.secondary)
+        : getColorPreset(colorPresetId),
+    [colorPresetId, customColors]
+  );
+
   return (
-    <AppearanceContext.Provider value={{ fontPresetId, colorPresetId, setFontPreset, setColorPreset }}>
+    <AppearanceContext.Provider
+      value={{
+        fontPresetId,
+        colorPresetId,
+        colorPreset,
+        customColors,
+        setFontPreset,
+        setColorPreset,
+        setCustomColors,
+      }}
+    >
       {children}
     </AppearanceContext.Provider>
   );

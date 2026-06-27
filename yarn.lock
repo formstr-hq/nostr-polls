@@ -1180,6 +1180,13 @@
   resolved "https://registry.npmjs.org/@capacitor/device/-/device-8.0.0.tgz"
   integrity sha512-qFmlTDnAvUwIg93YUF3u3ovqpDFqUl2RFkf2dVIF8Py7vTA+GjQIHQWITcBKfeUENoVXPNn04t5nxg5mAkjNEA==
 
+"@capacitor/filesystem@^8.0.0":
+  version "8.1.2"
+  resolved "https://registry.yarnpkg.com/@capacitor/filesystem/-/filesystem-8.1.2.tgz#f133f2f610b8d70427e8f124071c0f0228220737"
+  integrity sha512-doaaMfGoFR2hWU6aV6u83I+5ZsGyJVq+Gz4r9lMpJzUKMm1eMu0hLnFdV1aXZlU9FlK/RndFrVD8oRZfNOqWgQ==
+  dependencies:
+    "@capacitor/synapse" "^1.0.4"
+
 "@capacitor/local-notifications@^8.0.1":
   version "8.0.1"
   resolved "https://registry.npmjs.org/@capacitor/local-notifications/-/local-notifications-8.0.1.tgz"
@@ -1194,6 +1201,11 @@
   version "8.0.0"
   resolved "https://registry.npmjs.org/@capacitor/status-bar/-/status-bar-8.0.0.tgz"
   integrity sha512-aIj3bc7z8lfPgOen8HlrBrkfnxpFnh21OCx6jCUx4Mvv+B6eEkUQ49b32DOddgVfr+igRHLX2SYi7duqIsNDXg==
+
+"@capacitor/synapse@^1.0.4":
+  version "1.0.4"
+  resolved "https://registry.yarnpkg.com/@capacitor/synapse/-/synapse-1.0.4.tgz#c6beb33119d9656b1f04cb7783989fb78933ef6d"
+  integrity sha512-/C1FUo8/OkKuAT4nCIu/34ny9siNHr9qtFezu4kxm6GY1wNFxrCFWjfYx5C1tUhVGz3fxBABegupkpjXvjCHrw==
 
 "@cspotcode/source-map-support@^0.8.0":
   version "0.8.1"

@@ -244,9 +244,9 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
                   sx={{
                     fontSize: "0.875rem",
                     "&.Mui-selected": {
-                      color: "primary.main",
+                      color: "secondary.main",
                       fontWeight: 600,
-                      bgcolor: (t) => alpha(t.palette.primary.main, 0.1),
+                      bgcolor: (t) => alpha(t.palette.secondary.main, 0.1),
                     },
                   }}
                 >
@@ -338,16 +338,18 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
                         borderRadius: 2,
                         cursor: item.disabled ? "default" : "pointer",
                         opacity: item.disabled ? 0.38 : 1,
-                        color: item.active ? "primary.main" : "text.secondary",
+                        // Sub-nav uses the secondary accent (the top-level feed
+                        // selection above stays primary).
+                        color: item.active ? "secondary.main" : "text.secondary",
                         fontWeight: item.active ? 600 : 400,
                         bgcolor: item.active
-                          ? alpha(theme.palette.primary.main, 0.08)
+                          ? alpha(theme.palette.secondary.main, 0.08)
                           : "transparent",
                         "&:hover": item.disabled
                           ? {}
                           : {
                               bgcolor: item.active
-                                ? alpha(theme.palette.primary.main, 0.14)
+                                ? alpha(theme.palette.secondary.main, 0.14)
                                 : alpha(theme.palette.text.primary, 0.05),
                             },
                         transition: "background-color 0.15s, color 0.15s",

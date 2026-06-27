@@ -21,11 +21,18 @@ export interface NostrTrackRef {
   relay?: string;
 }
 
-// A local device file, referenced by its content fingerprint plus enough metadata
-// to render the row even when the file isn't present (e.g. on another device).
+// A local device file, referenced by enough metadata to render the row even when
+// the file isn't present (e.g. on another device). Identity comes from one of:
+//   • `fingerprint` — web tracks: the SHA-256 of the file bytes, matched back to a
+//     handle/blob in the IndexedDB store (browser File handles aren't serializable,
+//     so we can't store a path).
+//   • `uri` — Android tracks: the MediaStore `content://` URI, which is both stable
+//     per-file and directly playable, so native tracks need no separate store.
+// Exactly one is set per ref.
 export interface LocalTrackRef {
   type: "local";
-  fingerprint: string;
+  fingerprint?: string;
+  uri?: string;
   title: string;
   artist?: string;
   durationMs?: number;
@@ -39,7 +46,11 @@ export const isLocalRef = (r: PlaylistTrackRef): r is LocalTrackRef =>
 
 // Stable key for a track ref — dedupe within a playlist and React keys.
 export const trackRefKey = (ref: PlaylistTrackRef): string =>
-  ref.type === "nostr" ? `a:${ref.coord}` : `local:${ref.fingerprint}`;
+  ref.type === "nostr"
+    ? `a:${ref.coord}`
+    : ref.uri
+    ? `local:uri:${ref.uri}`
+    : `local:${ref.fingerprint}`;
 
 // The `<d>` portion of a track coordinate (`36787:<pubkey>:<d>`); `d` may itself
 // contain colons, so keep everything after the second one.

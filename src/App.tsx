@@ -48,7 +48,7 @@ import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider, Box, Fab } from "@mui/material";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import { buildTheme } from "./styles/theme";
-import { getFontPreset, getColorPreset } from "./styles/themes";
+import { getFontPreset } from "./styles/themes";
 
 import EventList from "./components/Feed/FeedsLayout";
 import NotesFeed from "./components/Feed/NotesFeed/components";
@@ -95,9 +95,8 @@ function AndroidNotifications() {
 
 // Reads appearance context and provides a dynamically built MUI theme
 function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
-  const { fontPresetId, colorPresetId } = useAppearance();
+  const { fontPresetId, colorPreset } = useAppearance();
   const fontPreset = getFontPreset(fontPresetId);
-  const colorPreset = getColorPreset(colorPresetId);
   const theme = useMemo(
     () => buildTheme(
       fontPreset.fontFamily,
@@ -108,8 +107,17 @@ function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
       colorPreset.lightSecondary,
       colorPreset.darkSecondary,
     ),
+    // Rebuild when the font, the selected preset, or (for the custom theme) the
+    // chosen colors change — hence keying on the resolved color values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fontPreset.id, colorPreset.id],
+    [
+      fontPreset.id,
+      colorPreset.id,
+      colorPreset.lightPrimary,
+      colorPreset.darkPrimary,
+      colorPreset.lightSecondary,
+      colorPreset.darkSecondary,
+    ],
   );
   return (
     <ThemeProvider theme={theme} modeStorageKey="pollerama-color-scheme">

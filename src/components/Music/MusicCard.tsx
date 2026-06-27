@@ -8,12 +8,15 @@ import {
   Slider,
   Chip,
   Stack,
+  Tooltip,
 } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import MusicNoteIcon from "@mui/icons-material/MusicNote";
+import DownloadIcon from "@mui/icons-material/Download";
 import { Event, nip19 } from "nostr-tools";
 import { useAppContext } from "../../hooks/useAppContext";
+import { useNotification } from "../../contexts/notification-context";
 import { usePlayback } from "../../contexts/PlaybackContext";
 import {
   KIND_MUSIC,
@@ -22,6 +25,7 @@ import {
   trackCoord,
 } from "./musicTrack";
 import AddToPlaylistButton from "./AddToPlaylistButton";
+import { downloadTrack } from "./downloadTrack";
 
 // Re-exported for the many call sites that import the music kind from here.
 export { KIND_MUSIC };
@@ -42,6 +46,7 @@ interface MusicCardProps {
 
 export const MusicCard: React.FC<MusicCardProps> = ({ event, onPlay }) => {
   const { fetchUserProfileThrottled, profiles } = useAppContext();
+  const { showNotification } = useNotification();
   const {
     current,
     playing,
@@ -85,6 +90,28 @@ export const MusicCard: React.FC<MusicCardProps> = ({ event, onPlay }) => {
     if (isCurrent) toggle();
     else if (onPlay) onPlay();
     else playTrack({ id: trackId, sources, title, artist: displayArtist, image });
+  };
+
+  const [downloading, setDownloading] = React.useState(false);
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    showNotification("Downloading…", "info", 2000);
+    try {
+      const result = await downloadTrack(sources[0], title, displayArtist);
+      if (result.status === "saved") {
+        showNotification(
+          result.location ? `Saved to ${result.location}` : "Download started",
+          "success"
+        );
+      } else {
+        showNotification("Opened in your browser", "info");
+      }
+    } catch {
+      showNotification("Couldn't download this track", "error");
+    } finally {
+      setDownloading(false);
+    }
   };
 
   // The scrubber is live only while this is the active track; otherwise it shows
@@ -181,6 +208,20 @@ export const MusicCard: React.FC<MusicCardProps> = ({ event, onPlay }) => {
             track={{ type: "nostr", coord: trackId }}
             sourceEventId={event.id}
           />
+          {playable && (
+            <Tooltip title="Download">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="Download track"
+                  disabled={downloading}
+                  onClick={handleDownload}
+                >
+                  <DownloadIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
         </Box>
 
         {genre && (
