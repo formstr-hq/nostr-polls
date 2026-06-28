@@ -1,3 +1,12 @@
+# 1.11.1
+
+- Articles now render embeds inline (notes, mentions, hashtags, YouTube, video, images, links, emoji) instead of plain text.
+- Full-screen images now have Download, Share and Copy-link buttons.
+- YouTube embeds show a thumbnail and loading bar while the player starts.
+- Comments now show the poll, article or track they're about inline.
+- Notifications now say "commented on your poll/article" instead of just "commented".
+- Fixed long links and text overflowing the screen on the Notifications and Profile pages.
+
 # 1.11.0
 
 - Add your own songs to playlists on Android: local tracks from your device can now be added to any playlist, right alongside Nostr tracks.
