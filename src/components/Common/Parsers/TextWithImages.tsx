@@ -10,6 +10,8 @@ import CloseIcon from "@mui/icons-material/Close";
 import { useTheme } from "@mui/material/styles";
 import BoltIcon from "@mui/icons-material/Bolt";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DownloadIcon from "@mui/icons-material/Download";
+import ShareIcon from "@mui/icons-material/Share";
 import { TranslationPopover } from "./../TranslationPopover";
 import TranslateIcon from "@mui/icons-material/Translate";
 import { isEmbeddableYouTubeUrl } from "../Utils";
@@ -44,9 +46,21 @@ const isVideoUrl = (url: string) =>
 const WIDEST_RATIO = 16 / 9;
 const TALLEST_RATIO = 4 / 5;
 
+// Derive a sensible download filename from an image URL.
+const filenameFromSrc = (src: string): string => {
+  try {
+    const path = new URL(src, window.location.href).pathname;
+    const last = path.split("/").pop();
+    if (last && last.includes(".")) return last;
+  } catch {
+    /* fall through */
+  }
+  return `image-${Date.now()}.jpg`;
+};
+
 // Stateful lightbox wrapper — must be a proper component (not an inline call)
 // so that useState is always called at a stable component boundary.
-const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, index }) => {
+export const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, index }) => {
   const [open, setOpen] = React.useState(false);
   // Aspect ratio of the preview box. Starts at the wide cap for a stable
   // initial layout, then snaps to the image's clamped natural ratio on load.
@@ -76,6 +90,58 @@ const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, inde
       window.history.back();
     }
   }, []);
+
+  // Save the image. Fetch as a blob so the browser/WebView downloads the file
+  // (the `download` attribute is ignored for cross-origin URLs); fall back to
+  // opening it in a new tab if the fetch is blocked by CORS.
+  const handleDownload = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const res = await fetch(src, { mode: "cors" });
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filenameFromSrc(src);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      window.open(src, "_blank", "noopener,noreferrer");
+    }
+  }, [src]);
+
+  // Native share sheet: prefer sharing the actual image file, fall back to the
+  // URL, then to copying the link if the Web Share API is unavailable.
+  const handleShare = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const res = await fetch(src, { mode: "cors" });
+      const blob = await res.blob();
+      const file = new File([blob], filenameFromSrc(src), { type: blob.type });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file] });
+        return;
+      }
+    } catch {
+      /* fall through to url/copy */
+    }
+    try {
+      if (navigator.share) {
+        await navigator.share({ url: src });
+        return;
+      }
+    } catch {
+      return; // user dismissed the share sheet
+    }
+    copyToClipboard(src);
+  }, [src]);
+
+  const handleCopyLink = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    copyToClipboard(src);
+  }, [src]);
 
   return (
     <>
@@ -141,6 +207,42 @@ const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ src, inde
             cursor: "zoom-out",
           }}
         >
+          {/* Action toolbar — reliable save/share/copy that works on web and in
+              the native WebView (where long-press-to-save is unavailable). */}
+          <Box
+            onClick={(e) => e.stopPropagation()}
+            sx={{
+              position: "absolute",
+              top: 12,
+              left: 12,
+              display: "flex",
+              gap: 1,
+              "& .MuiIconButton-root": {
+                color: "white",
+                bgcolor: "rgba(0,0,0,0.45)",
+                "&:hover": { bgcolor: "rgba(0,0,0,0.65)" },
+              },
+            }}
+          >
+            <Tooltip title="Download">
+              <IconButton size="small" onClick={handleDownload}>
+                <DownloadIcon />
+              </IconButton>
+            </Tooltip>
+            {typeof navigator !== "undefined" && "share" in navigator && (
+              <Tooltip title="Share">
+                <IconButton size="small" onClick={handleShare}>
+                  <ShareIcon />
+                </IconButton>
+              </Tooltip>
+            )}
+            <Tooltip title="Copy link">
+              <IconButton size="small" onClick={handleCopyLink}>
+                <ContentCopyIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+
           {/* Dedicated close button */}
           <IconButton
             onClick={(e) => { e.stopPropagation(); handleClose(); }}
@@ -491,6 +593,104 @@ const PlainTextRenderer = ({ part }: { part: string; key?: string }) => {
   return <React.Fragment>{part}</React.Fragment>;
 };
 
+// ---- Shared inline token renderer ----
+
+interface InlineTokenContext {
+  color: string;
+  profiles: Map<string, any> | undefined;
+  fetchUserProfileThrottled: (pubkey: string) => void;
+  emojiMap: Map<string, string>;
+}
+
+// Turns a single line of text into enriched inline nodes (images, video,
+// YouTube, links, hashtags, nostr entities, lightning invoices, custom emoji).
+// Shared by TextWithImages and RichText so both go through one parser set.
+function renderInlineTokens(
+  line: string,
+  lineIndex: number,
+  ctx: InlineTokenContext
+): { nodes: React.ReactNode[]; previewUrls: string[] } {
+  const { color, profiles, fetchUserProfileThrottled, emojiMap } = ctx;
+  const parts = line.split(/(\s+)/);
+  const previewUrls: string[] = [];
+
+  const nodes = parts.map((part, index) => {
+    const key = `${lineIndex}-${index}`;
+
+    // YouTube and video use hooks internally — render as proper JSX components
+    if (isEmbeddableYouTubeUrl(part)) {
+      return <YouTubePlayer key={key} url={part} />;
+    }
+    if (isVideoUrl(part)) {
+      return <InlineVideo key={key} src={part} />;
+    }
+
+    const parserResult =
+      ImageParser({ part, index }) ||
+      URLParser({ part, index, color }) ||
+      HashtagParser({ part, index, color }) ||
+      NostrParser({ part, index, profiles, fetchUserProfileThrottled, color }) ||
+      LightningInvoiceParser({ part, index, color }) ||
+      CustomEmojiParser({ part, index, emojiMap });
+
+    // Collect plain URLs that aren't already embedded as media
+    const urlMatch = part.match(urlRegex)?.[0];
+    if (
+      urlMatch &&
+      !isImageUrl(urlMatch) &&
+      !isVideoUrl(urlMatch) &&
+      !isEmbeddableYouTubeUrl(urlMatch) &&
+      !previewUrls.includes(urlMatch)
+    ) {
+      previewUrls.push(urlMatch);
+    }
+
+    return parserResult ?? <PlainTextRenderer part={part} key={key} />;
+  });
+
+  return { nodes, previewUrls };
+}
+
+// Builds an emoji shortcode→url map from an event's "emoji" tags.
+function emojiMapFromTags(tags?: string[][]): Map<string, string> {
+  const map = new Map<string, string>();
+  if (tags) {
+    for (const tag of tags) {
+      if (tag[0] === "emoji" && tag[1] && tag[2]) map.set(tag[1], tag[2]);
+    }
+  }
+  return map;
+}
+
+// Lightweight inline renderer: enriches a string with the same parsers as
+// TextWithImages but WITHOUT its chrome (translate button, link-preview cards,
+// per-line <br>). Used to render nostr/media tokens inside markdown text nodes
+// (e.g. NIP-23 articles) so markdown structure and inline embeds coexist.
+export const RichText: React.FC<{ text: string; tags?: string[][] }> = ({
+  text,
+  tags,
+}) => {
+  const theme = useTheme();
+  const { profiles, fetchUserProfileThrottled } = useAppContext();
+  const emojiMap = useMemo(() => emojiMapFromTags(tags), [tags]);
+  if (!text) return null;
+  const ctx: InlineTokenContext = {
+    color: theme.palette.primary.main,
+    profiles,
+    fetchUserProfileThrottled,
+    emojiMap,
+  };
+  return (
+    <>
+      {text.split(/\n/).map((line, lineIndex) => (
+        <React.Fragment key={lineIndex}>
+          {renderInlineTokens(line, lineIndex, ctx).nodes}
+        </React.Fragment>
+      ))}
+    </>
+  );
+};
+
 // ---- Main Component ----
 
 export const TextWithImages: React.FC<TextWithImagesProps> = ({
@@ -498,17 +698,7 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
   tags,
 }) => {
   const theme = useTheme();
-  const emojiMap = useMemo(() => {
-    const map = new Map<string, string>();
-    if (tags) {
-      for (const tag of tags) {
-        if (tag[0] === "emoji" && tag[1] && tag[2]) {
-          map.set(tag[1], tag[2]);
-        }
-      }
-    }
-    return map;
-  }, [tags]);
+  const emojiMap = useMemo(() => emojiMapFromTags(tags), [tags]);
   const [displayedText, setDisplayedText] = useState<string>(content ?? "");
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [shouldShowTranslate, setShouldShowTranslate] = useState(false);
@@ -571,54 +761,17 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
 
   const renderContent = (text: string) => {
     if (!text) return null;
-    const lines = text.split(/\n/);
-    return lines.map((line, lineIndex) => {
-      const parts = line.split(/(\s+)/);
-      const previewUrls: string[] = [];
-
-      const renderedParts = parts.map((part, index) => {
-        const key = `${lineIndex}-${index}`;
-
-        // YouTube and video use hooks internally — render as proper JSX components
-        if (isEmbeddableYouTubeUrl(part)) {
-          return <YouTubePlayer key={key} url={part} />;
-        }
-        if (isVideoUrl(part)) {
-          return <InlineVideo key={key} src={part} />;
-        }
-
-        const parserResult =
-          ImageParser({ part, index }) ||
-          URLParser({ part, index, color: theme.palette.primary.main }) ||
-          HashtagParser({ part, index, color: theme.palette.primary.main }) ||
-          NostrParser({
-            part,
-            index,
-            profiles,
-            fetchUserProfileThrottled,
-            color: theme.palette.primary.main,
-          }) ||
-          LightningInvoiceParser({ part, index, color: theme.palette.primary.main }) ||
-          CustomEmojiParser({ part, index, emojiMap });
-
-        // Collect plain URLs that aren't already embedded as media
-        const urlMatch = part.match(urlRegex)?.[0];
-        if (
-          urlMatch &&
-          !isImageUrl(urlMatch) &&
-          !isVideoUrl(urlMatch) &&
-          !isEmbeddableYouTubeUrl(urlMatch) &&
-          !previewUrls.includes(urlMatch)
-        ) {
-          previewUrls.push(urlMatch);
-        }
-
-        return parserResult ?? <PlainTextRenderer part={part} key={key} />;
-      });
-
+    const ctx: InlineTokenContext = {
+      color: theme.palette.primary.main,
+      profiles,
+      fetchUserProfileThrottled,
+      emojiMap,
+    };
+    return text.split(/\n/).map((line, lineIndex) => {
+      const { nodes, previewUrls } = renderInlineTokens(line, lineIndex, ctx);
       return (
         <div key={lineIndex} style={{ wordBreak: "break-word" }}>
-          {renderedParts}
+          {nodes}
           {previewUrls.map((url) => (
             <LinkPreviewCard key={url} url={url} />
           ))}

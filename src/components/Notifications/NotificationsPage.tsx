@@ -188,6 +188,8 @@ const NotificationsPage: React.FC = () => {
         const commentTitle =
           ev.kind === 1068 ? `${name} mentioned you in a poll` :
           ev.kind === 30023 ? `${name} mentioned you in an article` :
+          parsed.rootKind === 1068 ? `${name} commented on your poll` :
+          parsed.rootKind === 30023 ? `${name} commented on your article` :
           `${name} commented`;
         return {
           title: commentTitle,
@@ -233,7 +235,11 @@ const NotificationsPage: React.FC = () => {
           ? "mentioned you in a poll"
           : ev.kind === 30023
             ? "mentioned you in an article"
-            : "commented";
+            : parsed.rootKind === 1068
+              ? "commented on your poll"
+              : parsed.rootKind === 30023
+                ? "commented on your article"
+                : "commented";
       case "reaction":
         return `reacted ${parsed.reaction}`;
       case "zap":
@@ -306,7 +312,7 @@ const NotificationsPage: React.FC = () => {
   };
 
   return (
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", overflowX: "hidden" }}>
       {/* Header bar */}
       <Box
         sx={{
@@ -328,7 +334,7 @@ const NotificationsPage: React.FC = () => {
       </Box>
 
       {/* List */}
-      <Box sx={{ flex: 1, overflowY: "auto" }}>
+      <Box sx={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
         {rows.length === 0 && isLoading ? (
           <List disablePadding>
             {Array.from({ length: 6 }).map((_, i) => (
@@ -456,7 +462,7 @@ const NotificationsPage: React.FC = () => {
                     <ListItemText
                       primary={
                         getNotifActionText(ev) && parsed.fromPubkey ? (
-                          <Typography variant="subtitle2">
+                          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
                             <Box
                               component="span"
                               onClick={(e) => handleProfileClick(e, parsed.fromPubkey)}
@@ -481,7 +487,7 @@ const NotificationsPage: React.FC = () => {
                             {getNotifActionText(ev)}
                           </Typography>
                         ) : (
-                          <Typography variant="subtitle2">{title}</Typography>
+                          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>{title}</Typography>
                         )
                       }
                       secondary={
@@ -492,6 +498,7 @@ const NotificationsPage: React.FC = () => {
                               variant="body2"
                               color="text.secondary"
                               display="block"
+                              sx={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
                             >
                               {body}
                             </Typography>

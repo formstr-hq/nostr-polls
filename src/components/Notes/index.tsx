@@ -30,6 +30,7 @@ import { openProfileTab, signEvent } from "../../nostr";
 import { copyToClipboard, calculateTimeAgo } from "../../utils/common";
 import { getAppBaseUrl } from "../../utils/platform";
 import { PrepareNote } from "./PrepareNote";
+import { NaddrHandlers } from "../Common/Parsers/NaddrHandlers";
 import { FeedbackMenu } from "../FeedbackMenu";
 import { alpha, useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -84,15 +85,43 @@ export const Notes: React.FC<NotesProps> = ({
   let { user, requestLogin, setUser } = useUserContext();
   let { relays } = useRelays();
   let { fetchLatestContactList, unfollowContact } = useListContext();
-  const replyingTo = event.tags.findLast((t) => t[0] === "e")?.[1] || null;
+  // NIP-22 comments (kind 1111) scope their root with an uppercase "E" tag and
+  // carry no lowercase "e" for a top-level comment, so fall back to "E" to keep
+  // the referenced root (e.g. the poll being commented on) rendered inline.
+  const replyingTo =
+    event.tags.findLast((t) => t[0] === "e")?.[1] ||
+    event.tags.findLast((t) => t[0] === "E")?.[1] ||
+    null;
   const isValidHex = (s: string | null) => s && s.length === 64 && /^[0-9a-f]+$/i.test(s);
   const replyingToNevent = replyingTo && isValidHex(replyingTo)
     ? nip19.neventEncode({ id: replyingTo })
     : null;
-  const referencedEventId = event.tags.find((t) => t[0] === "e")?.[1] || null;
+  const referencedEventId =
+    event.tags.find((t) => t[0] === "e")?.[1] ||
+    event.tags.find((t) => t[0] === "E")?.[1] ||
+    null;
   const referencedEventNevent = referencedEventId && isValidHex(referencedEventId)
     ? nip19.neventEncode({ id: referencedEventId })
     : null;
+  // Addressable root reference — NIP-22 uppercase "A" (or NIP-10-style lowercase
+  // "a"): "kind:pubkey:identifier". Rendered inline via NaddrHandlers, which
+  // already displays articles (30023), music, and an NIP-89 fallback for any
+  // other addressable kind.
+  const referencedAddr =
+    event.tags.find((t) => t[0] === "a")?.[1] ||
+    event.tags.find((t) => t[0] === "A")?.[1] ||
+    null;
+  const referencedNaddr = (() => {
+    if (!referencedAddr) return null;
+    const [kindStr, pubkey, ...idParts] = referencedAddr.split(":");
+    const kind = Number(kindStr);
+    if (!Number.isFinite(kind) || !isValidHex(pubkey)) return null;
+    try {
+      return nip19.naddrEncode({ kind, pubkey, identifier: idParts.join(":") });
+    } catch {
+      return null;
+    }
+  })();
 
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -693,6 +722,12 @@ export const Notes: React.FC<NotesProps> = ({
               {replyingToNevent ? (
                 <div style={{ borderRadius: "2px", borderColor: "grey" }}>
                   <PrepareNote neventId={replyingToNevent} />
+                </div>
+              ) : null}
+
+              {referencedNaddr ? (
+                <div style={{ borderRadius: "2px", borderColor: "grey" }}>
+                  <NaddrHandlers encoded={referencedNaddr} />
                 </div>
               ) : null}
 

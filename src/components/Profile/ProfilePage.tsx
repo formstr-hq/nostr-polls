@@ -333,7 +333,9 @@ const ProfilePage: React.FC = () => {
         px: 2,
         py: { xs: 2, sm: 4 },
         height: "100%",
+        width: "100%",
         overflowY: "auto",
+        overflowX: "hidden",
       }}
     >
       {/* Profile Header */}
@@ -516,8 +518,8 @@ const ProfilePage: React.FC = () => {
 
           {/* Website */}
           {profile?.website && (
-            <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 0.5 }}>
-              <LinkIcon fontSize="small" color="action" />
+            <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
+              <LinkIcon fontSize="small" color="action" sx={{ flexShrink: 0 }} />
               <Typography
                 variant="body2"
                 component="a"
@@ -531,6 +533,9 @@ const ProfilePage: React.FC = () => {
                 sx={{
                   color: "primary.main",
                   textDecoration: "none",
+                  minWidth: 0,
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
                   "&:hover": { textDecoration: "underline" },
                 }}
               >
