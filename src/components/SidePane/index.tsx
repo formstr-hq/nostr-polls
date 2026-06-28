@@ -1,9 +1,7 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   Box,
   IconButton,
-  Menu,
-  MenuItem,
   Tooltip,
   Typography,
   useMediaQuery,
@@ -19,69 +17,34 @@ import MovieIcon from "@mui/icons-material/Movie";
 import MusicNoteIcon from "@mui/icons-material/MusicNote";
 import PeopleIcon from "@mui/icons-material/People";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ExploreIcon from "@mui/icons-material/Explore";
+import PublicIcon from "@mui/icons-material/Public";
+import HubIcon from "@mui/icons-material/Hub";
+import FavoriteIcon from "@mui/icons-material/FavoriteBorder";
+import BoltIcon from "@mui/icons-material/Bolt";
+import InterestsIcon from "@mui/icons-material/Interests";
+import BookmarkIcon from "@mui/icons-material/BookmarkBorder";
+import SmartphoneIcon from "@mui/icons-material/Smartphone";
+import ViewListIcon from "@mui/icons-material/ViewList";
 import { SvgIconComponent } from "@mui/icons-material";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useSubNav } from "../../contexts/SubNavContext";
-import { safeSetItem } from "../../utils/localStorage";
 
-// Static sub-item definitions — used for the mobile popup regardless of which
-// feed is currently mounted. Active state is read from localStorage so we can
-// show the correct selection even for feeds that aren't mounted yet.
-const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
-  home: [
-    { key: "following", label: "Following" },
-    { key: "network", label: "Network" },
-  ],
-  polls: [
-    { key: "global", label: "Global" },
-    { key: "following", label: "Following" },
-    { key: "webOfTrust", label: "Web of Trust" },
-  ],
-  notes: [
-    { key: "discover", label: "Network" },
-    { key: "following", label: "Following" },
-    { key: "reacted", label: "Reacted" },
-    { key: "zapped", label: "Zapped" },
-  ],
-  topics: [
-    { key: "interests", label: "Interests feed" },
-    { key: "myTopics", label: "my topics" },
-    { key: "discover", label: "discover topics" },
-  ],
-  "follow-packs": [
-    { key: "global", label: "Global" },
-    { key: "following", label: "Following" },
-    { key: "bookmarked", label: "Bookmarked" },
-  ],
-  articles: [
-    { key: "global", label: "Global" },
-    { key: "following", label: "Following" },
-  ],
-  music: [
-    { key: "discover", label: "Discover" },
-    { key: "following", label: "Following" },
-    { key: "local", label: "Local" },
-  ],
-};
-
-const FEED_STORAGE_KEYS: Record<string, string> = {
-  home: "pollerama:homeSource",
-  polls: "pollerama:pollSource",
-  notes: "pollerama:lastNotesTab",
-  topics: "pollerama:lastTopicsTab",
-  "follow-packs": "pollerama:followPacksSource",
-  articles: "pollerama:articlesSource",
-  music: "pollerama:musicSource",
-};
-
-const FEED_DEFAULT_SUB: Record<string, string> = {
-  home: "following",
-  polls: "global",
-  notes: "discover",
-  topics: "interests",
-  "follow-packs": "global",
-  articles: "global",
-  music: "discover",
+// Compact icons for the mobile rail's inline sub-feed list. Keys come from each
+// feed's SubNavContext registration (item.key); unknown keys fall back to a list
+// glyph and rely on the tooltip for the label.
+const SUB_ICONS: Record<string, SvgIconComponent> = {
+  following: PeopleIcon,
+  network: ExploreIcon,
+  discover: ExploreIcon,
+  global: PublicIcon,
+  webOfTrust: HubIcon,
+  reacted: FavoriteIcon,
+  zapped: BoltIcon,
+  interests: InterestsIcon,
+  myTopics: TagIcon,
+  bookmarked: BookmarkIcon,
+  local: SmartphoneIcon,
 };
 
 const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = [
@@ -107,55 +70,14 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
   const isDesktop  = useMediaQuery(theme.breakpoints.up("md"));
   const { items: subNavItems } = useSubNav();
 
-  // Mobile popup state — tracks which feed's sub-menu is open
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
-  const [menuFeed, setMenuFeed] = useState<string | null>(null);
-
   const currentFeed = location.pathname.split("/")[2] || "polls";
 
-  // Get the currently-active sub-key for any feed (from localStorage)
-  const getActiveSub = (feedValue: string): string => {
-    const storageKey = FEED_STORAGE_KEYS[feedValue];
-    return storageKey
-      ? (localStorage.getItem(storageKey) || FEED_DEFAULT_SUB[feedValue] || "")
-      : "";
-  };
-
-  const handleFeedClick = (
-    e: React.MouseEvent<HTMLElement>,
-    feedValue: string
-  ) => {
-    if (MOBILE_SUB_ITEMS[feedValue]) {
-      // Open sub-items popup (both mobile bottom nav and desktop sidebar)
-      if (!isDesktop) {
-        setMenuAnchor(e.currentTarget);
-        setMenuFeed(feedValue);
-        return;
-      }
-    }
-    // Desktop feed with no sub-items, or direct nav: navigate
+  const handleFeedClick = (feedValue: string) => {
+    // Tapping a feed icon navigates directly. Sub-feed selection is handled
+    // inline in the rail (mobile) / under the active feed (desktop) — there's
+    // no popup menu anymore (it was a two-tap interaction on mobile).
     localStorage.setItem("pollerama:lastFeed", feedValue);
     navigate(`/feeds/${feedValue}`);
-  };
-
-  const handleMobileSubItemClick = (subKey: string) => {
-    if (!menuFeed) return;
-
-    const storageKey = FEED_STORAGE_KEYS[menuFeed];
-    if (storageKey) safeSetItem(storageKey, subKey);
-
-    if (menuFeed === currentFeed) {
-      // Feed is active — use the SubNavContext item's onClick to update live state
-      const contextItem = subNavItems.find((item) => item.key === subKey);
-      contextItem?.onClick();
-    } else {
-      // Feed is not active — navigate; it'll restore from localStorage on mount
-      localStorage.setItem("pollerama:lastFeed", menuFeed);
-      navigate(`/feeds/${menuFeed}`);
-    }
-
-    setMenuAnchor(null);
-    setMenuFeed(null);
   };
 
   // ── Mobile: narrow icon sidebar with icons at the bottom ─────────────────
@@ -183,27 +105,66 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
           {feedOptions.map(({ value, label, Icon }) => {
             const active = currentFeed === value;
             return (
-              <Tooltip key={value} title={label} placement="right">
-                <IconButton
-                  onClick={(e) => handleFeedClick(e, value)}
-                  size="small"
-                  sx={{
-                    mb: 0.5,
-                    color: active ? "primary.main" : "text.secondary",
-                    bgcolor: active
-                      ? alpha(theme.palette.primary.main, 0.12)
-                      : "transparent",
-                    borderRadius: 2,
-                    "&:hover": {
+              <React.Fragment key={value}>
+                <Tooltip title={label} placement="right">
+                  <IconButton
+                    onClick={() => handleFeedClick(value)}
+                    size="small"
+                    sx={{
+                      mb: 0.5,
+                      color: active ? "primary.main" : "text.secondary",
                       bgcolor: active
-                        ? alpha(theme.palette.primary.main, 0.18)
-                        : alpha(theme.palette.text.primary, 0.06),
-                    },
-                  }}
-                >
-                  <Icon fontSize="small" />
-                </IconButton>
-              </Tooltip>
+                        ? alpha(theme.palette.primary.main, 0.12)
+                        : "transparent",
+                      borderRadius: 2,
+                      "&:hover": {
+                        bgcolor: active
+                          ? alpha(theme.palette.primary.main, 0.18)
+                          : alpha(theme.palette.text.primary, 0.06),
+                      },
+                    }}
+                  >
+                    <Icon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+
+                {/* Active feed's sub-feeds, inline in the rail (single tap, no
+                    popup, no extra horizontal bar). Mirrors the desktop sidebar's
+                    inline sub-nav but icon-only to fit the 52px rail. */}
+                {active &&
+                  subNavItems.map((item) => {
+                    const SubIcon = SUB_ICONS[item.key] || ViewListIcon;
+                    return (
+                      <Tooltip key={item.key} title={item.label} placement="right">
+                        <span>
+                          <IconButton
+                            onClick={() => !item.disabled && item.onClick()}
+                            disabled={item.disabled}
+                            size="small"
+                            sx={{
+                              mb: 0.5,
+                              p: 0.5,
+                              // Sub-feeds use the secondary accent (top-level feed
+                              // stays primary), matching the desktop sidebar.
+                              color: item.active ? "secondary.main" : "text.disabled",
+                              bgcolor: item.active
+                                ? alpha(theme.palette.secondary.main, 0.14)
+                                : "transparent",
+                              borderRadius: 2,
+                              "&:hover": {
+                                bgcolor: item.active
+                                  ? alpha(theme.palette.secondary.main, 0.2)
+                                  : alpha(theme.palette.text.primary, 0.06),
+                              },
+                            }}
+                          >
+                            <SubIcon sx={{ fontSize: "1.05rem" }} />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    );
+                  })}
+              </React.Fragment>
             );
           })}
 
@@ -214,47 +175,6 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
             </IconButton>
           </Tooltip>
         </Box>
-
-        {/* Sub-items popup — anchored to the right of the icon */}
-        <Menu
-          anchorEl={menuAnchor}
-          open={Boolean(menuAnchor)}
-          onClose={() => { setMenuAnchor(null); setMenuFeed(null); }}
-          anchorOrigin={{ vertical: "center", horizontal: "right" }}
-          transformOrigin={{ vertical: "center", horizontal: "left" }}
-          slotProps={{ paper: { sx: { minWidth: 180 } } }}
-        >
-          {menuFeed &&
-            (MOBILE_SUB_ITEMS[menuFeed] || []).map((item) => {
-              const contextItem =
-                menuFeed === currentFeed
-                  ? subNavItems.find((s) => s.key === item.key)
-                  : undefined;
-              const isActive = contextItem
-                ? contextItem.active
-                : getActiveSub(menuFeed) === item.key;
-              const isDisabled = contextItem ? !!contextItem.disabled : false;
-
-              return (
-                <MenuItem
-                  key={item.key}
-                  selected={isActive}
-                  disabled={isDisabled}
-                  onClick={() => handleMobileSubItemClick(item.key)}
-                  sx={{
-                    fontSize: "0.875rem",
-                    "&.Mui-selected": {
-                      color: "secondary.main",
-                      fontWeight: 600,
-                      bgcolor: (t) => alpha(t.palette.secondary.main, 0.1),
-                    },
-                  }}
-                >
-                  {item.label}
-                </MenuItem>
-              );
-            })}
-        </Menu>
       </>
     );
   }
@@ -282,7 +202,7 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
           return (
             <React.Fragment key={value}>
               <Box
-                onClick={(e) => handleFeedClick(e, value)}
+                onClick={() => handleFeedClick(value)}
                 sx={{
                   display: "flex",
                   alignItems: "center",
@@ -383,47 +303,6 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
           </Tooltip>
         </Box>
       </Box>
-
-      {/* Desktop: sub-nav popup (only opened from desktop when hasSubItems) */}
-      <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
-        onClose={() => { setMenuAnchor(null); setMenuFeed(null); }}
-        anchorOrigin={{ vertical: "center", horizontal: "right" }}
-        transformOrigin={{ vertical: "center", horizontal: "left" }}
-        slotProps={{ paper: { sx: { minWidth: 180 } } }}
-      >
-        {menuFeed &&
-          (MOBILE_SUB_ITEMS[menuFeed] || []).map((item) => {
-            const contextItem =
-              menuFeed === currentFeed
-                ? subNavItems.find((s) => s.key === item.key)
-                : undefined;
-            const isActive = contextItem
-              ? contextItem.active
-              : getActiveSub(menuFeed) === item.key;
-            const isDisabled = contextItem ? !!contextItem.disabled : false;
-
-            return (
-              <MenuItem
-                key={item.key}
-                selected={isActive}
-                disabled={isDisabled}
-                onClick={() => handleMobileSubItemClick(item.key)}
-                sx={{
-                  fontSize: "0.875rem",
-                  "&.Mui-selected": {
-                    color: "primary.main",
-                    fontWeight: 600,
-                    bgcolor: (t) => alpha(t.palette.primary.main, 0.1),
-                  },
-                }}
-              >
-                {item.label}
-              </MenuItem>
-            );
-          })}
-      </Menu>
     </>
   );
 };
