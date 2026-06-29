@@ -12,7 +12,7 @@ import {
 } from "@mui/material";
 import { Event, Filter } from "nostr-tools";
 import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import MovieCard from "./MovieCard";
 import ReviewCard from "../Ratings/ReviewCard";
 import { useUserContext } from "../../hooks/useUserContext";
@@ -43,7 +43,7 @@ const MoviePage = () => {
       },
     ];
 
-    const handle = nostrRuntime.subscribe(relays, filters, {
+    const handle = dataLayer.observe(filters, {
       onEvent(e) {
         if (newReviewMap.has(e.pubkey)) {
           if (newReviewMap.get(e.pubkey)!.created_at < e.created_at)
@@ -58,7 +58,7 @@ const MoviePage = () => {
       },
     });
 
-    return () => handle.unsubscribe();
+    return () => handle.unobserve();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imdbId, filterMode, user?.follows, relays]);
 

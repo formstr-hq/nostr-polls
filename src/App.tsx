@@ -12,7 +12,7 @@ import {
 import { StatusBar, Style } from "@capacitor/status-bar";
 import { App as CapApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
-import { nostrRuntime } from "./singletons";
+import { dataLayer } from "@formstr/local-relay";
 
 import { EventCreator } from "./components/EventCreator";
 import { PollResponse } from "./components/PollResponse";
@@ -30,7 +30,6 @@ import { MetadataProvider } from "./hooks/MetadataProvider";
 import { NotificationProvider } from "./contexts/notification-context";
 import { RelayProvider } from "./contexts/relay-context";
 import { RelayHealthProvider } from "./contexts/RelayHealthContext";
-import { GossipProvider } from "./contexts/GossipContext";
 import { NostrNotificationsProvider } from "./contexts/nostr-notification-context";
 import { DMProvider } from "./contexts/dm-context";
 import { ReportsProvider } from "./contexts/reports-context";
@@ -49,7 +48,7 @@ import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider, Box, Fab } from "@mui/material";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import { buildTheme } from "./styles/theme";
-import { getFontPreset, getColorPreset } from "./styles/themes";
+import { getFontPreset } from "./styles/themes";
 
 import EventList from "./components/Feed/FeedsLayout";
 import NotesFeed from "./components/Feed/NotesFeed/components";
@@ -60,11 +59,19 @@ import MoviesFeed from "./components/Feed/MoviesFeed";
 import FollowPacksFeed from "./components/Feed/FollowPacksFeed";
 import FollowPackDetail from "./components/FollowPacks/FollowPackDetail";
 import ArticlesFeed from "./components/Feed/ArticlesFeed";
+import MusicFeed from "./components/Feed/MusicFeed";
+import PlaylistDetail from "./components/Music/PlaylistDetail";
+import SharedPlaylistDetail from "./components/Music/SharedPlaylistDetail";
+import { PlaybackProvider } from "./contexts/PlaybackContext";
+import { PlaylistsProvider } from "./contexts/playlists-context";
+import MiniPlayer from "./components/Music/MiniPlayer";
 import ArticleDetail from "./components/Articles/ArticleDetail";
 import MoviePage from "./components/Movies/MoviePage";
 import { Nip89Provider } from "./contexts/Nip89Context";
 import { useUserContext } from "./hooks/useUserContext";
 import { useAppContext } from "./hooks/useAppContext";
+import { DataLayerProvider } from "./dataLayer/hooks";
+import { getDataLayer } from "@formstr/local-relay";
 import TopicsFeed from "./components/Feed/TopicsFeed";
 import TopicExplorer from "./components/Feed/TopicsFeed/TopicsExplorerFeed";
 import FeedsLayout from "./components/Feed/FeedsLayout";
@@ -88,9 +95,8 @@ function AndroidNotifications() {
 
 // Reads appearance context and provides a dynamically built MUI theme
 function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
-  const { fontPresetId, colorPresetId } = useAppearance();
+  const { fontPresetId, colorPreset } = useAppearance();
   const fontPreset = getFontPreset(fontPresetId);
-  const colorPreset = getColorPreset(colorPresetId);
   const theme = useMemo(
     () => buildTheme(
       fontPreset.fontFamily,
@@ -101,13 +107,38 @@ function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
       colorPreset.lightSecondary,
       colorPreset.darkSecondary,
     ),
+    // Rebuild when the font, the selected preset, or (for the custom theme) the
+    // chosen colors change — hence keying on the resolved color values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fontPreset.id, colorPreset.id],
+    [
+      fontPreset.id,
+      colorPreset.id,
+      colorPreset.lightPrimary,
+      colorPreset.darkPrimary,
+      colorPreset.lightSecondary,
+      colorPreset.darkSecondary,
+    ],
   );
   return (
     <ThemeProvider theme={theme} modeStorageKey="pollerama-color-scheme">
       {children}
     </ThemeProvider>
+  );
+}
+
+// Feeds the current account's scope inputs (pubkey / follows / web-of-trust) to
+// the data layer, so useEvents({ scope }) can resolve author-based feeds. Lives
+// inside UserProvider; the worker itself is bootstrapped in index.tsx.
+function DataLayerScopeBridge({ children }: { children: React.ReactNode }) {
+  const { user } = useUserContext();
+  const scopeUser = React.useMemo(
+    () => ({ pubkey: user?.pubkey, follows: user?.follows, webOfTrust: user?.webOfTrust }),
+    [user?.pubkey, user?.follows, user?.webOfTrust]
+  );
+  return (
+    <DataLayerProvider user={scopeUser} dataLayer={getDataLayer()}>
+      {children}
+    </DataLayerProvider>
   );
 }
 
@@ -132,7 +163,9 @@ function AppContent() {
     // undefined = first render (skip); null→pubkey or pubkey→pubkey = actual switch
     if (prev !== undefined && prev !== next) {
       resetStore();
-      nostrRuntime.reconnect();
+      // Account switch: the DataLayerProvider's user/scope change drives the
+      // worker's re-sync; resume() just nudges it that the foreground is active.
+      dataLayer.resume();
     }
     prevPubkeyRef.current = next;
   }, [user?.pubkey, resetStore]);
@@ -156,7 +189,9 @@ function AppContent() {
               zIndex={1200}
             >
               {() => (
-                <Fab size="small" onClick={toggleSidebar}>
+                // DraggableCorner's wrapper is pointer-events:none; interactive
+                // children must re-assert auto (SpeedDial's fab does this itself).
+                <Fab size="small" onClick={toggleSidebar} sx={{ pointerEvents: "auto" }}>
                   <MenuOpenIcon fontSize="small" />
                 </Fab>
               )}
@@ -203,6 +238,9 @@ function AppContent() {
             <Route path="follow-packs/:naddr" element={<FollowPackDetail />} />
             <Route path="articles" element={<ArticlesFeed />} />
             <Route path="articles/:naddr" element={<ArticleDetail />} />
+            <Route path="music" element={<MusicFeed />} />
+            <Route path="music/shared/:naddr" element={<SharedPlaylistDetail />} />
+            <Route path="music/:playlistId" element={<PlaylistDetail />} />
 
             <Route element={<Outlet />}>
               <Route path="movies" element={<MoviesFeed />} />
@@ -223,6 +261,9 @@ function AppContent() {
         </Routes>
         </Box>
       </Box>
+      {/* Docked at the bottom of the app column: it shrinks the content above
+          rather than overlaying it, so it never hides feed items. */}
+      <MiniPlayer />
     </div>
   );
 }
@@ -243,40 +284,32 @@ const App: React.FC = () => {
     setupStatusBar();
   }, []);
 
-  // Prune events older than 7 days every 10 minutes to keep memory bounded
-  useEffect(() => {
-    const interval = setInterval(() => nostrRuntime.debug.pruneOldEvents(7), 10 * 60_000);
-    return () => clearInterval(interval);
-  }, []);
-
-
-  // Reconnect relay subscriptions when the app returns from background.
-  // WebSocket connections are killed by the OS when backgrounded — especially
-  // on mobile/Capacitor where the WebView is aggressively throttled.
-  // We use Capacitor's appStateChange on native and visibilitychange on web,
-  // and always reconnect on foreground (no idle threshold) so publish never
-  // hits a dead connection.
+  // Tell the worker the app returned to the foreground. The worker owns the
+  // WebSocket connections (killed by the OS when backgrounded, especially on
+  // mobile/Capacitor) and decides how to recover — the app only signals the
+  // foreground transition it can observe but the worker can't. Event pruning is
+  // also the worker's responsibility now (its PrunePolicy), so no app-side prune.
   useEffect(() => {
     if (Capacitor.isNativePlatform()) {
       // Native: Capacitor fires appStateChange reliably on Android/iOS
       let listener: Awaited<ReturnType<typeof CapApp.addListener>> | null = null;
       CapApp.addListener("appStateChange", ({ isActive }) => {
-        if (isActive) nostrRuntime.reconnect();
+        if (isActive) dataLayer.resume();
       }).then((l) => { listener = l; });
       // Also handle network coming back online (e.g. WiFi → cellular switch)
-      const onOnline = () => nostrRuntime.reconnect();
+      const onOnline = () => dataLayer.resume();
       window.addEventListener("online", onOnline);
       return () => {
         listener?.remove();
         window.removeEventListener("online", onOnline);
       };
     } else {
-      // Web: visibilitychange is reliable; reconnect whenever tab becomes visible
+      // Web: visibilitychange is reliable; resume whenever tab becomes visible
       const onVisibilityChange = () => {
-        if (!document.hidden) nostrRuntime.reconnect();
+        if (!document.hidden) dataLayer.resume();
       };
       document.addEventListener("visibilitychange", onVisibilityChange);
-      window.addEventListener("online", () => nostrRuntime.reconnect());
+      window.addEventListener("online", () => dataLayer.resume());
       return () => document.removeEventListener("visibilitychange", onVisibilityChange);
     }
   }, []);
@@ -287,9 +320,9 @@ const App: React.FC = () => {
         <DynamicThemeWrapper>
           <AppContextProvider>
             <UserProvider>
+              <DataLayerScopeBridge>
               <RelayProvider>
                 <RelayHealthProvider>
-                <GossipProvider>
                 <DMProvider>
                 <NostrNotificationsProvider>
                   <TranslationBatchProvider>
@@ -301,6 +334,8 @@ const App: React.FC = () => {
                         <CssBaseline />
                         <MetadataProvider>
                           <VideoPlayerProvider>
+                            <PlaybackProvider>
+                            <PlaylistsProvider>
                             <Router>
                               <AndroidNotifications />
                               <FeedScrollProvider>
@@ -310,6 +345,8 @@ const App: React.FC = () => {
                               </FeedScrollProvider>
                               <FloatingVideoPlayer />
                             </Router>
+                            </PlaylistsProvider>
+                            </PlaybackProvider>
                           </VideoPlayerProvider>
                         </MetadataProvider>
                         </ReportsProvider>
@@ -320,9 +357,9 @@ const App: React.FC = () => {
                   </TranslationBatchProvider>
                 </NostrNotificationsProvider>
                 </DMProvider>
-                </GossipProvider>
                 </RelayHealthProvider>
               </RelayProvider>
+              </DataLayerScopeBridge>
             </UserProvider>
           </AppContextProvider>
         </DynamicThemeWrapper>

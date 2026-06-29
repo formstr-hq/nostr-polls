@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { Event } from "nostr-tools";
-import { waitForPublish, PublishResult } from "../utils/publish";
+import { dataLayer, PublishResult } from "@formstr/local-relay";
 
 /**
  * Shared state and retry logic for publish diagnostic modals.
@@ -42,11 +42,9 @@ export function usePublishDiagnostic() {
     async (relay?: string) => {
       const event = eventRef.current;
       if (!event || !result) return result?.relayResults ?? [];
-      const failedRelays = relay
-        ? [relay]
-        : result.relayResults.filter((r) => r.status !== "accepted").map((r) => r.relay);
-      if (failedRelays.length === 0) return result.relayResults;
-      const retryResult = await waitForPublish(failedRelays, event);
+      // The worker owns relay selection now, so a retry simply re-publishes the
+      // whole event; the worker reaches whichever relays previously failed.
+      const retryResult = await dataLayer.publishEvent(event);
       const retryMap = new Map(retryResult.relayResults.map((r) => [r.relay, r]));
       const merged = result.relayResults.map((r) => retryMap.get(r.relay) ?? r);
       const updated: PublishResult = {

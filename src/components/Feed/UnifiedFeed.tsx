@@ -40,8 +40,13 @@ interface UnifiedFeedProps<T> {
   /** Show a subtle refreshing indicator (e.g. thin progress bar at top) */
   refreshing?: boolean;
 
-  // Content above Virtuoso inside the scroll container
+  // Content above Virtuoso inside the scroll container (pinned — does not scroll)
   headerContent?: React.ReactNode;
+
+  // Component rendered as the first thing INSIDE the scroller, via Virtuoso's
+  // Header slot, so it scrolls away with the list. Must be a stable component
+  // reference (defined at module scope or memoized) to avoid remounting.
+  ListHeader?: React.ComponentType<any>;
 
   // Virtuoso passthrough
   followOutput?: boolean;
@@ -66,6 +71,7 @@ function UnifiedFeed<T>({
   onRefreshNewer,
   refreshing,
   headerContent,
+  ListHeader,
   followOutput,
   virtuosoRef: externalVirtuosoRef,
 }: UnifiedFeedProps<T>) {
@@ -138,7 +144,12 @@ function UnifiedFeed<T>({
       return <Box sx={{ minHeight: "200px" }} />;
     }
     if (showEmpty) {
-      return <>{emptyState}</>;
+      return (
+        <>
+          {ListHeader && <ListHeader />}
+          {emptyState}
+        </>
+      );
     }
     return (
       <Virtuoso
@@ -151,6 +162,7 @@ function UnifiedFeed<T>({
         startReached={onStartReached}
         followOutput={followOutput}
         components={{
+          ...(ListHeader ? { Header: ListHeader } : {}),
           Footer: () =>
             loadingMore ? (
               <Box sx={{ display: "flex", justifyContent: "center", p: 2 }}>
@@ -181,7 +193,10 @@ function UnifiedFeed<T>({
         {showLoading ? (
           <Box sx={{ minHeight: "200px" }} />
         ) : showEmpty ? (
-          <>{emptyState}</>
+          <>
+            {ListHeader && <ListHeader />}
+            {emptyState}
+          </>
         ) : (
           <Virtuoso
             ref={virtuosoRef}
@@ -197,6 +212,7 @@ function UnifiedFeed<T>({
             scrollerRef={(el) => { virtuosoScrollerRef.current = el as HTMLElement | null; }}
             onScroll={isImmersive ? handleScroll : undefined}
             components={{
+              ...(ListHeader ? { Header: ListHeader } : {}),
               Footer: () =>
                 loadingMore ? (
                   <Box

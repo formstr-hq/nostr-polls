@@ -30,7 +30,7 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { NotePreview } from "./NotePreview";
-import { publishWithGossip } from "../../utils/publish";
+import { dataLayer } from "@formstr/local-relay";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import MentionTextArea, { extractMentionTags } from "./MentionTextArea";
@@ -57,7 +57,7 @@ const NoteTemplateForm: React.FC<{
   quotedEvent?: Event;
   onPublished?: () => void;
   /** When provided, the parent handles the diagnostic modal instead of this form */
-  onPublishResult?: (event: Event, result: import("../../utils/publish").PublishResult) => void;
+  onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
 }> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [audience, setAudience] = useState<Audience>({ kind: "public" });
@@ -231,7 +231,7 @@ const NoteTemplateForm: React.FC<{
         showNotification(NOTIFICATION_MESSAGES.NOTE_SIGN_FAILED, "error");
         return;
       }
-      const result = await publishWithGossip(writeRelays, signedEvent);
+      const result = await dataLayer.publishEvent(signedEvent);
       setIsSubmitting(false);
 
       if (isPrivate && viewKey) {

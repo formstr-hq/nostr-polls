@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Event } from "nostr-tools";
-import { pool, nostrRuntime } from "../singletons";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
+import { collectOnce } from "../dataLayer/collect";
 import { useRelays } from "./useRelays";
 import { useUserContext } from "./useUserContext";
 import { signEvent } from "../nostr";
@@ -50,6 +51,37 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
 
   const { getScrollTop } = useFeedScroll();
 
+  /* ------------------ streaming update coalescing ------------------ */
+  // During initial load a topic can stream hundreds of notes plus hundreds of
+  // moderation/deletion events. Committing a setState per event re-runs
+  // resolvedNotes and re-reconciles the virtualized feed hundreds of times,
+  // freezing the app. Instead we buffer note inserts and a "moderation dirty"
+  // flag in refs and flush them at most once per frame-ish window.
+  const noteBufferRef = useRef<Map<string, TopicNote>>(new Map());
+  const moderationDirtyRef = useRef(false);
+  const flushTimer = useRef<number | null>(null);
+
+  const scheduleFlush = useCallback(() => {
+    if (flushTimer.current !== null) return;
+    flushTimer.current = window.setTimeout(() => {
+      flushTimer.current = null;
+      if (noteBufferRef.current.size > 0) {
+        const buffered = noteBufferRef.current;
+        noteBufferRef.current = new Map();
+        setNotes((prev) => {
+          const next = new Map(prev);
+          buffered.forEach((v, k) => next.set(k, v));
+          return next;
+        });
+      }
+      if (moderationDirtyRef.current) {
+        moderationDirtyRef.current = false;
+        // resolvedNotes / moderatorsByTopic recompute off moderationVersion.
+        setModerationVersion((v) => v + 1);
+      }
+    }, 150);
+  }, []);
+
   /* ------------------ moderation processing ------------------ */
 
   const processModerationEvent = (event: Event) => {
@@ -95,9 +127,9 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
       }
     }
 
-    // force rerender
-    setNotes((prev) => new Map(prev));
-    setModerationVersion((v) => v + 1);
+    // Coalesce the rerender; resolvedNotes recomputes off moderationVersion.
+    moderationDirtyRef.current = true;
+    scheduleFlush();
   };
 
   const processDeletionEvent = (event: Event) => {
@@ -130,8 +162,8 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     targetIds.forEach((id) => deletedModerationIds.current.add(id));
 
     if (changed) {
-      setNotes((prev) => new Map(prev));
-      setModerationVersion((v) => v + 1);
+      moderationDirtyRef.current = true;
+      scheduleFlush();
     }
   };
 
@@ -200,7 +232,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
 
   /* ------------------ subscriptions ------------------ */
 
-  const subRef = useRef<ReturnType<typeof nostrRuntime.subscribe> | null>(null);
+  const subRef = useRef<ObserveHandle | null>(null);
 
   const startSubscription = useCallback((fresh?: boolean) => {
     if (!relays.length || myTopics.size === 0) {
@@ -209,7 +241,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     }
 
     if (subRef.current) {
-      subRef.current.unsubscribe();
+      subRef.current.unobserve();
       subRef.current = null;
     }
 
@@ -218,8 +250,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     if (!fresh) initialLoadDoneRef.current = false;
 
     const since7d = Math.floor(Date.now() / 1000) - 7 * 86400;
-    const sub = nostrRuntime.subscribe(
-      relays,
+    const sub = dataLayer.observe(
       [
         { kinds: [1], "#t": topics, since: since7d, limit: 200 },
         { kinds: [OFFTOPIC_KIND], "#t": topics, limit: 500 },
@@ -262,15 +293,12 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
               pendingNotesRef.current.set(event.id, { event, topics });
               setPendingCount((c) => c + 1);
             } else {
-              setNotes((prev) => {
-                const next = new Map(prev);
-                next.set(event.id, { event, topics });
-                return next;
-              });
+              // Buffer and flush in batches to avoid a setState-per-note storm.
+              noteBufferRef.current.set(event.id, { event, topics });
+              scheduleFlush();
             }
           }
         },
-        fresh,
       }
     );
 
@@ -282,8 +310,14 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     }, 10000);
 
     return () => {
-      sub.unsubscribe();
+      sub.unobserve();
       clearTimeout(timeout);
+      if (flushTimer.current !== null) {
+        clearTimeout(flushTimer.current);
+        flushTimer.current = null;
+      }
+      noteBufferRef.current.clear();
+      moderationDirtyRef.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relays, myTopics]);
@@ -451,7 +485,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
             : "Removed user from topic",
       });
 
-      await pool.publish(relays, signed);
+      await dataLayer.publishEvent(signed);
 
       // Optimistic local update
       if (!moderationByTopic.current.has(topic)) {
@@ -479,13 +513,15 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
     // Refetch own moderation events to ensure consistency
     try {
       const topicValues = Array.from(new Set(topics));
-      const events = await nostrRuntime.fetchOne(relays, {
-        kinds: [OFFTOPIC_KIND],
-        authors: [user.pubkey],
-        "#t": topicValues,
-      });
-      if (events) {
-        processModerationEvent(events);
+      const collected = await collectOnce([
+        {
+          kinds: [OFFTOPIC_KIND],
+          authors: [user.pubkey],
+          "#t": topicValues,
+        },
+      ]);
+      for (const event of collected) {
+        processModerationEvent(event);
       }
     } catch (e) {
       console.error("Failed to refetch moderation events:", e);
@@ -534,7 +570,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
       content: "Undo moderation",
     });
 
-    await pool.publish(relays, signed);
+    await dataLayer.publishEvent(signed);
 
     // Optimistic local update
     for (const id of moderationEventIds) {

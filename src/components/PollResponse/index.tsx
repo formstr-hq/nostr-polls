@@ -2,22 +2,19 @@ import { useNavigate, useParams } from "react-router-dom";
 import PollResponseForm from "./PollResponseForm";
 import { useEffect, useState } from "react";
 import { Event } from "nostr-tools/lib/types/core";
-import { useRelays } from "../../hooks/useRelays";
 import { Box, Button, CircularProgress } from "@mui/material";
 import { useNotification } from "../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { nip19 } from "nostr-tools";
 import { EventPointer } from "nostr-tools/lib/types/nip19";
-import { defaultRelays } from "../../nostr";
 
 export const PollResponse = () => {
   const { eventId: neventId } = useParams();
   const [pollEvent, setPollEvent] = useState<Event | undefined>();
   const navigate = useNavigate();
   const { showNotification } = useNotification();
-  const { relays } = useRelays();
   useEffect(() => {
     if (!neventId) return;
     fetchPollEvent(neventId);
@@ -28,12 +25,9 @@ export const PollResponse = () => {
 
   const fetchPollEvent = async (neventId: string) => {
     const decoded = nip19.decode(neventId).data as EventPointer;
-    const neventRelays = decoded.relays;
-    const relaysToUse = Array.from(
-      new Set([...relays, ...defaultRelays, ...(neventRelays || [])])
-    );
+    // Relay selection is the worker's job; fetchById reads the worker's store.
     try {
-      const event = await nostrRuntime.fetchBatched(relaysToUse, decoded.id);
+      const event = await dataLayer.fetchById(decoded.id);
       if (event === null) {
         // Navigate to the note page — it shows the event if found on gossip relays,
         // or a relay diagnostic screen so the user can see what was tried.

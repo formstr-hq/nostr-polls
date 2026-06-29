@@ -9,9 +9,8 @@ import {
 } from "@mui/material";
 import { nip19, Event } from "nostr-tools";
 import EventJsonCard from "../Event/EventJSONCard";
-import { useRelays } from "../../hooks/useRelays";
 import { Notes } from "../Notes";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useBackClose } from "../../hooks/useBackClose";
 
 interface Props {
@@ -25,7 +24,6 @@ const RateEventModal: React.FC<Props> = ({ open, onClose, initialEventId }) => {
   const [event, setEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { relays } = useRelays();
   useBackClose(open, onClose);
 
   useEffect(() => {
@@ -66,7 +64,7 @@ const RateEventModal: React.FC<Props> = ({ open, onClose, initialEventId }) => {
       }
     }
 
-    const ev = await nostrRuntime.fetchBatched(relays, eventId);
+    const ev = await dataLayer.fetchById(eventId);
 
     if (!ev) {
       setError("Event not found.");

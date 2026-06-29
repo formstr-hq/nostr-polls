@@ -26,6 +26,8 @@ public class MainActivity extends BridgeActivity {
         // includes the plugin when it initialises.
         registerPlugin(PipPlugin.class);
         registerPlugin(SecureKeyStoragePlugin.class);
+        registerPlugin(MusicLibraryPlugin.class);
+        registerPlugin(MusicPlaybackPlugin.class);
         super.onCreate(savedInstanceState);
         createNotificationChannel();
         scheduleNotificationWorker();

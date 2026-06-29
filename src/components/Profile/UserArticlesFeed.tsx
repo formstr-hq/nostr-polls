@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
-import { nostrRuntime } from "../../singletons";
-import { useRelays } from "../../hooks/useRelays";
+import { dataLayer } from "@formstr/local-relay";
 import { useAppContext } from "../../hooks/useAppContext";
 import { ArticleCard } from "../Articles/ArticleCard";
 import UnifiedFeed from "../Feed/UnifiedFeed";
@@ -13,18 +12,16 @@ interface UserArticlesFeedProps {
   scrollContainerRef?: React.RefObject<HTMLDivElement>;
 }
 
-const UserArticlesFeed: React.FC<UserArticlesFeedProps> = ({ pubkey, relays: propRelays, scrollContainerRef }) => {
+const UserArticlesFeed: React.FC<UserArticlesFeedProps> = ({ pubkey, scrollContainerRef }) => {
   const [articles, setArticles] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const { relays: hookRelays } = useRelays();
-  const relays = propRelays ?? hookRelays;
   const { fetchUserProfileThrottled, profiles } = useAppContext();
 
   const fetchArticles = useCallback(() => {
     if (!pubkey) return;
     setLoading(true);
     const filter: Filter = { kinds: [30023], authors: [pubkey], limit: 50 };
-    const handle = nostrRuntime.subscribe(relays, [filter], {
+    const handle = dataLayer.observe([filter], {
       onEvent(event) {
         if (!profiles?.get(event.pubkey)) fetchUserProfileThrottled(event.pubkey);
         setArticles((prev) => {
@@ -34,9 +31,9 @@ const UserArticlesFeed: React.FC<UserArticlesFeedProps> = ({ pubkey, relays: pro
       },
       onEose() { setLoading(false); },
     });
-    return () => handle.unsubscribe();
+    return () => handle.unobserve();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pubkey, relays]);
+  }, [pubkey]);
 
   useEffect(() => {
     const cleanup = fetchArticles();

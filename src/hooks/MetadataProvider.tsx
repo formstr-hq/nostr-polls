@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useRef, useState, useEffect } from "react";
 import { Event, Filter } from "nostr-tools";
-import { useRelays } from "./useRelays";
-import { nostrRuntime } from "../singletons";
+import { collectOnce } from "../dataLayer/collect";
 
 type EntityType = "movie" | "hashtag";
 
@@ -16,7 +15,6 @@ export const MetadataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [metadata, setMetadata] = useState<Map<string, Event[]>>(new Map());
   const pending = useRef<Set<string>>(new Set());
   const entityMap = useRef<Map<string, string>>(new Map()); // dTag => id
-  const { relays } = useRelays();
 
   const loaded = useRef<Set<string>>(new Set());
   // Queue flushing effect
@@ -32,7 +30,7 @@ export const MetadataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         "#d": tags,
       };
 
-      nostrRuntime.querySync(relays, filter).then((events: Event[]) => {
+      collectOnce([filter]).then((events: Event[]) => {
         const grouped = new Map<string, Event[]>();
 
         for (const event of events) {
@@ -64,7 +62,7 @@ export const MetadataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }, 2000); // Debounce interval
 
     return () => clearInterval(interval);
-  }, [relays]);
+  }, []);
 
   const registerEntity = (type: EntityType, id: string) => {
     const dTag = `${type}:${id}`;

@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
-import { nostrRuntime } from "../../singletons";
-import { useRelays } from "../../hooks/useRelays";
+import { dataLayer } from "@formstr/local-relay";
 import ReviewCard from "../Ratings/ReviewCard";
 import UnifiedFeed from "../Feed/UnifiedFeed";
 
@@ -14,11 +13,9 @@ interface UserRatingsGivenProps {
 
 const KIND_RATING = 34259;
 
-const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, relays: propRelays, scrollContainerRef }) => {
+const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, scrollContainerRef }) => {
   const [ratings, setRatings] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const { relays: hookRelays } = useRelays();
-  const relays = propRelays ?? hookRelays;
 
   const fetchRatings = useCallback(() => {
     if (!pubkey) return;
@@ -32,7 +29,7 @@ const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, relays: pro
       },
     ];
 
-    const handle = nostrRuntime.subscribe(relays, filters, {
+    const handle = dataLayer.observe(filters, {
       onEvent(event) {
         setRatings((prev) => {
           const exists = prev.find((e) => e.id === event.id);
@@ -45,8 +42,8 @@ const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, relays: pro
       },
     });
 
-    return () => handle.unsubscribe();
-  }, [pubkey, relays]);
+    return () => handle.unobserve();
+  }, [pubkey]);
 
   useEffect(() => {
     const cleanup = fetchRatings();

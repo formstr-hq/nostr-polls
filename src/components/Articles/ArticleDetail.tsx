@@ -13,18 +13,66 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { Event, nip19 } from "nostr-tools";
 import ReactMarkdown from "react-markdown";
-import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useAppContext } from "../../hooks/useAppContext";
 import { openProfileTab } from "../../nostr";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { calculateTimeAgo } from "../../utils/common";
 import { FeedbackMenu } from "../FeedbackMenu";
+import { RichText, ImageWithLightbox } from "../Common/Parsers/TextWithImages";
+
+const NIP19_BARE_PREFIXES = ["npub1", "note1", "nevent1", "nprofile1", "naddr1"];
+
+// Replace string text nodes with RichText so inline media + nostr entities
+// (YouTube, video, images, links, hashtags, nostr:/nip19, lightning, emoji) come
+// to life inside markdown, while already-rendered markup passes through untouched.
+const withRich = (children: React.ReactNode): React.ReactNode =>
+  React.Children.map(children, (child) =>
+    typeof child === "string" ? <RichText text={child} /> : child
+  );
+
+// react-markdown component overrides: enrich text-bearing elements, and turn
+// nostr links into embeds (otherwise render a wrapping link).
+const markdownComponents = {
+  // Render paragraphs as a div: inline embeds (YouTube/video/nostr) are
+  // block-level and would be invalid nested inside a <p>.
+  p: ({ node, children, ...props }: any) => (
+    <Box component="div" sx={{ mt: 0, mb: 1.5, lineHeight: 1.75 }} {...props}>
+      {withRich(children)}
+    </Box>
+  ),
+  li: ({ node, children, ...props }: any) => <li {...props}>{withRich(children)}</li>,
+  // Route article images through the lightbox so they get the same
+  // download/share/copy toolbar (web + native WebView).
+  img: ({ node, src, ...props }: any) =>
+    src ? <ImageWithLightbox src={src} index={0} /> : null,
+  h1: ({ node, children, ...props }: any) => <h1 {...props}>{withRich(children)}</h1>,
+  h2: ({ node, children, ...props }: any) => <h2 {...props}>{withRich(children)}</h2>,
+  h3: ({ node, children, ...props }: any) => <h3 {...props}>{withRich(children)}</h3>,
+  h4: ({ node, children, ...props }: any) => <h4 {...props}>{withRich(children)}</h4>,
+  h5: ({ node, children, ...props }: any) => <h5 {...props}>{withRich(children)}</h5>,
+  h6: ({ node, children, ...props }: any) => <h6 {...props}>{withRich(children)}</h6>,
+  em: ({ node, children, ...props }: any) => <em {...props}>{withRich(children)}</em>,
+  strong: ({ node, children, ...props }: any) => <strong {...props}>{withRich(children)}</strong>,
+  a: ({ node, href, children, ...props }: any) =>
+    href && (href.startsWith("nostr:") || NIP19_BARE_PREFIXES.some((p) => href.startsWith(p))) ? (
+      <RichText text={href} />
+    ) : (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+        {...props}
+      >
+        {children}
+      </a>
+    ),
+};
 
 const ArticleDetail: React.FC = () => {
   const { naddr } = useParams<{ naddr: string }>();
   const navigate = useNavigate();
-  const { relays } = useRelays();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const [article, setArticle] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,18 +89,19 @@ const ArticleDetail: React.FC = () => {
     if (decoded.type !== "naddr") { setLoading(false); return; }
 
     const { kind, pubkey, identifier } = decoded.data;
-    const handle = nostrRuntime.subscribe(
-      relays,
+    const handle = dataLayer.observe(
       [{ kinds: [kind], authors: [pubkey], "#d": [identifier], limit: 1 }],
       {
         onEvent: (e) => {
           setArticle(e);
+          setLoading(false);
           if (!profiles?.get(e.pubkey)) fetchUserProfileThrottled(e.pubkey);
         },
-        onEose: () => { setLoading(false); handle.unsubscribe(); },
+        // No onEose: local EOSE precedes the worker's upstream fetch, so the
+        // event arrives via onEvent. The timeout below closes the interest.
       }
     );
-    setTimeout(() => { setLoading(false); handle.unsubscribe(); }, 5000);
+    setTimeout(() => { setLoading(false); handle.unobserve(); }, 5000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [naddr]);
 
@@ -145,6 +194,9 @@ const ArticleDetail: React.FC = () => {
         {/* Markdown content */}
         <Box
           sx={{
+            minWidth: 0,
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
             "& h1": { fontSize: "1.75rem", fontWeight: 700, mt: 2.5, mb: 1, lineHeight: 1.3 },
             "& h2": { fontSize: "1.4rem",  fontWeight: 700, mt: 2.5, mb: 1, lineHeight: 1.3 },
             "& h3": { fontSize: "1.15rem", fontWeight: 600, mt: 2,   mb: 0.75 },
@@ -181,7 +233,7 @@ const ArticleDetail: React.FC = () => {
             "& hr": { my: 2.5, borderColor: "divider" },
           }}
         >
-          <ReactMarkdown>{article.content}</ReactMarkdown>
+          <ReactMarkdown components={markdownComponents}>{article.content}</ReactMarkdown>
         </Box>
 
         <Box sx={{ mt: 3 }}>

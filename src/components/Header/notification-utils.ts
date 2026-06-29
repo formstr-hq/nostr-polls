@@ -4,6 +4,8 @@ export type ParsedNotification = {
   type: "poll-response" | "comment" | "reaction" | "zap" | "repost" | "highlight" | "unknown";
   pollId?: string;
   postId?: string;
+  /** For NIP-22 (kind 1111) comments: the kind of the root being commented on (from the "K" tag). */
+  rootKind?: number;
   fromPubkey: string | null;
   content?: string;
   reaction?: string;
@@ -42,10 +44,14 @@ export function parseNotification(ev: Event): ParsedNotification {
     const postTag = ev.kind === 1111
       ? (pickETag('e') ?? pickETag('E'))
       : pickETag('e');
+    // NIP-22 carries the root's kind in a "K" tag (e.g. "1068" for a poll).
+    const rootKindRaw = ev.kind === 1111 ? getTag("K") : null;
+    const rootKind = rootKindRaw != null ? Number(rootKindRaw) : undefined;
     return {
       type: "comment",
       fromPubkey,
       postId: postTag?.[1] ?? undefined,
+      rootKind: Number.isFinite(rootKind) ? rootKind : undefined,
       content: ev.content,
     };
   }
@@ -106,12 +112,19 @@ export function parseNotification(ev: Event): ParsedNotification {
       }
     }
 
+    // The zapped note is carried as an "e" tag on the receipt. Fall back to the
+    // embedded zap request's "e" tag if the receipt didn't copy it through.
+    let postId: string | undefined = pickETag("e")?.[1];
+
     // Get sender pubkey from the zap request
     let senderPubkey = fromPubkey;
     if (requestEvent) {
       try {
         const reqObj = JSON.parse(requestEvent) as Event;
         senderPubkey = reqObj.pubkey;
+        if (!postId) {
+          postId = reqObj.tags?.find((t) => t[0] === "e")?.[1];
+        }
       } catch (e) {
         console.error("Failed to parse zap request event", e, ev);
       }
@@ -120,6 +133,7 @@ export function parseNotification(ev: Event): ParsedNotification {
     return {
       type: "zap",
       sats,
+      postId: postId ?? undefined,
       fromPubkey: senderPubkey,
     };
   }

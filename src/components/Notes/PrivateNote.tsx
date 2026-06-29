@@ -5,10 +5,8 @@ import { Notes } from ".";
 import { Box, Button, CircularProgress, Typography, Alert } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import LockOpenIcon from "@mui/icons-material/LockOpen";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { EventPointer } from "nostr-tools/lib/types/nip19";
-import { getRelaysForAuthors, getOutboxRelays } from "../../nostr/OutboxService";
-import { defaultRelays } from "../../nostr";
 import { decryptPrivateNote, viewKeyFromHex } from "../../nostr/privateNote";
 
 interface PrivateNoteProps {
@@ -76,25 +74,11 @@ export const PrivateNote: React.FC<PrivateNoteProps> = ({ neventId }) => {
         return;
       }
 
-      let relaysToUse = Array.from(
-        new Set([...relaysRef.current, ...defaultRelays, ...(decoded.relays || [])])
-      );
-      if (decoded.author) {
-        relaysToUse = getRelaysForAuthors(relaysToUse, [decoded.author]);
-      }
-
+      // The worker owns relay selection (including the author's outbox relays),
+      // so a single fetch by id is enough — no app-side relay fan-out.
       let event: Event | null = null;
       try {
-        const phase1 = await nostrRuntime.fetchWithDiagnostics(relaysToUse, decoded.id);
-        event = phase1.event;
-        if (!event && decoded.author) {
-          const outbox = await getOutboxRelays(decoded.author);
-          const extra = outbox.filter((r) => !relaysToUse.includes(r));
-          if (extra.length > 0) {
-            const phase2 = await nostrRuntime.fetchWithDiagnostics(extra, decoded.id);
-            event = phase2.event;
-          }
-        }
+        event = await dataLayer.fetchById(decoded.id);
       } catch (e) {
         console.error("Error fetching private note:", e);
       }

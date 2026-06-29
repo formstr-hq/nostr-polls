@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Button, CircularProgress, Typography } from "@mui/material";
-import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { FollowPackCard } from "../FollowPacks/FollowPackCard";
+import { WhoToFollow } from "../Profile/WhoToFollow";
+import { safeSetItem } from "../../utils/localStorage";
 
 const STORAGE_KEY = "pollerama:followPacksSource";
 const BATCH_SIZE = 20;
@@ -14,7 +15,6 @@ const BATCH_SIZE = 20;
 type Source = "global" | "following" | "bookmarked";
 
 const FollowPacksFeed: React.FC = () => {
-  const { relays } = useRelays();
   const { user } = useUserContext();
   const { lists, bookmarkedPackKeys } = useListContext();
   const { setItems, clearItems } = useSubNav();
@@ -36,8 +36,8 @@ const FollowPacksFeed: React.FC = () => {
   // Register sub-nav items
   useEffect(() => {
     const select = (s: Source) => {
-      localStorage.setItem(STORAGE_KEY, s);
       setSource(s);
+      safeSetItem(STORAGE_KEY, s);
       setPacks([]);
       seen.current.clear();
       setCursor(undefined);
@@ -89,7 +89,10 @@ const FollowPacksFeed: React.FC = () => {
       filter.authors = user.follows;
     }
 
-    const handle = nostrRuntime.subscribe(relays, [filter], {
+    let settled = false;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handle = dataLayer.observe([filter], {
       onEvent: (event: Event) => {
         if (!seen.current.has(event.id)) {
           seen.current.add(event.id);
@@ -98,11 +101,18 @@ const FollowPacksFeed: React.FC = () => {
         if (!oldestTimestamp || event.created_at < oldestTimestamp) {
           oldestTimestamp = event.created_at;
         }
+        // Commit shortly after the stream goes quiet (local EOSE precedes the
+        // worker's upstream fetch under the dataLayer contract).
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(finalize, 900);
       },
-      onEose: () => { finalize(); handle.unsubscribe(); },
     });
 
     const finalize = () => {
+      if (settled) return;
+      settled = true;
+      if (quietTimer) clearTimeout(quietTimer);
+      handle.unobserve();
       setPacks((prev) => {
         const ids = new Set(prev.map((e) => e.id));
         const merged = [...prev, ...newPacks.filter((e) => !ids.has(e.id))];
@@ -114,7 +124,8 @@ const FollowPacksFeed: React.FC = () => {
       setLoading(false);
     };
 
-    setTimeout(() => { finalize(); handle.unsubscribe(); }, 5000);
+    // Hard cap so an empty result (no events → no quiet timer) still settles.
+    setTimeout(finalize, 5000);
   };
 
   useEffect(() => {
@@ -135,6 +146,10 @@ const FollowPacksFeed: React.FC = () => {
 
   return (
     <Box sx={{ height: "100%", overflowY: "auto" }}>
+      {/* Algorithmic follow suggestions sit atop the discovery (Global) tab —
+          packs are curated lists to follow, so "people you may know" fits here.
+          Renders nothing until the WoT worker has produced recommendations. */}
+      {source === "global" && <WhoToFollow />}
       {isLoading && displayPacks.length === 0 ? (
         <Box display="flex" justifyContent="center" py={8}>
           <CircularProgress />

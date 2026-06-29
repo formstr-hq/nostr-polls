@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { Event } from "nostr-tools";
 import { nip57 } from "nostr-tools";
 import { useRelays } from "../hooks/useRelays";
-import { nostrRuntime } from "../singletons";
+import { dataLayer } from "@formstr/local-relay";
 
 export interface ZapInfo {
   event: Event;
@@ -55,7 +55,7 @@ export const ZapProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [zapsMap, setZapsMap] = useState<Map<string, ZapInfo[]>>(new Map());
   const trackedIdsRef = useRef<Set<string>>(new Set());
   const lastTrackedIds = useRef<string[]>([]);
-  const subscriptionRef = useRef<ReturnType<typeof nostrRuntime.subscribe> | null>(null);
+  const subscriptionRef = useRef<ReturnType<typeof dataLayer.observe> | null>(null);
   const { relays } = useRelays();
 
   const addZapEvent = useCallback((event: Event) => {
@@ -92,11 +92,10 @@ export const ZapProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!hasChanged) return;
 
       lastTrackedIds.current = [...ids];
-      subscriptionRef.current?.unsubscribe();
+      subscriptionRef.current?.unobserve();
       if (ids.length === 0) return;
 
-      subscriptionRef.current = nostrRuntime.subscribe(
-        relays,
+      subscriptionRef.current = dataLayer.observe(
         [{ kinds: [9735], "#e": ids }],
         { onEvent: addZapEvent }
       );
@@ -104,7 +103,7 @@ export const ZapProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       clearInterval(interval);
-      subscriptionRef.current?.unsubscribe();
+      subscriptionRef.current?.unobserve();
     };
   }, [relays, addZapEvent]);
 

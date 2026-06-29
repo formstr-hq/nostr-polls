@@ -24,9 +24,10 @@ import { Event, EventTemplate, nip19 } from "nostr-tools";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { NostrSignerPlugin } from "nostr-signer-capacitor-plugin";
 
+import { SimplePool } from "nostr-tools";
+import { dataLayer } from "@formstr/local-relay";
 import { defaultRelays, fetchUserProfile } from "../../nostr";
 import { publishInboxRelays } from "../../nostr/nip17";
-import { pool } from "..";
 import { ANONYMOUS_USER_NAME, User } from "../../contexts/user-context";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import {
@@ -47,6 +48,18 @@ import {
   removeLegacyNsecForAccount,
   removeNsecForAccount,
 } from "../../utils/secureKeyStorage";
+
+/**
+ * Dedicated relay pool for NIP-46 (bunker) remote-signer transport only.
+ *
+ * This is RPC to the user's *own* signer over the bunker's relay — not nostr
+ * content — so it lives outside the data layer the worker owns. The bunker
+ * session needs this connection to silently restore on reload (otherwise the
+ * signer can't be re-attached and the user appears logged out); the worker
+ * cannot proxy it. Other login methods (extension/android/local key) don't use
+ * this pool at all.
+ */
+export const signerTransportPool = new SimplePool();
 
 // ---------------------------------------------------------------------------
 // Public types — kept structurally close to the legacy shape so consumers
@@ -362,7 +375,7 @@ class SignerManager {
       content: JSON.stringify(profileContent),
     };
     const signed = await signer.signEvent(kind0Event);
-    pool.publish(defaultRelays, signed);
+    dataLayer.publishEvent(signed);
   }
 
   // -------------------------------------------------------------------------
@@ -427,12 +440,6 @@ class SignerManager {
     });
   }
 
-  async loginWithNip46(bunkerUri: string): Promise<void> {
-    await this.withSignerLock(async () => {
-      const account = await this.signer.loginWithBunkerUri(bunkerUri, { pool });
-      await this.afterLoginRefreshProfile(account.pubkey);
-    });
-  }
 
   async loginWithNip55(packageName: string, _cachedPubkey?: string): Promise<void> {
     await this.withSignerLock(async () => {
@@ -523,7 +530,7 @@ class SignerManager {
   private async silentUnlock(
     _account: PackageStoredAccount,
   ): Promise<ActiveSigner | null> {
-    return this.signer.unlock({ pool });
+    return this.signer.unlock({ pool: signerTransportPool });
   }
 
   private async promptUnlock(

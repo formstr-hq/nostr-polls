@@ -21,6 +21,8 @@ interface ZapModalProps {
   onZap: (amount: number) => Promise<string | null>;
   recipientName?: string;
   zapConfirmed?: boolean;
+  /** Amount (sats) to preselect when the modal opens — e.g. from a hold-to-zap ramp. */
+  initialAmount?: number;
 }
 
 const PRESET_AMOUNTS = [21, 100, 500, 1000, 5000];
@@ -94,6 +96,7 @@ const ZapModal: React.FC<ZapModalProps> = ({
   onZap,
   recipientName,
   zapConfirmed,
+  initialAmount,
 }) => {
   const [selectedAmount, setSelectedAmount] = useState<number | null>(100);
   const [customAmount, setCustomAmount] = useState<string>("");
@@ -101,6 +104,24 @@ const ZapModal: React.FC<ZapModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   useBackClose(open, onClose);
+
+  // When opened with a ramped amount, preselect it: match a preset chip if it
+  // lines up, otherwise drop it into the custom field.
+  useEffect(() => {
+    if (!open) return;
+    if (initialAmount && initialAmount > 0) {
+      if (PRESET_AMOUNTS.includes(initialAmount)) {
+        setSelectedAmount(initialAmount);
+        setCustomAmount("");
+      } else {
+        setSelectedAmount(null);
+        setCustomAmount(String(initialAmount));
+      }
+    } else {
+      setSelectedAmount(100);
+      setCustomAmount("");
+    }
+  }, [open, initialAmount]);
 
   const onCloseRef = React.useRef(onClose);
   React.useEffect(() => { onCloseRef.current = onClose; }, [onClose]);

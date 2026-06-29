@@ -9,24 +9,45 @@ import {
 } from "nostr-tools";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { defaultRelays } from "./index";
-import { nostrRuntime } from "../singletons";
+import { dataLayer, type PublishResult } from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
 
 // A rumor is an unsigned event with an id
 export type Rumor = UnsignedEvent & { id: string };
 
-export interface RelayPublish {
-  relay: string;
-  promise: Promise<string>;
-}
-
 export interface SendResult {
   rumor: Rumor;
-  /** Per-relay publish promises (deduped union of recipient + sender relays). */
-  publishes: RelayPublish[];
-  /** Original signed gift wraps — stored so retry can republish without re-signing. */
-  retryWraps: { event: Event; relays: string[] }[];
+  /** Signed gift wraps (recipient + sender) — kept so retry can republish without re-signing. */
+  wraps: Event[];
+  /** Per-relay delivery outcome from the worker, merged across both wraps. */
+  result: PublishResult;
+}
+
+/**
+ * Merge the per-relay outcomes of several `publishEvent` results into one,
+ * deduping by relay (a relay shared by the recipient + sender wrap appears
+ * once, keeping its best outcome). The worker owns relay selection; this is
+ * purely for the DM send-status UI.
+ */
+export function mergePublishResults(results: PublishResult[]): PublishResult {
+  const byRelay = new Map<string, PublishResult["relayResults"][number]>();
+  for (const res of results) {
+    for (const r of res.relayResults) {
+      const existing = byRelay.get(r.relay);
+      // Prefer an "accepted" outcome over any non-accepted one.
+      if (!existing || (existing.status !== "accepted" && r.status === "accepted")) {
+        byRelay.set(r.relay, r);
+      }
+    }
+  }
+  const relayResults = Array.from(byRelay.values());
+  const accepted = relayResults.filter((r) => r.status === "accepted").length;
+  return {
+    ok: accepted > 0,
+    accepted,
+    total: relayResults.length,
+    relayResults,
+  };
 }
 
 interface CachedRelays {
@@ -66,10 +87,7 @@ async function fetchRelaysFromNetwork(
   persist: boolean
 ): Promise<string[]> {
   try {
-    const event = await nostrRuntime.fetchOne(defaultRelays, {
-      kinds: [10050],
-      authors: [pubkey],
-    });
+    const event = await dataLayer.fetchReplaceable(10050, pubkey);
 
     if (event) {
       const relays = event.tags
@@ -140,7 +158,7 @@ export async function publishInboxRelays(relays: string[]): Promise<void> {
     content: "",
   };
   const signed = await signer.signEvent(event);
-  nostrRuntime.publish(defaultRelays, signed);
+  dataLayer.publishEvent(signed);
 }
 
 /**
@@ -322,28 +340,16 @@ export async function wrapAndSendDM(
   const signer = await signerManager.getSigner();
   const senderPubkey = await signer.getPublicKey();
 
-  // Fetch inbox relays — persist only for the sender (logged-in user)
-  const [recipientInbox, senderInbox] = await Promise.all([
-    fetchInboxRelays(recipientPubkey),
-    fetchInboxRelays(senderPubkey, true),
-  ]);
-
   // Create the rumor (unsigned kind 14)
   const rumor = createRumor(senderPubkey, recipientPubkey, content, replyToId);
 
-  const recipientRelays = Array.from(new Set([...recipientInbox, ...defaultRelays]));
-  const senderRelays = Array.from(new Set([...senderInbox, ...defaultRelays]));
-
-  let wraps: { event: Event; relays: string[] }[];
+  let wraps: Event[];
 
   if (privateKey) {
     const privkeyBytes = hexToBytes(privateKey);
     const wrapForRecipient = createGiftWrapLocal(privkeyBytes, rumor, recipientPubkey);
     const wrapForSender = createGiftWrapLocal(privkeyBytes, rumor, senderPubkey);
-    wraps = [
-      { event: wrapForRecipient, relays: recipientRelays },
-      { event: wrapForSender,    relays: senderRelays },
-    ];
+    wraps = [wrapForRecipient, wrapForSender];
   } else {
     if (!signer.nip44Encrypt) {
       throw new Error(
@@ -352,25 +358,15 @@ export async function wrapAndSendDM(
     }
     const recipientWrap = await createGiftWrapForSigner(signer, rumor, recipientPubkey);
     const senderWrap = await createGiftWrapForSigner(signer, rumor, senderPubkey);
-    wraps = [
-      { event: recipientWrap, relays: recipientRelays },
-      { event: senderWrap,    relays: senderRelays },
-    ];
+    wraps = [recipientWrap, senderWrap];
   }
 
-  // Fire off all publishes — don't await, return promises for UI tracking.
-  // Deduplicate by relay URL so we get one promise per unique relay.
-  const relayMap = new Map<string, RelayPublish>();
-  for (const { event, relays } of wraps) {
-    const promises = nostrRuntime.publish(relays, event);
-    relays.forEach((relay, i) => {
-      if (!relayMap.has(relay)) {
-        relayMap.set(relay, { relay, promise: promises[i] });
-      }
-    });
-  }
+  // The worker routes each gift wrap to the recipient's (and sender's) inbox
+  // relays based on its #p tag — the app no longer selects relays. We await the
+  // per-relay outcomes so the UI can show delivery status.
+  const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
 
-  return { rumor, publishes: Array.from(relayMap.values()), retryWraps: wraps };
+  return { rumor, wraps, result: mergePublishResults(results) };
 }
 
 /**
@@ -386,11 +382,6 @@ export async function wrapAndSendReaction(
   const signer = await signerManager.getSigner();
   const senderPubkey = await signer.getPublicKey();
 
-  const [recipientInbox, senderInbox] = await Promise.all([
-    fetchInboxRelays(recipientPubkey),
-    fetchInboxRelays(senderPubkey, true),
-  ]);
-
   // Create a kind 7 reaction rumor with e-tag for target message
   const rumor = createRumor(
     senderPubkey,
@@ -400,9 +391,6 @@ export async function wrapAndSendReaction(
     7,
     [["e", targetMessageId]]
   );
-
-  const recipientRelays = Array.from(new Set([...recipientInbox, ...defaultRelays]));
-  const senderRelays = Array.from(new Set([...senderInbox, ...defaultRelays]));
 
   if (privateKey) {
     const privkeyBytes = hexToBytes(privateKey);
@@ -418,8 +406,8 @@ export async function wrapAndSendReaction(
       senderPubkey
     );
 
-    await Promise.allSettled(nostrRuntime.publish(recipientRelays, wrapForRecipient));
-    await Promise.allSettled(nostrRuntime.publish(senderRelays, wrapForSender));
+    await dataLayer.publishEvent(wrapForRecipient);
+    await dataLayer.publishEvent(wrapForSender);
   } else {
     if (!signer.nip44Encrypt) {
       throw new Error(
@@ -432,14 +420,14 @@ export async function wrapAndSendReaction(
       rumor,
       recipientPubkey
     );
-    await Promise.allSettled(nostrRuntime.publish(recipientRelays, recipientWrap));
+    await dataLayer.publishEvent(recipientWrap);
 
     const senderWrap = await createGiftWrapForSigner(
       signer,
       rumor,
       senderPubkey
     );
-    await Promise.allSettled(nostrRuntime.publish(senderRelays, senderWrap));
+    await dataLayer.publishEvent(senderWrap);
   }
 
   return rumor;

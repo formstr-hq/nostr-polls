@@ -13,29 +13,26 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import TuneIcon from "@mui/icons-material/Tune";
 import PaletteIcon from "@mui/icons-material/Palette";
-import HubIcon from "@mui/icons-material/Hub";
-import InsightsIcon from "@mui/icons-material/Insights";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import PermMediaIcon from "@mui/icons-material/PermMedia";
 import ShieldIcon from "@mui/icons-material/Shield";
+import LanIcon from "@mui/icons-material/Lan";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { RelaySettings } from "../Header/RelaySettings";
-import { RelayAnalytics } from "../Header/RelayAnalytics";
 import { AISettings } from "../Header/AISettings";
 import { BlossomSettings } from "../Header/BlossomSettings";
 import { ModerationSettings } from "../Header/ModerationSettings";
 import { AppearanceSettings } from "../Header/AppearanceSettings";
 import { GeneralSettings } from "../Header/GeneralSettings";
+import { NetworkSettings } from "../Header/NetworkSettings";
 
 type SectionId =
   | "general"
   | "appearance"
-  | "relays"
-  | "relayAnalytics"
   | "ai"
   | "media"
-  | "moderation";
+  | "moderation"
+  | "network";
 
 interface SectionDef {
   id: SectionId;
@@ -61,20 +58,6 @@ const SECTIONS: SectionDef[] = [
     render: () => <AppearanceSettings />,
   },
   {
-    id: "relays",
-    label: "Relays",
-    description: "Manage the relays you publish to",
-    icon: <HubIcon />,
-    render: () => <RelaySettings />,
-  },
-  {
-    id: "relayAnalytics",
-    label: "Relay Analytics",
-    description: "See how your relays are performing",
-    icon: <InsightsIcon />,
-    render: () => <RelayAnalytics />,
-  },
-  {
     id: "ai",
     label: "AI",
     description: "AI provider and model preferences",
@@ -94,6 +77,13 @@ const SECTIONS: SectionDef[] = [
     description: "Reports, mutes, and content filters",
     icon: <ShieldIcon />,
     render: () => <ModerationSettings />,
+  },
+  {
+    id: "network",
+    label: "Network",
+    description: "Relay connections, cache, and sync diagnostics",
+    icon: <LanIcon />,
+    render: () => <NetworkSettings />,
   },
 ];
 

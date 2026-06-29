@@ -22,8 +22,7 @@ import { useNostrNotifications } from "../../contexts/nostr-notification-context
 import { parseNotification } from "../Header/notification-utils";
 import { useAppContext } from "../../hooks/useAppContext";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
-import { nostrRuntime } from "../../singletons";
-import { useRelays } from "../../hooks/useRelays";
+import { dataLayer } from "@formstr/local-relay";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 
@@ -32,7 +31,6 @@ dayjs.extend(relativeTime);
 const NotificationsPage: React.FC = () => {
   const { notifications, markAllAsRead, refresh, pollMap, isLoading } = useNostrNotifications();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
-  const { relays } = useRelays();
   const navigate = useNavigate();
 
   const [postSnippets, setPostSnippets] = useState<Map<string, string>>(new Map());
@@ -51,22 +49,9 @@ const NotificationsPage: React.FC = () => {
       if (fetchedRef.current.has(postId) || fetchingRef.current.has(postId)) return;
       fetchingRef.current.add(postId);
 
-      const cached = nostrRuntime.get(postId);
-      if (cached) {
-        fetchedRef.current.add(postId);
-        fetchingRef.current.delete(postId);
-        setPostSnippets((prev) => {
-          const next = new Map(prev);
-          next.set(postId, cached.content?.slice(0, 80) || "");
-          return next;
-        });
-        return;
-      }
-
-      const fetchRelays = relayHint
-        ? Array.from(new Set([...relays, relayHint]))
-        : relays;
-      nostrRuntime.fetchBatched(fetchRelays, postId).then((event) => {
+      // fetchById reads the worker's store first (cache), then lets the worker
+      // warm from the network — so there's no separate synchronous cache path.
+      dataLayer.fetchById(postId).then((event) => {
         fetchedRef.current.add(postId);
         fetchingRef.current.delete(postId);
         if (event) {
@@ -78,7 +63,7 @@ const NotificationsPage: React.FC = () => {
         }
       });
     },
-    [relays]
+    []
   );
 
   useEffect(() => {
@@ -163,22 +148,48 @@ const NotificationsPage: React.FC = () => {
     return `post ${postId.slice(0, 8)}\u2026`;
   };
 
+  // Map a poll response (kind 1018) to the human-readable labels it selected,
+  // resolving each `["response", optionId]` tag against the poll's
+  // `["option", optionId, label]` tags. Falls back to the raw id if the poll
+  // (or that option) isn't available yet.
+  const getPollAnswer = (ev: Event, pollId: string | undefined): string => {
+    const selected = ev.tags
+      .filter((t) => t[0] === "response")
+      .map((t) => t[1]);
+    if (selected.length === 0) return "";
+    const poll = pollId ? pollMap.get(pollId) : undefined;
+    const labels = selected.map((id) => {
+      const opt = poll?.tags.find((t) => t[0] === "option" && t[1] === id);
+      return opt?.[2] || id.slice(0, 8);
+    });
+    return labels.join(", ");
+  };
+
   const getNotifText = (ev: Event): { title: string; body: string } => {
     const parsed = parseNotification(ev);
     const name = getName(parsed.fromPubkey);
 
     switch (parsed.type) {
-      case "poll-response":
+      case "poll-response": {
+        const answer = getPollAnswer(ev, parsed.pollId);
+        const question = pollMap.get(parsed.pollId!)?.content;
+        const body = [
+          answer ? `Chose: ${answer}` : "",
+          question ? `"${question.slice(0, 80)}"` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
         return {
           title: `${name} responded to your poll`,
-          body: pollMap.get(parsed.pollId!)?.content
-            ? `"${pollMap.get(parsed.pollId!)?.content.slice(0, 80)}"`
-            : "",
+          body,
         };
+      }
       case "comment": {
         const commentTitle =
           ev.kind === 1068 ? `${name} mentioned you in a poll` :
           ev.kind === 30023 ? `${name} mentioned you in an article` :
+          parsed.rootKind === 1068 ? `${name} commented on your poll` :
+          parsed.rootKind === 30023 ? `${name} commented on your article` :
           `${name} commented`;
         return {
           title: commentTitle,
@@ -224,7 +235,11 @@ const NotificationsPage: React.FC = () => {
           ? "mentioned you in a poll"
           : ev.kind === 30023
             ? "mentioned you in an article"
-            : "commented";
+            : parsed.rootKind === 1068
+              ? "commented on your poll"
+              : parsed.rootKind === 30023
+                ? "commented on your article"
+                : "commented";
       case "reaction":
         return `reacted ${parsed.reaction}`;
       case "zap":
@@ -297,7 +312,7 @@ const NotificationsPage: React.FC = () => {
   };
 
   return (
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", overflowX: "hidden" }}>
       {/* Header bar */}
       <Box
         sx={{
@@ -319,7 +334,7 @@ const NotificationsPage: React.FC = () => {
       </Box>
 
       {/* List */}
-      <Box sx={{ flex: 1, overflowY: "auto" }}>
+      <Box sx={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
         {rows.length === 0 && isLoading ? (
           <List disablePadding>
             {Array.from({ length: 6 }).map((_, i) => (
@@ -447,7 +462,7 @@ const NotificationsPage: React.FC = () => {
                     <ListItemText
                       primary={
                         getNotifActionText(ev) && parsed.fromPubkey ? (
-                          <Typography variant="subtitle2">
+                          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
                             <Box
                               component="span"
                               onClick={(e) => handleProfileClick(e, parsed.fromPubkey)}
@@ -472,7 +487,7 @@ const NotificationsPage: React.FC = () => {
                             {getNotifActionText(ev)}
                           </Typography>
                         ) : (
-                          <Typography variant="subtitle2">{title}</Typography>
+                          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>{title}</Typography>
                         )
                       }
                       secondary={
@@ -483,6 +498,7 @@ const NotificationsPage: React.FC = () => {
                               variant="body2"
                               color="text.secondary"
                               display="block"
+                              sx={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
                             >
                               {body}
                             </Typography>

@@ -8,7 +8,6 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useNotification } from "../../contexts/notification-context";
 import { DraggableCorner } from "../Common/DraggableCorner";
-import { nostrRuntime } from "../../singletons";
 
 interface CreateFABProps {
   extraActions?: {
@@ -47,9 +46,6 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
 
   const handleRefresh = () => {
     setOpen(false);
-    // Re-establish any silently-dropped relay connections before refetching, so
-    // a manual refresh also recovers a long-lived tab that lost its sockets.
-    nostrRuntime.reconnect();
     refresh();
   };
 
@@ -65,7 +61,7 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
 
 
   const actionSx = {
-    border: (theme: any) => `2px solid ${theme.palette.primary.main}`,
+    border: (theme: any) => `2px solid ${theme.palette.secondary.main}`,
   };
 
   const hasNewItems = newItemCount > 0;
@@ -83,10 +79,13 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
         <SpeedDial
           ariaLabel="Feed actions"
           direction={corner.startsWith("t") ? "down" : "up"}
+          // The app's primary floating action carries the secondary accent — the
+          // most visible place the theme's secondary color shows up.
+          FabProps={{ color: "secondary" }}
           sx={{
             "& .MuiSpeedDial-fab": {
               position: "relative",
-              border: (theme: any) => `2px solid ${theme.palette.primary.main}`,
+              border: (theme: any) => `2px solid ${theme.palette.secondary.main}`,
             },
             // Notification dot anchored to the FAB itself (not the dial root,
             // whose actions area would push it off the button).

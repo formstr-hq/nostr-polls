@@ -100,6 +100,42 @@ export function buildTheme(
           },
         },
       },
+      // Floating action buttons carry the secondary accent by default, so the
+      // theme's secondary color shows up on the app's primary actions. A Fab that
+      // sets its own `color` prop still wins (defaultProps only fill the gap).
+      MuiFab: {
+        defaultProps: {
+          color: "secondary",
+        },
+      },
+      // Inline links pick up the secondary accent too.
+      MuiLink: {
+        styleOverrides: {
+          root: ({ theme }) => ({
+            color: theme.palette.secondary.main,
+            textDecorationColor: theme.palette.secondary.main,
+          }),
+        },
+      },
+      // Tab bars: the active-tab indicator + label use the secondary accent (the
+      // top-level feed nav stays primary; these in-page tabs read as secondary).
+      MuiTabs: {
+        defaultProps: {
+          indicatorColor: "secondary",
+          textColor: "secondary",
+        },
+      },
+      // Toggles, sliders (e.g. the music scrubber), and spinners default to the
+      // secondary accent. A component that sets its own `color` prop still wins.
+      MuiSwitch: {
+        defaultProps: { color: "secondary" },
+      },
+      MuiSlider: {
+        defaultProps: { color: "secondary" },
+      },
+      MuiCircularProgress: {
+        defaultProps: { color: "secondary" },
+      },
       MuiAvatar: {
         styleOverrides: {
           root: {

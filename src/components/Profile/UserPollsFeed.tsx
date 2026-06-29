@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
-import { nostrRuntime } from "../../singletons";
-import { useRelays } from "../../hooks/useRelays";
+import { dataLayer } from "@formstr/local-relay";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import UnifiedFeed from "../Feed/UnifiedFeed";
 
@@ -14,11 +13,9 @@ interface UserPollsFeedProps {
 
 const KIND_POLL = 1068;
 
-const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, relays: propRelays, scrollContainerRef }) => {
+const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, scrollContainerRef }) => {
   const [polls, setPolls] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const { relays: hookRelays } = useRelays();
-  const relays = propRelays ?? hookRelays;
 
   const fetchPolls = useCallback(() => {
     if (!pubkey) return;
@@ -32,7 +29,7 @@ const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, relays: propRelay
       },
     ];
 
-    const handle = nostrRuntime.subscribe(relays, filters, {
+    const handle = dataLayer.observe(filters, {
       onEvent(event) {
         setPolls((prev) => {
           const exists = prev.find((e) => e.id === event.id);
@@ -45,8 +42,8 @@ const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, relays: propRelay
       },
     });
 
-    return () => handle.unsubscribe();
-  }, [pubkey, relays]);
+    return () => handle.unobserve();
+  }, [pubkey]);
 
   useEffect(() => {
     const cleanup = fetchPolls();

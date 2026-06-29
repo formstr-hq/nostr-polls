@@ -22,14 +22,13 @@ import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import HowToVoteOutlinedIcon from "@mui/icons-material/HowToVoteOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { QRCodeSVG } from "qrcode.react";
-import { signerManager } from "../../singletons/Signer/SignerManager";
+import { signerManager, signerTransportPool } from "../../singletons/Signer/SignerManager";
 import { useUserContext } from "../../hooks/useUserContext";
 import { CreateAccountModal } from "./CreateAccountModal";
 import { isAndroidNative, isNative } from "../../utils/platform";
 import { NostrSignerPlugin } from "nostr-signer-capacitor-plugin";
 import { SignerAppInfo } from "nostr-signer-capacitor-plugin/dist/esm/definitions";
 import { useBackClose } from "../../hooks/useBackClose";
-import { pool } from "../../singletons";
 
 interface Props {
   open: boolean;
@@ -148,7 +147,9 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     if (!bunkerUri) return;
     setError("");
     try {
-      await signerManager.runLogin((s) => s.loginWithBunkerUri(bunkerUri, { pool }));
+      await signerManager.runLogin((s) =>
+        s.loginWithBunkerUri(bunkerUri, { pool: signerTransportPool }),
+      );
       finishLogin();
     } catch (err) {
       setError("Failed to connect to remote signer.");
@@ -187,7 +188,7 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
       await signerManager.runLogin((s) =>
         s.loginWithNostrConnect({
           relays,
-          pool,
+          pool: signerTransportPool,
           signal: abort.signal,
           // Amber (and most NIP-46 signers) need explicit perms to surface
           // the approve prompt; without these the request can silently no-op.

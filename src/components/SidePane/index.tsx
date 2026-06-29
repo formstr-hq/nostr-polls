@@ -16,11 +16,13 @@ import TagIcon from "@mui/icons-material/Tag";
 import ArticleIcon from "@mui/icons-material/Article";
 import BookIcon from "@mui/icons-material/MenuBook";
 import MovieIcon from "@mui/icons-material/Movie";
+import MusicNoteIcon from "@mui/icons-material/MusicNote";
 import PeopleIcon from "@mui/icons-material/People";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import { SvgIconComponent } from "@mui/icons-material";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useSubNav } from "../../contexts/SubNavContext";
+import { safeSetItem } from "../../utils/localStorage";
 
 // Static sub-item definitions — used for the mobile popup regardless of which
 // feed is currently mounted. Active state is read from localStorage so we can
@@ -55,6 +57,11 @@ const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
     { key: "global", label: "Global" },
     { key: "following", label: "Following" },
   ],
+  music: [
+    { key: "discover", label: "Discover" },
+    { key: "following", label: "Following" },
+    { key: "local", label: "Local" },
+  ],
 };
 
 const FEED_STORAGE_KEYS: Record<string, string> = {
@@ -64,6 +71,7 @@ const FEED_STORAGE_KEYS: Record<string, string> = {
   topics: "pollerama:lastTopicsTab",
   "follow-packs": "pollerama:followPacksSource",
   articles: "pollerama:articlesSource",
+  music: "pollerama:musicSource",
 };
 
 const FEED_DEFAULT_SUB: Record<string, string> = {
@@ -73,6 +81,7 @@ const FEED_DEFAULT_SUB: Record<string, string> = {
   topics: "interests",
   "follow-packs": "global",
   articles: "global",
+  music: "discover",
 };
 
 const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = [
@@ -81,6 +90,7 @@ const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = 
   { value: "topics",       label: "Topics",       Icon: TagIcon },
   { value: "notes",        label: "Notes",        Icon: ArticleIcon },
   { value: "articles",     label: "Articles",     Icon: BookIcon },
+  { value: "music",        label: "Music",        Icon: MusicNoteIcon },
   { value: "movies",       label: "Movies",       Icon: MovieIcon },
   { value: "follow-packs", label: "Packs",        Icon: PeopleIcon },
 ];
@@ -132,7 +142,7 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
     if (!menuFeed) return;
 
     const storageKey = FEED_STORAGE_KEYS[menuFeed];
-    if (storageKey) localStorage.setItem(storageKey, subKey);
+    if (storageKey) safeSetItem(storageKey, subKey);
 
     if (menuFeed === currentFeed) {
       // Feed is active — use the SubNavContext item's onClick to update live state
@@ -234,9 +244,9 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
                   sx={{
                     fontSize: "0.875rem",
                     "&.Mui-selected": {
-                      color: "primary.main",
+                      color: "secondary.main",
                       fontWeight: 600,
-                      bgcolor: (t) => alpha(t.palette.primary.main, 0.1),
+                      bgcolor: (t) => alpha(t.palette.secondary.main, 0.1),
                     },
                   }}
                 >
@@ -328,16 +338,18 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
                         borderRadius: 2,
                         cursor: item.disabled ? "default" : "pointer",
                         opacity: item.disabled ? 0.38 : 1,
-                        color: item.active ? "primary.main" : "text.secondary",
+                        // Sub-nav uses the secondary accent (the top-level feed
+                        // selection above stays primary).
+                        color: item.active ? "secondary.main" : "text.secondary",
                         fontWeight: item.active ? 600 : 400,
                         bgcolor: item.active
-                          ? alpha(theme.palette.primary.main, 0.08)
+                          ? alpha(theme.palette.secondary.main, 0.08)
                           : "transparent",
                         "&:hover": item.disabled
                           ? {}
                           : {
                               bgcolor: item.active
-                                ? alpha(theme.palette.primary.main, 0.14)
+                                ? alpha(theme.palette.secondary.main, 0.14)
                                 : alpha(theme.palette.text.primary, 0.05),
                             },
                         transition: "background-color 0.15s, color 0.15s",

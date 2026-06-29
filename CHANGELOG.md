@@ -1,3 +1,81 @@
+# 1.11.1
+
+- Articles now render embeds inline (notes, mentions, hashtags, YouTube, video, images, links, emoji) instead of plain text.
+- Full-screen images now have Download, Share and Copy-link buttons.
+- YouTube embeds show a thumbnail and loading bar while the player starts.
+- Comments now show the poll, article or track they're about inline.
+- Notifications now say "commented on your poll/article" instead of just "commented".
+- Fixed long links and text overflowing the screen on the Notifications and Profile pages.
+
+# 1.11.0
+
+- Add your own songs to playlists on Android: local tracks from your device can now be added to any playlist, right alongside Nostr tracks.
+- Download tracks: every track in the Music feed now has a download button — saved straight to your device on Android.
+- A fresh coat of paint: every color theme now has a matching accent color, used across the app — the floating create button, sub-navigation, tabs, switches and sliders — so your chosen theme shows up in more places.
+- Make your own theme: pick your own primary and accent colors in Appearance settings to build a custom theme.
+- Images in comments: attach an image or video to a comment, or paste one straight from your clipboard, and preview your comment inline before you post it.
+
+# 1.10.3
+
+- Playlists: build your own playlists right on your device — no account needed — mixing tracks from Nostr and your own local files. Create, rename, reorder, shuffle, and "play all".
+- Add to playlist in a tap: every track in the Music feed now has a quick add-to-playlist button.
+- Share your playlists: publish any playlist to Nostr so others can find and play it.
+- Playlists from people you follow: a new shelf on the Music feed shows public playlists shared by accounts you follow — open one to play it, see who made it, save your own copy, or zap the creator.
+- Fixed playlist tracks getting stuck on "Loading…": tracks now resolve from the relays that actually host them (using the playlist's relay hints), and those hints are saved when you add a track and included when you publish.
+- Fixed the Music feed not loading more as you scroll — infinite scroll now pulls the next page when you reach the end.
+- The playlist shelves now scroll away with the feed instead of staying pinned to the top.
+- Fixed the volume slider crashing playback when device storage was full.
+
+# 1.10.0
+
+- New Music feed: discover tracks from across Nostr and from people you follow, with a built-in player. A mini player docks at the bottom and keeps playing as you move between feeds.
+- Background playback on Android: music keeps playing when you leave the app or lock the screen, with play/pause/skip controls on the lock screen and notification, plus headphone-button support.
+- Volume control: set the playback volume right from the mini player, and it's remembered for next time.
+- Play your own music: browse and play the audio already on your device (Android), or add local files in the browser.
+- Search now finds more: full-text search across the network returns notes, profiles, and polls.
+
+# 1.9.5
+
+- Direct messages now arrive on time on Android: gift-wrapped DMs (which carry a randomized, sometimes back-dated timestamp) were being skipped by the background notifier, so messages could show up days late or not at all — they're now caught and notified as they land.
+- DMs deliver and sync more reliably: your message inbox relays are now used specifically for messages, separate from your feed relays, so conversations stay in real time without dragging your whole feed onto a small inbox relay.
+- Messages and posts that can't reach a relay are no longer lost — they're queued and re-sent automatically when the connection comes back. Network settings now show pending/failed deliveries (with a Retry button) and an online indicator.
+- Tap a reaction again to remove it: react with an emoji and tapping it once more takes it back (the picker also highlights the reactions you've already added so you can clear them).
+- Poll response notifications now tell you what the person chose, not just that they responded.
+- Fixed not being able to tap anything above the floating create button.
+- Fixed the Interests / topic feeds freezing the app while they loaded.
+
+# 1.9.4
+
+- Trust scores: profiles now show a "Trust score" — how many of the people you follow also follow them — surfaced as a network chip, so you can gauge a stranger at a glance.
+- New "People you may know" rail: follow suggestions drawn from your web of trust (people followed by those you follow), ranked by how many of your follows follow them.
+- Network settings now show your web-of-trust size and last computed time, with a button to recompute it on demand.
+- Trust scores and recommendations are computed in the background by the web-of-trust worker, so they don't block the app.
+
+# 1.9.3
+
+- Fixed a crash on launch.
+- Fixed the Home feed sometimes failing to load.
+
+# 1.9.2
+
+- Fixed the Home and Notes feeds (and any "Following"/"Network" view) sometimes showing nothing on launch or resume — your follow list is now cached and available instantly, independent of the sync engine.
+- Notes shared inside DMs now load reliably, fetching the referenced note from relay hints even when you don't follow the author.
+- New Network settings: see your relay connections, cache size, and sync state at a glance, with controls to reconnect or clear the local cache.
+
+# 1.9.0
+
+- New on-device relay engine: a built-in local relay now stores everything you've seen and answers the app from local cache first, so feeds, profiles, and threads load instantly — even offline — and stay in sync with the network in the background.
+- All relay traffic (reads and writes) now flows through this engine off the main thread, so the app stays smooth and responsive even while it's busy syncing.
+- Faster repeat visits: notes, profiles, reactions, and zaps you've already loaded come straight from local storage instead of re-fetching from relays each time.
+- Fixed a Zap notification issue on Android.
+
+# 1.8.21
+
+- Zap notifications: you now get a push when someone zaps you, with the sats amount, on Android.
+- Hold-to-zap: press and hold the zap icon to ramp the amount up — release to open the zap dialog preloaded with that amount (a quick tap still opens it at the default).
+- Notifications now use people's names instead of raw keys — "Alice mentioned you", "Alice zapped you ⚡", "Alice reacted to your post" — falling back to a short key only when the profile isn't cached yet.
+- Grouped reactions read more naturally: a single reactor is named ("Alice reacted to your post"), while several collapse into one "5 new reactions".
+
 # 1.8.20
 
 - New unified Home feed — notes, polls, and articles in a single stream — is now the default landing screen. Scope it to people you Follow or your wider Network (web of trust); replies are filtered out so it stays a feed of top-level posts.

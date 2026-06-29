@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from "react";
-import { Box, Typography } from "@mui/material";
+import React, { useEffect, useRef, useState } from "react";
+import { Box, LinearProgress, Typography } from "@mui/material";
 import { useVideoPlayer } from "../../../contexts/VideoPlayerContext";
 
 /** Walk up the DOM to find the nearest element that actually scrolls. */
@@ -67,6 +67,11 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ytPlayer = useRef<any>(null);
   const isPlayingRef = useRef(false);
+  // The YT iframe API loads async and the player takes a beat to mount, during
+  // which the embed area is blank. Track readiness so we can show a thumbnail +
+  // progress placeholder until the real player paints.
+  const [ready, setReady] = useState(false);
+  const videoId = extractVideoId(url);
 
   const { setFloatingVideo, floatingVideo } = useVideoPlayer();
 
@@ -85,10 +90,10 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
       return;
     }
 
-    const videoId = extractVideoId(url);
     if (!videoId) return;
 
     let cancelled = false;
+    setReady(false);
 
     loadYouTubeAPI().then(() => {
       if (cancelled || !playerDivRef.current) return;
@@ -107,6 +112,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
             // Fine-grained seek for fractional seconds
             if (startTime > 0) event.target.seekTo(startTime, true);
             if (isFloating) event.target.playVideo();
+            if (!cancelled) setReady(true);
           },
           onStateChange: (event: any) => {
             // YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
@@ -169,19 +175,64 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   }
 
   return (
-    <div
+    <Box
       ref={wrapperRef}
-      style={{
+      sx={{
+        position: "relative",
         width: "100%",
         maxWidth: "1000px",
         margin: "0 auto",
         aspectRatio: "16/9",
+        borderRadius: 1,
+        overflow: "hidden",
+        bgcolor: "#000",
       }}
     >
       <div
         ref={playerDivRef}
         style={{ width: "100%", height: "100%" }}
       />
-    </div>
+
+      {/* Loading placeholder: the YT iframe API + player mount async, so without
+          this the embed area is blank/confusing. Shows the video thumbnail with
+          a progress bar until the real player is ready. */}
+      {!ready && (
+        <Box
+          sx={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "#000",
+            backgroundImage: videoId
+              ? `url(https://img.youtube.com/vi/${videoId}/hqdefault.jpg)`
+              : undefined,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+          }}
+        >
+          <LinearProgress
+            sx={{ position: "absolute", top: 0, left: 0, right: 0 }}
+          />
+          {/* Play glyph to signal a video is loading */}
+          <Box
+            sx={{
+              width: 56,
+              height: 56,
+              borderRadius: "50%",
+              bgcolor: "rgba(0,0,0,0.55)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Typography sx={{ color: "#fff", fontSize: 24, lineHeight: 1, ml: "3px" }}>
+              ▶
+            </Typography>
+          </Box>
+        </Box>
+      )}
+    </Box>
   );
 };

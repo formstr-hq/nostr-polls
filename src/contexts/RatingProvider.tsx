@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useEffect, useRef, useState } from "
 import { Event } from "nostr-tools";
 import { useRelays } from "../hooks/useRelays";
 import { useUserContext } from "../hooks/useUserContext";
-import { nostrRuntime } from "../singletons";
+import { dataLayer } from "@formstr/local-relay";
 
 type RatingMap = Map<string, Map<string, number>>; // entityId -> pubkey -> rating
 type UserRatingMap = Map<string, Event>; // entityId -> Event
@@ -32,7 +32,7 @@ export const RatingProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const pendingIds = useRef<string[]>([]);
   // The id set our current subscription actually covers.
   const subscribedIds = useRef<string[]>([]);
-  const subscriptionRef = useRef<ReturnType<typeof nostrRuntime.subscribe> | null>(null);
+  const subscriptionRef = useRef<ReturnType<typeof dataLayer.observe> | null>(null);
 
   const { user } = useUserContext();
   const { relays } = useRelays();
@@ -111,12 +111,11 @@ export const RatingProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (ids.length === 0) return;
 
       if (subscriptionRef.current) {
-        subscriptionRef.current.unsubscribe();
+        subscriptionRef.current.unobserve();
       }
 
       subscribedIds.current = ids;
-      subscriptionRef.current = nostrRuntime.subscribe(
-        relays,
+      subscriptionRef.current = dataLayer.observe(
         [{ kinds: [34259], "#d": ids }],
         { onEvent: handleEvent }
       );
@@ -124,7 +123,7 @@ export const RatingProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     return () => {
       clearInterval(interval);
-      if (subscriptionRef.current) subscriptionRef.current.unsubscribe();
+      if (subscriptionRef.current) subscriptionRef.current.unobserve();
     };
   }, [user, handleEvent, relays]);
 

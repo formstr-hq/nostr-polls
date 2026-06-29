@@ -7,7 +7,7 @@ export function useRelays() {
 
   if (!context) {
     console.warn("useRelays must be used within a RelayProvider");
-    return { relays: defaultRelays, writeRelays: defaultRelays, isUsingUserRelays: false, refreshRelays: () => {} };
+    return { relays: defaultRelays, writeRelays: defaultRelays };
   }
 
   return context;

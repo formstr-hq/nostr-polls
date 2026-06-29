@@ -1,8 +1,7 @@
-import { Event, EventTemplate, Filter, finalizeEvent, SimplePool } from "nostr-tools";
+import { Event, EventTemplate, finalizeEvent } from "nostr-tools";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { nostrRuntime } from "../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
-import { getCachedOutboxRelays, getOutboxRelays } from "./OutboxService";
 import { withClientTag } from "../services/clientTagSettings";
 
 export const defaultRelays = [
@@ -28,22 +27,13 @@ export const profileSearchRelays = [
   "wss://nostr.wine",
 ];
 
-export const fetchUserProfile = async (
+export const fetchUserProfile = (
   pubkey: string,
-  relays: string[] = defaultRelays
+  _relays: string[] = defaultRelays
 ) => {
-  // Use cached outbox relays if available (no extra round-trip on cache hit)
-  const cachedOutbox = getCachedOutboxRelays(pubkey);
-  const fetchRelays = cachedOutbox.length > 0
-    ? Array.from(new Set([...cachedOutbox, ...relays]))
-    : relays;
-
-  // Trigger background fetch of outbox relays so future calls benefit
-  if (cachedOutbox.length === 0) {
-    getOutboxRelays(pubkey); // fire-and-forget
-  }
-
-  return nostrRuntime.fetchOne(fetchRelays, { kinds: [0], authors: [pubkey] });
+  // A profile is a replaceable (kind 0) — one current value per pubkey, a real
+  // terminal state, so a Promise is correct here (unlike growing-set reads).
+  return dataLayer.fetchReplaceable(0, pubkey);
 };
 
 export async function parseContacts(contactList: Event) {
@@ -58,85 +48,9 @@ export async function parseContacts(contactList: Event) {
   return new Set<string>();
 }
 
-export const fetchUserProfiles = async (
-  pubkeys: string[],
-  _pool: SimplePool,
-  relays: string[] = defaultRelays
-) => {
-  let result = await nostrRuntime.querySync(relays, {
-    kinds: [0],
-    authors: pubkeys,
-  });
-  return result;
-};
-
-export const fetchReposts = async (
-  ids: string[],
-  pool: SimplePool,
-  relays: string[]
-): Promise<Event[]> => {
-  const filters: Filter = {
-    kinds: [6, 16],
-    "#e": ids,
-  }
-
-  try {
-    const events = await nostrRuntime.querySync(relays, filters);
-    return events;
-  } catch (err) {
-    console.error("Error fetching reposts", err);
-    return [];
-  }
-};
-
-export const fetchEdits = async (
-  eventIds: string[],
-  _pool: SimplePool,
-  relays: string[] = defaultRelays
-) => {
-  const result = await nostrRuntime.querySync(relays, {
-    kinds: [1010],
-    "#e": eventIds,
-  });
-  return result;
-};
-
-export const fetchComments = async (
-  eventIds: string[],
-  _pool: SimplePool,
-  relays: string[] = defaultRelays
-) => {
-  const [kind1, kind1111e, kind1111E] = await Promise.all([
-    nostrRuntime.querySync(relays, { kinds: [1], "#e": eventIds }),
-    nostrRuntime.querySync(relays, { kinds: [1111], "#e": eventIds } as any),
-    nostrRuntime.querySync(relays, { kinds: [1111], "#E": eventIds } as any),
-  ]);
-  return [...kind1, ...kind1111e, ...kind1111E];
-};
-
-export const fetchLikes = async (
-  eventIds: string[],
-  _pool: SimplePool,
-  relays: string[] = defaultRelays
-) => {
-  let result = await nostrRuntime.querySync(relays, {
-    kinds: [7],
-    "#e": eventIds,
-  });
-  return result;
-};
-
-export const fetchZaps = async (
-  eventIds: string[],
-  _pool: SimplePool,
-  relays: string[] = defaultRelays
-) => {
-  let result = await nostrRuntime.querySync(relays, {
-    kinds: [9735],
-    "#e": eventIds,
-  });
-  return result;
-};
+// Growing-set engagement reads (comments / likes / zaps / reposts / edits) are
+// NOT one-shot fetches — they're reactive streams. Consumers use useEvents/observe
+// (a card re-renders as reactions arrive) instead of awaiting a snapshot.
 
 export function openProfileTab(
   npub: `npub1${string}`,

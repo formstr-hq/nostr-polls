@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { App as CapApp } from "@capacitor/app";
 import { Event } from "nostr-tools";
-import { nostrRuntime } from "../singletons";
-import { defaultRelays } from "../nostr";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import {
   AndroidAsset,
   APP_ID,
@@ -16,11 +15,6 @@ import {
   parseRelease,
   selectAndroidAsset,
 } from "../nostr/nip82";
-
-// Relays that mirror zapstore releases. Keep in sync with publisher's outbox.
-const UPDATE_RELAYS = Array.from(
-  new Set([...defaultRelays, "wss://relay.zapstore.dev"])
-);
 
 const DISMISS_KEY = "pollerama:update-dismissed-version";
 
@@ -98,8 +92,8 @@ export function useAppUpdate(): UseAppUpdateResult {
     if (Capacitor.getPlatform() !== "android") return;
 
     let cancelled = false;
-    let releaseHandle: { unsubscribe: () => void } | null = null;
-    let assetHandle: { unsubscribe: () => void } | null = null;
+    let releaseHandle: ObserveHandle | null = null;
+    let assetHandle: ObserveHandle | null = null;
 
     (async () => {
       try {
@@ -116,8 +110,7 @@ export function useAppUpdate(): UseAppUpdateResult {
 
       const publisher = getPublisherHex();
 
-      releaseHandle = nostrRuntime.subscribe(
-        UPDATE_RELAYS,
+      releaseHandle = dataLayer.observe(
         [
           {
             kinds: [RELEASE_KIND],
@@ -135,9 +128,8 @@ export function useAppUpdate(): UseAppUpdateResult {
             if (!prev || compareVersions(release.version, prev.version) > 0) {
               latestReleaseRef.current = release;
               // Subscribe to the asset events for this release.
-              assetHandle?.unsubscribe();
-              assetHandle = nostrRuntime.subscribe(
-                UPDATE_RELAYS,
+              assetHandle?.unobserve();
+              assetHandle = dataLayer.observe(
                 [
                   {
                     kinds: [ASSET_KIND],
@@ -161,8 +153,8 @@ export function useAppUpdate(): UseAppUpdateResult {
 
     return () => {
       cancelled = true;
-      releaseHandle?.unsubscribe();
-      assetHandle?.unsubscribe();
+      releaseHandle?.unobserve();
+      assetHandle?.unobserve();
     };
   }, [recompute]);
 

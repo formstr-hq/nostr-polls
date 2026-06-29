@@ -1,8 +1,7 @@
 // components/Feed/MoviesFeed.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { Filter } from "nostr-tools";
-import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import MovieCard from "../Movies/MovieCard";
 import RateMovieModal from "../Ratings/RateMovieModal";
 import { Card, CardContent, Typography, CircularProgress, Box, Button } from "@mui/material";
@@ -15,16 +14,12 @@ const MoviesFeed: React.FC = () => {
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState<number | undefined>(undefined);
-  const { relays } = useRelays();
   const seen = useRef<Set<string>>(new Set());
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Always reflect the latest relays inside fetchBatch without stale closures
-  const relaysRef = useRef<string[]>(relays);
   const loadingRef = useRef(false);
   const cursorRef = useRef<number | undefined>(undefined);
 
   // Keep refs in sync
-  relaysRef.current = relays;
   cursorRef.current = cursor;
 
   const fetchBatch = () => {
@@ -38,7 +33,6 @@ const MoviesFeed: React.FC = () => {
       timeoutRef.current = null;
     }
 
-    const currentRelays = relaysRef.current;
     const currentCursor = cursorRef.current;
     const now = Math.floor(Date.now() / 1000);
     let oldestTimestamp: number | undefined;
@@ -55,14 +49,16 @@ const MoviesFeed: React.FC = () => {
     // the batch off after only a handful of events arrived; waiting for EOSE
     // collects everything the relays actually have.
     let settled = false;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
     const finalize = () => {
       if (settled) return;
       settled = true;
+      if (quietTimer) clearTimeout(quietTimer);
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
       }
-      handle.unsubscribe();
+      handle.unobserve();
 
       if (oldestTimestamp) {
         setCursor(oldestTimestamp - 1);
@@ -74,7 +70,7 @@ const MoviesFeed: React.FC = () => {
       setLoading(false);
     };
 
-    const handle = nostrRuntime.subscribe(currentRelays, [filter], {
+    const handle = dataLayer.observe([filter], {
       onEvent: (event) => {
         const dTag = event.tags.find((t) => t[0] === "d");
         if (dTag && dTag[1].startsWith("movie:")) {
@@ -93,11 +89,14 @@ const MoviesFeed: React.FC = () => {
         if (!oldestTimestamp || event.created_at < oldestTimestamp) {
           oldestTimestamp = event.created_at;
         }
+        // Settle shortly after the stream goes quiet — local EOSE precedes the
+        // worker's upstream fetch under the dataLayer contract.
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(finalize, 900);
       },
-      onEose: finalize,
     });
 
-    // Fallback in case EOSE never arrives (slow/unresponsive relay).
+    // Hard cap so an empty result (no events → no quiet timer) still settles.
     timeoutRef.current = setTimeout(finalize, 8000);
   };
 
@@ -131,7 +130,7 @@ const MoviesFeed: React.FC = () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relays]);
+  }, []);
 
   return (
     <Box sx={{ height: "100%", overflowY: "auto" }}>

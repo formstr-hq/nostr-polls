@@ -15,8 +15,7 @@ import { useAppContext } from "../../hooks/useAppContext";
 import { useMetadata } from "../../hooks/MetadataProvider";
 import { selectBestMetadataEvent } from "../../utils/utils";
 import { useUserContext } from "../../hooks/useUserContext";
-import { nostrRuntime } from "../../singletons";
-import { useRelays } from "../../hooks/useRelays";
+import { dataLayer } from "@formstr/local-relay";
 import { Nip05Badge } from "../Common/Nip05Badge";
 import { openProfileTab } from "../../nostr";
 
@@ -41,7 +40,6 @@ const ReviewCard: React.FC<Props> = ({ event }) => {
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user } = useUserContext();
   const { registerEntity, metadata } = useMetadata();
-  const { relays } = useRelays();
   const navigate = useNavigate();
 
   const [entityDisplay, setEntityDisplay] = useState<EntityDisplay | null>(null);
@@ -102,11 +100,7 @@ const ReviewCard: React.FC<Props> = ({ event }) => {
       const eTag = eTagEntry?.[1];
       if (eTag) {
         try {
-          const relayHint = eTagEntry?.[2];
-          const fetchRelays = relayHint
-            ? Array.from(new Set([...relays, relayHint]))
-            : relays;
-          const eventData = await nostrRuntime.fetchBatched(fetchRelays, eTag);
+          const eventData = await dataLayer.fetchById(eTag);
           if (eventData) {
             if (eventData.kind === 1068) {
               const question = eventData.tags.find((t) => t[0] === "question")?.[1];
@@ -148,7 +142,6 @@ const ReviewCard: React.FC<Props> = ({ event }) => {
     user?.follows,
     registerEntity,
     fetchUserProfileThrottled,
-    relays,
   ]);
 
   return (

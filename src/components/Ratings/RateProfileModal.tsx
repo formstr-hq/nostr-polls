@@ -8,8 +8,7 @@ import {
   CircularProgress,
 } from "@mui/material";
 import { nip19, Event } from "nostr-tools";
-import { useRelays } from "../../hooks/useRelays";
-import { nostrRuntime } from "../../singletons";
+import { dataLayer } from "@formstr/local-relay";
 import ProfileCard from "../Profile/ProfileCard";
 import { useBackClose } from "../../hooks/useBackClose";
 
@@ -25,7 +24,6 @@ const RateProfileModal: React.FC<RateProfileModalProps> = ({
   const [npubInput, setNpubInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [profile, setProfile] = useState<Event | null>(null);
-  const { relays } = useRelays();
   useBackClose(open, onClose);
 
   const handleNpubSubmit = async () => {
@@ -33,8 +31,7 @@ const RateProfileModal: React.FC<RateProfileModalProps> = ({
     try {
       const { data: pubkey } = nip19.decode(npubInput);
 
-      const handle = nostrRuntime.subscribe(
-        relays,
+      const handle = dataLayer.observe(
         [
           {
             kinds: [0],
@@ -46,14 +43,16 @@ const RateProfileModal: React.FC<RateProfileModalProps> = ({
           onEvent: (event) => {
             setProfile(event);
             setLoading(false);
-            handle.unsubscribe();
+            handle.unobserve();
           },
-          onEose: () => {
-            setLoading(false);
-            handle.unsubscribe();
-          },
+          // No onEose: the local EOSE precedes the worker's upstream fetch, so
+          // the profile arrives via onEvent. Fall back below if it never does.
         }
       );
+      setTimeout(() => {
+        setLoading(false);
+        handle.unobserve();
+      }, 5000);
     } catch (e) {
       alert("Invalid npub.");
       setLoading(false);

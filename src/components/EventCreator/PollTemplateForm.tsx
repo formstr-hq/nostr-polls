@@ -39,7 +39,7 @@ import { signEvent } from "../../nostr";
 import { useRelays } from "../../hooks/useRelays";
 import { PollPreview } from "./PollPreview";
 import { Event, nip19 } from "nostr-tools";
-import { publishWithGossip } from "../../utils/publish";
+import { dataLayer } from "@formstr/local-relay";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
 import { extractHashtags } from "../../utils/common";
@@ -84,7 +84,7 @@ const PollTemplateForm: React.FC<{
   quotedEvent?: Event;
   onPublished?: () => void;
   /** When provided, the parent handles the diagnostic modal instead of this form */
-  onPublishResult?: (event: Event, result: import("../../utils/publish").PublishResult) => void;
+  onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
 }> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult }) => {
   const [showPreview, setShowPreview] = useState(false);
   const [options, setOptions] = useState<Option[]>([
@@ -112,7 +112,7 @@ const PollTemplateForm: React.FC<{
 
   const { showNotification } = useNotification();
   const { user } = useUserContext();
-  const { relays, writeRelays } = useRelays();
+  const { relays } = useRelays();
   const navigate = useNavigate();
   const now = dayjs();
 
@@ -236,7 +236,7 @@ const PollTemplateForm: React.FC<{
         showNotification(NOTIFICATION_MESSAGES.POLL_SIGN_FAILED, "error");
         return;
       }
-      const result = await publishWithGossip(writeRelays, signedEvent);
+      const result = await dataLayer.publishEvent(signedEvent);
       setIsSubmitting(false);
       if (onPublishResult) {
         onPublishResult(signedEvent, result);

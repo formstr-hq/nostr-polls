@@ -8,7 +8,8 @@ import {
   useContext,
 } from "react";
 import { Event, Filter } from "nostr-tools";
-import { nostrRuntime } from "../singletons";
+import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
+import { collectOnce } from "../dataLayer/collect";
 import { useRelays } from "../hooks/useRelays";
 import { useUserContext } from "../hooks/useUserContext";
 
@@ -41,7 +42,7 @@ export function NostrNotificationsProvider({
   const { relays } = useRelays();
 
   const hasStarted = useRef(false);
-  const subHandleRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const subHandleRef = useRef<ObserveHandle | null>(null);
   const [notifications, setNotifications] = useState<Map<string, Event>>(
     new Map()
   );
@@ -153,30 +154,13 @@ export function NostrNotificationsProvider({
   // ────────────────────────────────────────────────────────────
   //
   const fetchPollIds = useCallback(async (pubkey: string): Promise<void> => {
-    return new Promise((resolve) => {
-      const filter: Filter = {
-        kinds: [1068],
-        authors: [pubkey],
-        limit: 1000,
-      };
-
-      const handle = nostrRuntime.subscribe(relays, [filter], {
-        onEvent: (event: Event) => {
-          pollMap.current.set(event.id, event);
-        },
-        onEose: () => {
-          handle.unsubscribe();
-          resolve();
-        },
-      });
-
-      // timeout after 3 seconds
-      setTimeout(() => {
-        handle.unsubscribe();
-        resolve();
-      }, 3000);
-    });
-  }, [relays]);
+    // collectOnce keeps the interest open across the worker's upstream fetch
+    // (the local EOSE fires first and would resolve this empty).
+    const events = await collectOnce([
+      { kinds: [1068], authors: [pubkey], limit: 1000 },
+    ]);
+    for (const event of events) pollMap.current.set(event.id, event);
+  }, []);
 
   //
   // ────────────────────────────────────────────────────────────
@@ -237,7 +221,7 @@ export function NostrNotificationsProvider({
       const filters = buildFilters(user.pubkey, since);
 
       if (isCancelled) return;
-      subHandleRef.current = nostrRuntime.subscribe(relays, filters, {
+      subHandleRef.current = dataLayer.observe(filters, {
         onEvent: (event: Event) => {
           pushNotification(event);
         },
@@ -257,7 +241,7 @@ export function NostrNotificationsProvider({
 
     return () => {
       isCancelled = true;
-      subHandleRef.current?.unsubscribe();
+      subHandleRef.current?.unobserve();
       subHandleRef.current = null;
       hasStarted.current = false;
       if (loadingTimerRef.current) {
@@ -273,13 +257,16 @@ export function NostrNotificationsProvider({
 
   //
   // ────────────────────────────────────────────────────────────
-  // Reconnect on visibility change (handles mobile WS drops)
+  // Foreground recovery on visibility change (handles mobile WS drops)
+  //
+  // The worker owns the connections; the app can only *tell* it the tab
+  // became visible again (it can't observe page visibility itself).
   // ────────────────────────────────────────────────────────────
   //
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === "visible") {
-        nostrRuntime.reconnect();
+        dataLayer.resume();
       }
     };
     document.addEventListener("visibilitychange", onVisible);
@@ -297,12 +284,12 @@ export function NostrNotificationsProvider({
       ? latestNotifTsRef.current
       : Math.floor((Date.now() - DEFAULT_LOOKBACK_MS) / 1000);
     const filters = buildFilters(user.pubkey, since);
-    let handle = nostrRuntime.subscribe(relays, filters, {
+    // Keep the interest open so the worker's upstream catch-up streams in via
+    // onEvent (local EOSE precedes it); close after the window below.
+    const handle = dataLayer.observe(filters, {
       onEvent: pushNotification,
-      onEose: () => handle.unsubscribe(),
     });
-    // Safety: close after 10 s if EOSE never arrives
-    setTimeout(() => handle.unsubscribe(), 10_000);
+    setTimeout(() => handle.unobserve(), 10_000);
   }, [user?.pubkey, relays, pushNotification]); // eslint-disable-line react-hooks/exhaustive-deps
 
   //
