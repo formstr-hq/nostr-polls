@@ -1,3 +1,8 @@
+# 1.12.0
+
+- Choose how your posts are labelled: pick which client tag is attached to notes and polls you publish — choose from a list of presets (including Pollerama) or enter your own.
+- Calmer comment threads: deeply nested comment and reply chains now stop after a few levels and link out to the full thread on the note's page, instead of endlessly nesting or quietly disappearing.
+
 # 1.11.1
 
 - Articles now render embeds inline (notes, mentions, hashtags, YouTube, video, images, links, emoji) instead of plain text.

@@ -24,10 +24,10 @@ const KIND_RESPONSE = [1018, 1070];
 const FEED_KINDS = [KIND_NOTE, KIND_POLL, KIND_ARTICLE, KIND_REPOST, KIND_MUSIC];
 
 const STORAGE_KEY = "pollerama:homeSource";
-// Per-kind page size. Notes vastly outnumber polls/articles, so giving each
-// kind its own limit keeps the rarer types from being starved by a single
-// global cursor.
-const BATCH_SIZE = 15;
+// Page size for a single all-kinds query. One filter spanning every feed kind
+// (rather than one query per kind) returns the genuinely most-recent events
+// intermixed, so the stream stays chronological instead of clustering by kind.
+const BATCH_SIZE = 30;
 const FETCH_TIMEOUT_MS = 6000;
 
 // Home intentionally has no "global" source — an unmoderated firehose is a poor
@@ -186,12 +186,9 @@ const HomeFeed: React.FC = () => {
       let oldestTs: number | undefined;
       let settled = false;
 
-      const filters: Filter[] = FEED_KINDS.map((kind) => ({
-        kinds: [kind],
-        authors,
-        limit: BATCH_SIZE,
-        until,
-      }));
+      const filters: Filter[] = [
+        { kinds: FEED_KINDS, authors, limit: BATCH_SIZE, until },
+      ];
 
       const finalize = () => {
         if (settled) return;
@@ -200,8 +197,7 @@ const HomeFeed: React.FC = () => {
         if (target === "pending") {
           setPendingCount(pendingRef.current.size);
         } else {
-          // Only notes paginate deeply enough to "exhaust"; an empty older page
-          // means we've reached the end of the stream.
+          // An empty older page means we've reached the end of the stream.
           if (mode === "more" && displayBatch.length === 0) setExhausted(true);
           if (oldestTs) cursorRef.current = oldestTs - 1;
 
@@ -274,12 +270,9 @@ const HomeFeed: React.FC = () => {
     const authors = authorsForSource();
     if (!authors.length || !relays?.length || newestRef.current === 0) return;
 
-    const filters: Filter[] = FEED_KINDS.map((kind) => ({
-      kinds: [kind],
-      authors,
-      since: newestRef.current + 1,
-      limit: BATCH_SIZE,
-    }));
+    const filters: Filter[] = [
+      { kinds: FEED_KINDS, authors, since: newestRef.current + 1, limit: BATCH_SIZE },
+    ];
 
     const handle = dataLayer.observe(filters, {
       onEvent: (event: Event) => {

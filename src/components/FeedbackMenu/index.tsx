@@ -4,16 +4,19 @@ import {
   CardContent,
   Collapse,
   Box,
+  Button,
   Fade,
 } from "@mui/material";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import ForumOutlinedIcon from "@mui/icons-material/ForumOutlined";
 import RatingPopover from "../Ratings/RatingPopover";
 import CommentTrigger from "../Common/Comments/CommentTrigger";
 import CommentSection from "../Common/Comments/CommentSection";
 import Likes from "../Common/Likes/likes";
 import Zap from "../Common/Zaps/zaps";
-import { Event } from "nostr-tools";
+import { Event, nip19 } from "nostr-tools";
+import { useNavigate } from "react-router-dom";
 import RepostButton from "../Common/Repost/reposts";
 import ShareButton from "../Common/Share/ShareButton";
 
@@ -27,7 +30,7 @@ interface FeedbackMenuProps {
   rootKind?: number;
 }
 
-const MAX_DEPTH = 2;
+const MAX_DEPTH = 3;
 
 export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
   event,
@@ -40,6 +43,14 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  // Past this depth the thread is too nested to keep replies readable. Rather
+  // than silently dropping the reply UI, we send the user to the note's own
+  // view where it becomes a fresh top-level thread.
+  const reachedMaxDepth = depth >= MAX_DEPTH;
+  const openInOwnView = () =>
+    navigate(`/note/${nip19.neventEncode({ id: event.id })}`);
 
   const checkOverflow = useCallback(() => {
     const el = scrollRef.current;
@@ -105,7 +116,16 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
               ...(isNested ? { "& svg": { fontSize: "18px !important" } } : {}),
             }}
           >
-            {depth < MAX_DEPTH && (
+            {reachedMaxDepth ? (
+              <Button
+                size="small"
+                startIcon={<ForumOutlinedIcon />}
+                onClick={openInOwnView}
+                sx={{ textTransform: "none", fontSize: "0.75rem" }}
+              >
+                Continue thread
+              </Button>
+            ) : (
               <CommentTrigger
                 eventId={event.id}
                 showComments={showComments}
@@ -196,7 +216,7 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
         </Box>
 
         {/* Comment section */}
-        {depth < MAX_DEPTH && (
+        {!reachedMaxDepth && (
           <Collapse in={showComments} timeout={250} unmountOnExit>
             <Box
               sx={{

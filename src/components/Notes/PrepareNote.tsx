@@ -8,10 +8,17 @@ import {
   Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import { useNavigate } from "react-router-dom";
 import { dataLayer } from "@formstr/local-relay";
 import { EventPointer } from "nostr-tools/lib/types/nip19";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import { useRelayRefresh } from "../../dataLayer/hooks";
+import {
+  MAX_NOTE_DEPTH,
+  NoteDepthContext,
+  useNoteDepth,
+} from "../../contexts/note-depth-context";
 
 // How long to wait for a cold reference to arrive from the network before
 // showing the "could not load" + retry state. The cache replays instantly; this
@@ -29,6 +36,14 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
   // Re-attempt resolution once the worker hydrates its store, so a reference that
   // missed on a cold cache resolves without the user tapping Retry.
   const refresh = useRelayRefresh();
+  const depth = useNoteDepth();
+  const navigate = useNavigate();
+
+  // Once we're nested too deep, embedding the full note would render its own
+  // references (and theirs…) into an unbounded tree. Show a clickable preview
+  // that opens the note in its own view instead of silently rendering nothing.
+  const tooDeep = depth >= MAX_NOTE_DEPTH;
+  const openInOwnView = () => navigate(`/note/${neventId}`);
 
   useEffect(() => {
     setLoading(true);
@@ -84,10 +99,64 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
   };
 
   if (event) {
-    if (event.kind === 1068) {
-      return <PollResponseForm pollEvent={event} />;
+    if (tooDeep) {
+      const preview = (event.content || "").replace(/\s+/g, " ").trim();
+      return (
+        <Box
+          onClick={openInOwnView}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openInOwnView();
+            }
+          }}
+          sx={{
+            mt: 0.5,
+            p: 1.5,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1,
+            cursor: "pointer",
+            "&:hover": { bgcolor: "action.hover" },
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
+            <OpenInNewIcon sx={{ fontSize: 14 }} color="primary" />
+            <Typography variant="caption" color="primary">
+              Open referenced note in its own view
+            </Typography>
+          </Box>
+          {preview && (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
+              {preview}
+            </Typography>
+          )}
+        </Box>
+      );
     }
-    return <Notes event={event} />;
+    const rendered =
+      event.kind === 1068 ? (
+        <PollResponseForm pollEvent={event} />
+      ) : (
+        <Notes event={event} />
+      );
+    // Anything this note references renders one level deeper.
+    return (
+      <NoteDepthContext.Provider value={depth + 1}>
+        {rendered}
+      </NoteDepthContext.Provider>
+    );
   }
 
   if (loading) {
