@@ -5,6 +5,7 @@ import { Event } from "nostr-tools";
 import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import { collectOnce } from "../dataLayer/collect";
 import { useRelays } from "./useRelays";
+import { useRelayRefresh } from "../dataLayer/hooks";
 import { useUserContext } from "./useUserContext";
 import { signEvent } from "../nostr";
 import {
@@ -30,6 +31,7 @@ type FeedMode = "unfiltered" | "global" | "contacts";
 export function useMyTopicsFeed(myTopics: Set<string>) {
   const { relays } = useRelays();
   const { user, requestLogin } = useUserContext();
+  const relayRefresh = useRelayRefresh();
 
   const [notes, setNotes] = useState<Map<string, TopicNote>>(new Map());
   const [feedMode, setFeedMode] = useState<FeedMode>("global");
@@ -320,7 +322,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
       moderationDirtyRef.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relays, myTopics]);
+  }, [relays, myTopics, relayRefresh]);
 
   useEffect(() => {
     const cleanup = startSubscription();

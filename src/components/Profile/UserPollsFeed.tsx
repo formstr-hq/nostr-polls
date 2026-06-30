@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import UnifiedFeed from "../Feed/UnifiedFeed";
 
@@ -16,6 +17,7 @@ const KIND_POLL = 1068;
 const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, scrollContainerRef }) => {
   const [polls, setPolls] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
+  const relayRefresh = useRelayRefresh();
 
   const fetchPolls = useCallback(() => {
     if (!pubkey) return;
@@ -43,7 +45,7 @@ const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, scrollContainerRe
     });
 
     return () => handle.unobserve();
-  }, [pubkey]);
+  }, [pubkey, relayRefresh]);
 
   useEffect(() => {
     const cleanup = fetchPolls();

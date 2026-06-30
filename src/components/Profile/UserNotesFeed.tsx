@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import { Notes } from "../Notes";
 import UnifiedFeed from "../Feed/UnifiedFeed";
 
@@ -16,6 +17,7 @@ const KIND_NOTE = 1;
 const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRef }) => {
   const [notes, setNotes] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
+  const relayRefresh = useRelayRefresh();
 
   const fetchNotes = useCallback(() => {
     if (!pubkey) return;
@@ -43,7 +45,7 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
     });
 
     return () => handle.unobserve();
-  }, [pubkey]);
+  }, [pubkey, relayRefresh]);
 
   useEffect(() => {
     const cleanup = fetchNotes();
