@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Filter } from "nostr-tools";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import MovieCard from "../Movies/MovieCard";
 import RateMovieModal from "../Ratings/RateMovieModal";
 import { Card, CardContent, Typography, CircularProgress, Box, Button } from "@mui/material";
@@ -18,6 +19,7 @@ const MoviesFeed: React.FC = () => {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadingRef = useRef(false);
   const cursorRef = useRef<number | undefined>(undefined);
+  const relayRefresh = useRelayRefresh();
 
   // Keep refs in sync
   cursorRef.current = cursor;
@@ -130,7 +132,7 @@ const MoviesFeed: React.FC = () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [relayRefresh]);
 
   return (
     <Box sx={{ height: "100%", overflowY: "auto" }}>

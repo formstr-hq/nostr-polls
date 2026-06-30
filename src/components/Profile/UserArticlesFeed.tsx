@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import { useAppContext } from "../../hooks/useAppContext";
 import { ArticleCard } from "../Articles/ArticleCard";
 import UnifiedFeed from "../Feed/UnifiedFeed";
@@ -16,6 +17,7 @@ const UserArticlesFeed: React.FC<UserArticlesFeedProps> = ({ pubkey, scrollConta
   const [articles, setArticles] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const { fetchUserProfileThrottled, profiles } = useAppContext();
+  const relayRefresh = useRelayRefresh();
 
   const fetchArticles = useCallback(() => {
     if (!pubkey) return;
@@ -33,7 +35,7 @@ const UserArticlesFeed: React.FC<UserArticlesFeedProps> = ({ pubkey, scrollConta
     });
     return () => handle.unobserve();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pubkey]);
+  }, [pubkey, relayRefresh]);
 
   useEffect(() => {
     const cleanup = fetchArticles();

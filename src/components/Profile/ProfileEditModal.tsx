@@ -8,6 +8,7 @@ import {
   TextField,
   Box,
   CircularProgress,
+
   Avatar,
   Typography,
 } from "@mui/material";
@@ -90,7 +91,6 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
 
   const handleSave = async () => {
     if (!user) return;
-
     const cleanNip05 = nip05.trim();
     const cleanLud16 = lud16.trim();
 
@@ -103,7 +103,6 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
       showNotification("Lightning Address (LUD-16) must contain an '@' symbol (e.g. name@wallet.com).", "error");
       return;
     }
-
     setLoading(true);
     try {
       await signerManager.publishKind0({

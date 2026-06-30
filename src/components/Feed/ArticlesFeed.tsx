@@ -3,6 +3,7 @@ import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { useRelays } from "../../hooks/useRelays";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -20,6 +21,7 @@ const ArticlesFeed: React.FC = () => {
   const { user } = useUserContext();
   const { fetchUserProfileThrottled, profiles } = useAppContext();
   const { setItems, clearItems } = useSubNav();
+  const relayRefresh = useRelayRefresh();
 
   const savedSource = (localStorage.getItem(STORAGE_KEY) as Source) || "global";
   const [source, setSource] = useState<Source>(savedSource);
@@ -113,7 +115,7 @@ const ArticlesFeed: React.FC = () => {
   useEffect(() => {
     fetchBatch(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source]);
+  }, [source, relayRefresh]);
 
   const handleEndReached = useCallback(() => {
     if (!loadingMore && !loading && initialLoadDone && !exhausted) {

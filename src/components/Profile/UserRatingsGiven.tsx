@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import ReviewCard from "../Ratings/ReviewCard";
 import UnifiedFeed from "../Feed/UnifiedFeed";
 
@@ -16,6 +17,7 @@ const KIND_RATING = 34259;
 const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, scrollContainerRef }) => {
   const [ratings, setRatings] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
+  const relayRefresh = useRelayRefresh();
 
   const fetchRatings = useCallback(() => {
     if (!pubkey) return;
@@ -43,7 +45,7 @@ const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, scrollConta
     });
 
     return () => handle.unobserve();
-  }, [pubkey]);
+  }, [pubkey, relayRefresh]);
 
   useEffect(() => {
     const cleanup = fetchRatings();
