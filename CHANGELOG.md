@@ -1,3 +1,7 @@
+# 1.14.0
+
+- On-device drafts: save an in-progress poll, note, or comment locally and pick it back up later — autosaves a couple seconds after you stop typing, with a "Draft saved" indicator, and a new Drafts page (reachable from the create page and the feed's floating create button) to review, resume, or delete them. Drafts stay on this device only and are removed once you actually publish.
+
 # 1.13.0
 
 - Profiles now open on Notes by default, split into two tabs: Posts (a person's own notes) and Conversations (their replies), so you can quickly see what someone posts versus how they chime in.

@@ -64,6 +64,7 @@ import PlaylistDetail from "./components/Music/PlaylistDetail";
 import SharedPlaylistDetail from "./components/Music/SharedPlaylistDetail";
 import { PlaybackProvider } from "./contexts/PlaybackContext";
 import { PlaylistsProvider } from "./contexts/playlists-context";
+import { DraftsProvider } from "./contexts/drafts-context";
 import MiniPlayer from "./components/Music/MiniPlayer";
 import ArticleDetail from "./components/Articles/ArticleDetail";
 import MoviePage from "./components/Movies/MoviePage";
@@ -81,6 +82,7 @@ import ChatView from "./components/Messages/ChatView";
 import NewConversation from "./components/Messages/NewConversation";
 import NotificationsPage from "./components/Notifications/NotificationsPage";
 import { SettingsScreen } from "./components/Settings/SettingsScreen";
+import DraftsList from "./components/Drafts/DraftsList";
 
 declare global {
   interface Window {
@@ -220,6 +222,7 @@ function AppContent() {
             element={<ScrollPage><PollResults /></ScrollPage>}
           />
           <Route path="/settings" element={<SettingsScreen />} />
+          <Route path="/drafts" element={<ScrollPage><DraftsList /></ScrollPage>} />
           <Route path="/notifications" element={<ScrollPage><NotificationsPage /></ScrollPage>} />
           <Route path="/messages" element={<ScrollPage><ConversationList /></ScrollPage>} />
           <Route path="/messages/new" element={<ScrollPage><NewConversation /></ScrollPage>} />
@@ -336,6 +339,7 @@ const App: React.FC = () => {
                           <VideoPlayerProvider>
                             <PlaybackProvider>
                             <PlaylistsProvider>
+                            <DraftsProvider>
                             <Router>
                               <AndroidNotifications />
                               <FeedScrollProvider>
@@ -345,6 +349,7 @@ const App: React.FC = () => {
                               </FeedScrollProvider>
                               <FloatingVideoPlayer />
                             </Router>
+                            </DraftsProvider>
                             </PlaylistsProvider>
                             </PlaybackProvider>
                           </VideoPlayerProvider>

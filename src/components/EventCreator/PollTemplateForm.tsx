@@ -42,8 +42,11 @@ import { Event, nip19 } from "nostr-tools";
 import { dataLayer } from "@formstr/local-relay";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
-import { extractHashtags } from "../../utils/common";
+import { extractHashtags, calculateTimeAgo } from "../../utils/common";
 import { uploadToBlossom, getBlossomServer } from "../../services/blossomService";
+import { useDrafts } from "../../contexts/drafts-context";
+import { PollDraft, newDraftId } from "./draftModel";
+import { useDraftAutosave } from "../../hooks/useDraftAutosave";
 
 const UPLOAD_PLACEHOLDER = "[uploading…]";
 
@@ -85,18 +88,25 @@ const PollTemplateForm: React.FC<{
   onPublished?: () => void;
   /** When provided, the parent handles the diagnostic modal instead of this form */
   onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
-}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult }) => {
+  /** Hydrate the form from a previously saved local draft */
+  initialDraft?: PollDraft;
+}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft }) => {
   const [showPreview, setShowPreview] = useState(false);
-  const [options, setOptions] = useState<Option[]>([
-    [generateOptionId(), ""],
-    [generateOptionId(), ""],
-  ]);
-  const [pollType, setPollType] = useState<string>(
-    pollOptions[0]?.value || "singlechoice"
+  const [options, setOptions] = useState<Option[]>(
+    initialDraft?.options ?? [
+      [generateOptionId(), ""],
+      [generateOptionId(), ""],
+    ]
   );
-  const [poW, setPoW] = useState<number | null>(null);
-  const [expiration, setExpiration] = useState<number | null>(null);
+  const [pollType, setPollType] = useState<string>(
+    initialDraft?.pollType ?? pollOptions[0]?.value ?? "singlechoice"
+  );
+  const [poW, setPoW] = useState<number | null>(initialDraft?.poW ?? null);
+  const [expiration, setExpiration] = useState<number | null>(initialDraft?.expiration ?? null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [draftId, setDraftId] = useState<string | undefined>(initialDraft?.id);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | undefined>(initialDraft?.updated_at);
+  const { saveDraft, deleteDraft } = useDrafts();
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadingOptionIndex, setUploadingOptionIndex] = useState<number | null>(null);
@@ -183,6 +193,34 @@ const PollTemplateForm: React.FC<{
   useEffect(() => {
     setTopics(extractHashtags(eventContent));
   }, [eventContent]);
+
+  const saveDraftNow = async () => {
+    const now = Date.now();
+    const draft: PollDraft = {
+      id: draftId ?? newDraftId(),
+      kind: "poll",
+      eventContent,
+      options,
+      pollType,
+      poW,
+      expiration,
+      created_at: initialDraft?.created_at ?? now,
+      updated_at: now,
+    };
+    await saveDraft(draft);
+    setDraftId(draft.id);
+    setDraftSavedAt(draft.updated_at);
+  };
+
+  const hasDraftableContent =
+    eventContent.trim().length > 0 || options.some((o) => o[1].trim().length > 0);
+  const autosaveStatus = useDraftAutosave(saveDraftNow, hasDraftableContent, [
+    eventContent,
+    options,
+    pollType,
+    poW,
+    expiration,
+  ]);
 
   const publishPollEvent = async (secret?: string) => {
     try {
@@ -485,6 +523,16 @@ const PollTemplateForm: React.FC<{
             <Button type="submit" variant="contained" disabled={isSubmitting}>
               {isSubmitting ? "Creating Poll..." : "Create Poll"}
             </Button>
+            {(autosaveStatus === "pending" || autosaveStatus === "saving") && (
+              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
+                Saving draft…
+              </Typography>
+            )}
+            {autosaveStatus === "saved" && draftSavedAt && (
+              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
+                Draft saved · {calculateTimeAgo(Math.floor(draftSavedAt / 1000))}
+              </Typography>
+            )}
             <Button
               variant="outlined"
               startIcon={
@@ -512,6 +560,11 @@ const PollTemplateForm: React.FC<{
           onClose={() => {
             setDiagnosticOpen(false);
             if (publishResult.ok) {
+              if (draftId) {
+                deleteDraft(draftId);
+                setDraftId(undefined);
+                setDraftSavedAt(undefined);
+              }
               if (onPublished) onPublished();
               else navigate("/feeds/polls");
             }

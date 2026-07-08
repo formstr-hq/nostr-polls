@@ -47,6 +47,8 @@ import { getAppBaseUrl } from "../../../utils/platform";
 import { Profile } from "../../../nostr/types";
 import { useNavigate } from "react-router-dom";
 import { openProfileTab } from "../../../nostr";
+import { useDrafts } from "../../../contexts/drafts-context";
+import { CommentDraft, newDraftId } from "../../EventCreator/draftModel";
 
 function dedup(arr: string[]): string[] {
   const seen = new Set<string>();
@@ -362,6 +364,9 @@ interface CommentSectionProps {
   addressableRef?: string;
   /** NIP-22: root event kind, e.g. 30023 for articles */
   rootKind?: number;
+  /** The kind of the event being commented on (e.g. 1068 for a poll), used to
+   * route back here correctly from a saved comment draft. */
+  parentKind?: number;
 }
 
 const CommentSection: React.FC<CommentSectionProps> = ({
@@ -372,6 +377,7 @@ const CommentSection: React.FC<CommentSectionProps> = ({
   depth = 0,
   addressableRef,
   rootKind,
+  parentKind,
 }) => {
   const { showNotification } = useNotification();
   const {
@@ -380,6 +386,34 @@ const CommentSection: React.FC<CommentSectionProps> = ({
     addEventToMap,
     profiles,
   } = useAppContext();
+  const { drafts, saveDraft, deleteDraft } = useDrafts();
+
+  // A top-level comment draft for this specific thread (one CommentSection
+  // instance = one place a top-level comment can be composed, whether that's
+  // the root note/poll or, recursively, a reply-to-a-reply).
+  const commentDraft = useMemo(() => {
+    if (!drafts) return undefined;
+    return Array.from(drafts.values()).find(
+      (d) => d.kind === "comment" && d.parentEventId === eventId
+    ) as CommentDraft | undefined;
+  }, [drafts, eventId]);
+
+  const handleSaveCommentDraft = async (content: string) => {
+    if (!content.trim()) return;
+    const now = Date.now();
+    const draft: CommentDraft = {
+      id: commentDraft?.id ?? newDraftId(),
+      kind: "comment",
+      content,
+      parentEventId: eventId,
+      parentKind: parentKind ?? 1,
+      addressableRef,
+      rootKind,
+      created_at: commentDraft?.created_at ?? now,
+      updated_at: now,
+    };
+    await saveDraft(draft);
+  };
 
   const isNip22 = !!addressableRef || rootKind != null;
 
@@ -471,6 +505,7 @@ const CommentSection: React.FC<CommentSectionProps> = ({
     if (result.ok) {
       showNotification("Comment published!", "success");
       addEventToMap(signedComment);
+      if (!parentId && commentDraft) deleteDraft(commentDraft.id);
     } else {
       showNotification("Comment failed to publish to any relay", "error");
     }
@@ -554,7 +589,14 @@ const CommentSection: React.FC<CommentSectionProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <CommentInput onSubmit={(content) => handleSubmitComment(content, undefined, topLevelNotify)} />
+      {drafts !== undefined && (
+        <CommentInput
+          key={eventId}
+          initialContent={commentDraft?.content ?? ""}
+          onSubmit={(content) => handleSubmitComment(content, undefined, topLevelNotify)}
+          onSaveDraft={handleSaveCommentDraft}
+        />
+      )}
       <NotifyHint
         pubkeys={topLevelNotify}
         profiles={profiles}

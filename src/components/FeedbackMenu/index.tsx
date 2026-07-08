@@ -234,6 +234,7 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
                 depth={depth}
                 addressableRef={addressableRef}
                 rootKind={rootKind}
+                parentKind={event.kind}
               />
             </Box>
           </Collapse>

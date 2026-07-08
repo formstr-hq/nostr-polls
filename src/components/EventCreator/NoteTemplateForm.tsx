@@ -39,7 +39,7 @@ import { PostEnhancementDialog } from "./PostEnhancementDialog";
 import { aiService } from "../../services/ai-service";
 import { useAppContext } from "../../hooks/useAppContext";
 import { uploadToBlossom, getBlossomServer } from "../../services/blossomService";
-import { copyToClipboard, extractHashtags } from "../../utils/common";
+import { copyToClipboard, extractHashtags, calculateTimeAgo } from "../../utils/common";
 import { getAppBaseUrl } from "../../utils/platform";
 import { AudienceMenu, Audience } from "./AudienceMenu";
 import {
@@ -48,6 +48,9 @@ import {
   encryptPrivateNote,
 } from "../../nostr/privateNote";
 import { TextField } from "@mui/material";
+import { useDrafts } from "../../contexts/drafts-context";
+import { NoteDraft, newDraftId } from "./draftModel";
+import { useDraftAutosave } from "../../hooks/useDraftAutosave";
 
 const UPLOAD_PLACEHOLDER = "[uploading…]";
 
@@ -58,9 +61,13 @@ const NoteTemplateForm: React.FC<{
   onPublished?: () => void;
   /** When provided, the parent handles the diagnostic modal instead of this form */
   onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
-}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult }) => {
+  /** Hydrate the form from a previously saved local draft */
+  initialDraft?: NoteDraft;
+}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [audience, setAudience] = useState<Audience>({ kind: "public" });
+  const [audience, setAudience] = useState<Audience>(
+    initialDraft ? ({ kind: initialDraft.audienceKind } as Audience) : { kind: "public" }
+  );
   // Set for private notes only — the decryptable share link shown inside the
   // publish diagnostic modal. Non-null means the open modal is a private note.
   const [shareUrl, setShareUrl] = useState<string | null>(null);
@@ -72,9 +79,12 @@ const NoteTemplateForm: React.FC<{
   const [enhancementSuggestions, setEnhancementSuggestions] = useState<any>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [expiresInSeconds, setExpiresInSeconds] = useState<number | null>(null);
+  const [expiresInSeconds, setExpiresInSeconds] = useState<number | null>(initialDraft?.expiresInSeconds ?? null);
   const [customExpiryDate, setCustomExpiryDate] = useState<Dayjs | null>(null);
-  const [showExpiry, setShowExpiry] = useState(false);
+  const [showExpiry, setShowExpiry] = useState(!!initialDraft?.expiresInSeconds);
+  const [draftId, setDraftId] = useState<string | undefined>(initialDraft?.id);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | undefined>(initialDraft?.updated_at);
+  const { saveDraft, deleteDraft } = useDrafts();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   // Ref so async upload callbacks always see the latest content value
@@ -167,6 +177,28 @@ const NoteTemplateForm: React.FC<{
     );
     if (file) uploadFile(file);
   };
+
+  const saveDraftNow = async () => {
+    const now = Date.now();
+    const draft: NoteDraft = {
+      id: draftId ?? newDraftId(),
+      kind: "note",
+      eventContent,
+      audienceKind: audience.kind,
+      expiresInSeconds,
+      created_at: initialDraft?.created_at ?? now,
+      updated_at: now,
+    };
+    await saveDraft(draft);
+    setDraftId(draft.id);
+    setDraftSavedAt(draft.updated_at);
+  };
+
+  const autosaveStatus = useDraftAutosave(saveDraftNow, eventContent.trim().length > 0, [
+    eventContent,
+    audience.kind,
+    expiresInSeconds,
+  ]);
 
   const publishNoteEvent = async (secret?: string) => {
     try {
@@ -552,6 +584,17 @@ const NoteTemplateForm: React.FC<{
                 : "Create Note"}
             </Button>
 
+            {(autosaveStatus === "pending" || autosaveStatus === "saving") && (
+              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
+                Saving draft…
+              </Typography>
+            )}
+            {autosaveStatus === "saved" && draftSavedAt && (
+              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
+                Draft saved · {calculateTimeAgo(Math.floor(draftSavedAt / 1000))}
+              </Typography>
+            )}
+
             <Button
               variant="outlined"
               startIcon={
@@ -590,10 +633,20 @@ const NoteTemplateForm: React.FC<{
             if (shareUrl) {
               // Private note: clear the editor + link and let the parent decide
               // where to go. (The user has already been shown the link to save.)
+              if (draftId) {
+                deleteDraft(draftId);
+                setDraftId(undefined);
+                setDraftSavedAt(undefined);
+              }
               setShareUrl(null);
               setEventContent("");
               if (onPublished) onPublished();
             } else if (publishResult.ok) {
+              if (draftId) {
+                deleteDraft(draftId);
+                setDraftId(undefined);
+                setDraftSavedAt(undefined);
+              }
               if (onPublished) onPublished();
               else navigate("/feeds/notes");
             }

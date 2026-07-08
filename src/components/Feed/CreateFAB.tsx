@@ -4,10 +4,12 @@ import AddIcon from "@mui/icons-material/Add";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import FiberNewIcon from "@mui/icons-material/FiberNew";
+import DescriptionIcon from "@mui/icons-material/Description";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useNotification } from "../../contexts/notification-context";
 import { DraggableCorner } from "../Common/DraggableCorner";
+import { useDrafts } from "../../contexts/drafts-context";
 
 interface CreateFABProps {
   extraActions?: {
@@ -24,6 +26,8 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   const { isScrolledDown, scrollToTop, refresh, newItemCount, newItemLabel, showNewItems } =
     useFeedActions();
   const { showNotification } = useNotification();
+  const { drafts } = useDrafts();
+  const draftCount = drafts?.size ?? 0;
 
   const handleCreate = () => {
     setOpen(false);
@@ -37,6 +41,11 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
         navigate("/create");
       }
     }
+  };
+
+  const handleOpenDrafts = () => {
+    setOpen(false);
+    navigate("/drafts");
   };
 
   const handleScrollToTop = () => {
@@ -136,6 +145,16 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
             icon={<RefreshIcon />}
             tooltipTitle="Refresh"
             onClick={handleRefresh}
+            sx={actionSx}
+          />
+          <SpeedDialAction
+            icon={
+              <Badge badgeContent={draftCount} color="primary" invisible={draftCount === 0} max={99}>
+                <DescriptionIcon />
+              </Badge>
+            }
+            tooltipTitle={draftCount > 0 ? `Drafts (${draftCount})` : "Drafts"}
+            onClick={handleOpenDrafts}
             sx={actionSx}
           />
           {extraActions.map((action, index) => (

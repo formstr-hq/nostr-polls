@@ -17,10 +17,13 @@ import { useUserContext } from "../../../hooks/useUserContext";
 import { useNotification } from "../../../contexts/notification-context";
 import { signEvent } from "../../../nostr";
 import { uploadToBlossom, getBlossomServer } from "../../../services/blossomService";
+import { useDraftAutosave } from "../../../hooks/useDraftAutosave";
 
 interface CommentInputProps {
   onSubmit: (content: string) => void;
   initialContent?: string;
+  /** When provided, the current text is autosaved as a draft (debounced) */
+  onSaveDraft?: (content: string) => Promise<void>;
 }
 
 const UPLOAD_PLACEHOLDER = "[uploading…]";
@@ -38,6 +41,7 @@ const insertAtPosition = (text: string, insertion: string, pos: number): string 
 const CommentInput: React.FC<CommentInputProps> = ({
   onSubmit,
   initialContent = "",
+  onSaveDraft,
 }) => {
   const [newComment, setNewComment] = useState<string>(initialContent);
   const [isUploading, setIsUploading] = useState(false);
@@ -54,6 +58,12 @@ const CommentInput: React.FC<CommentInputProps> = ({
 
   const { user } = useUserContext();
   const { showNotification } = useNotification();
+
+  const autosaveStatus = useDraftAutosave(
+    () => (onSaveDraft ? onSaveDraft(contentRef.current) : Promise.resolve()),
+    !!onSaveDraft && newComment.trim().length > 0,
+    [newComment]
+  );
 
   const handleSubmit = () => {
     if (newComment.trim()) {
@@ -225,15 +235,26 @@ const CommentInput: React.FC<CommentInputProps> = ({
         onChange={handleFileSelect}
       />
 
-      <Button
-        onClick={handleSubmit}
-        variant="contained"
-        color="secondary"
-        disabled={isUploading}
-        style={{ marginTop: 8 }}
-      >
-        Submit Comment
-      </Button>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1, flexWrap: "wrap" }}>
+        <Button
+          onClick={handleSubmit}
+          variant="contained"
+          color="secondary"
+          disabled={isUploading}
+        >
+          Submit Comment
+        </Button>
+        {(autosaveStatus === "pending" || autosaveStatus === "saving") && (
+          <Typography variant="caption" color="text.secondary">
+            Saving draft…
+          </Typography>
+        )}
+        {autosaveStatus === "saved" && (
+          <Typography variant="caption" color="text.secondary">
+            Draft saved
+          </Typography>
+        )}
+      </Box>
     </div>
   );
 };
