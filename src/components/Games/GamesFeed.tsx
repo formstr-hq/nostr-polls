@@ -4,14 +4,24 @@ import { useNavigate } from "react-router-dom";
 import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
 import { useUserContext } from "../../hooks/useUserContext";
-import { getMyTodayScore, todayUtcIso } from "../../games/core/scoreEvents";
+import { getMyTodayScore, getMyTrackScore, todayUtcIso } from "../../games/core/scoreEvents";
 import { Twenty48Engine } from "../../games/twenty48/engine";
 import { TetrisEngine } from "../../games/tetris/engine";
 import { RacerEngine } from "../../games/racer/engine";
+import { Racer3DEngine } from "../../games/racer3d/engine/racer3dEngine";
+import { buildTrack, TRACK_1 } from "../../games/racer3d/engine/track";
 import Twenty48Replay from "../../games/twenty48/Replay";
 import TetrisReplay from "../../games/tetris/Replay";
 import RacerReplay from "../../games/racer/Replay";
+import Racer3DReplay from "../../games/racer3d/components/Replay";
 import GameLeaderboardModal from "./GameLeaderboardModal";
+
+function formatRaceTime(ms: number): string {
+  const s = ms / 1000;
+  const m = Math.floor(s / 60);
+  const rest = (s - m * 60).toFixed(2);
+  return `${m}:${rest.padStart(5, "0")}`;
+}
 
 // Module-level so the factory reference is stable across renders — the
 // leaderboard hook keys off it via a ref, not a dependency, but a stable
@@ -38,9 +48,21 @@ const GAMES = [
     factory: () => new RacerEngine(),
     ReplayView: RacerReplay,
   },
+  {
+    id: "racer3d",
+    label: "Racer3D",
+    path: "racer3d",
+    factory: () => {
+      const e = new Racer3DEngine();
+      e.setTrack(buildTrack(TRACK_1));
+      return e;
+    },
+    ReplayView: Racer3DReplay,
+    trackId: "oval-thunder",
+  },
 ] as const;
 
-function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[number]) {
+function GameCard({ id, label, path, factory, ReplayView, trackId }: (typeof GAMES)[number] & { trackId?: string }) {
   const { user } = useUserContext();
   const navigate = useNavigate();
   const dateIso = todayUtcIso();
@@ -50,13 +72,16 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
   useEffect(() => {
     if (!user?.pubkey) return;
     let alive = true;
-    getMyTodayScore(id, dateIso, user.pubkey).then((s) => {
+    const load = trackId
+      ? getMyTrackScore(id, trackId, user.pubkey)
+      : getMyTodayScore(id, dateIso, user.pubkey);
+    load.then((s) => {
       if (alive) setMyBest(s?.score ?? null);
     });
     return () => {
       alive = false;
     };
-  }, [id, dateIso, user?.pubkey]);
+  }, [id, trackId, dateIso, user?.pubkey]);
 
   return (
     <Card variant="outlined">
@@ -78,7 +103,7 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
           </Stack>
         </Stack>
         <Typography variant="body2" color="text.secondary">
-          Your best today: {myBest ?? "—"}
+          Your best {trackId ? "" : "today"}: {myBest ? (trackId ? formatRaceTime(myBest) : myBest) : "—"}
         </Typography>
       </CardContent>
 
@@ -89,7 +114,9 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
         gameId={id}
         dateIso={dateIso}
         gameFactory={factory}
+        trackId={trackId}
         ReplayView={ReplayView}
+        formatScore={trackId ? formatRaceTime : undefined}
       />
     </Card>
   );

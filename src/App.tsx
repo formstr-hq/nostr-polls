@@ -67,6 +67,7 @@ import GamesFeed from "./components/Games/GamesFeed";
 import Twenty48Board from "./games/twenty48/Board";
 import TetrisBoard from "./games/tetris/Board";
 import RacerBoard from "./games/racer/Board";
+import Racer3DBoard from "./games/racer3d/components/Board";
 import { PlaybackProvider } from "./contexts/PlaybackContext";
 import { PlaylistsProvider } from "./contexts/playlists-context";
 import { DraftsProvider } from "./contexts/drafts-context";
@@ -256,6 +257,7 @@ function AppContent() {
             <Route path="games/2048" element={<Twenty48Board />} />
             <Route path="games/tetris" element={<TetrisBoard />} />
             <Route path="games/racer" element={<RacerBoard />} />
+            <Route path="games/racer3d" element={<Racer3DBoard />} />
 
             <Route element={<Outlet />}>
               <Route path="movies" element={<MoviesFeed />} />

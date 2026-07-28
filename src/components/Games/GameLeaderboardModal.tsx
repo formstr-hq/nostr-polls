@@ -6,6 +6,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import LeaderboardPanel from "./LeaderboardPanel";
 import { DeterministicGame, GameInput } from "../../games/core/types";
 import { LeaderboardEntry, useDailyLeaderboard } from "../../games/core/useDailyLeaderboard";
+import { useTrackLeaderboard } from "../../games/core/useTrackLeaderboard";
 
 export interface GameLeaderboardModalProps<TAction extends string = string> {
   open: boolean;
@@ -13,8 +14,12 @@ export interface GameLeaderboardModalProps<TAction extends string = string> {
   label: string;
   gameId: string;
   dateIso: string;
+  /** If provided, this is a fixed per-track leaderboard, not a daily one. */
+  trackId?: string;
   gameFactory: () => DeterministicGame<TAction>;
   ReplayView: React.ComponentType<{ seed: string; inputLog: GameInput[] }>;
+  /** Optional score formatter passed through to LeaderboardPanel. */
+  formatScore?: (score: number) => string;
 }
 
 /**
@@ -30,11 +35,15 @@ export default function GameLeaderboardModal<TAction extends string = string>({
   gameId,
   dateIso,
   gameFactory,
+  trackId,
   ReplayView,
+  formatScore,
 }: GameLeaderboardModalProps<TAction>) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const leaderboard = useDailyLeaderboard(gameId, dateIso, gameFactory);
+  const dailyLeaderboard = useDailyLeaderboard(gameId, dateIso, gameFactory);
+  const trackLeaderboard = useTrackLeaderboard(gameId, trackId ?? "", gameFactory);
+  const leaderboard = trackId ? trackLeaderboard : dailyLeaderboard;
   const [replayEntry, setReplayEntry] = useState<LeaderboardEntry | null>(null);
 
   const content = (
@@ -45,7 +54,7 @@ export default function GameLeaderboardModal<TAction extends string = string>({
           <CloseIcon fontSize="small" />
         </IconButton>
       </Box>
-      <LeaderboardPanel entries={leaderboard} onReplay={setReplayEntry} />
+      <LeaderboardPanel entries={leaderboard} onReplay={setReplayEntry} formatScore={formatScore} />
     </>
   );
 

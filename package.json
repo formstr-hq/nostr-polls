@@ -24,6 +24,8 @@
     "@mui/material": "^6.1.2",
     "@mui/styles": "^6.1.2",
     "@mui/x-date-pickers": "^7.17.0",
+    "@react-three/drei": "^9.114.0",
+    "@react-three/fiber": "^8.17.0",
     "@types/node": "^16.18.101",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
@@ -42,11 +44,12 @@
     "react-scripts": "5.0.1",
     "react-virtuoso": "^4.13.0",
     "react-zoom-pan-pinch": "^4.0.3",
+    "three": "^0.170.0",
     "typescript": "^5.2.2"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
+    "start": "react-app-rewired start",
+    "build": "react-app-rewired build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
@@ -83,7 +86,9 @@
     "@capacitor/assets": "^3.0.5",
     "@testing-library/jest-dom": "^5.17.0",
     "@testing-library/react": "^13.4.0",
-    "@types/jest": "^27.5.2"
+    "@types/jest": "^27.5.2",
+    "@types/three": "^0.170.0",
+    "react-app-rewired": "^2.2.1"
   },
   "resolutions": {
     "@noble/hashes": "2.0.1"

@@ -10,11 +10,13 @@ import { LeaderboardEntry } from "../../games/core/useDailyLeaderboard";
 export interface LeaderboardPanelProps {
   entries: LeaderboardEntry[];
   onReplay: (entry: LeaderboardEntry) => void;
+  /** Optional score formatter — e.g. race time as M:SS.mm instead of raw ms. */
+  formatScore?: (score: number) => string;
 }
 
 /** Avatar/name via the same convention as ReviewCard.tsx: `useAppContext`'s
  *  profile cache + throttled fetch, `openProfileTab` for click-to-profile. */
-export default function LeaderboardPanel({ entries, onReplay }: LeaderboardPanelProps) {
+export default function LeaderboardPanel({ entries, onReplay, formatScore }: LeaderboardPanelProps) {
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const navigate = useNavigate();
 
@@ -73,7 +75,7 @@ export default function LeaderboardPanel({ entries, onReplay }: LeaderboardPanel
               </Typography>
             </Box>
             <Typography variant="body2" fontWeight={600}>
-              {entry.score}
+              {formatScore ? formatScore(entry.score) : entry.score}
             </Typography>
             <IconButton size="small" onClick={() => onReplay(entry)} aria-label="Watch replay">
               <PlayArrowIcon fontSize="small" />

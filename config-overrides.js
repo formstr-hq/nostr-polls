@@ -1,0 +1,1 @@
+/Volumes/AppsDrive/Dev/nostr-polls/config-overrides.cjs

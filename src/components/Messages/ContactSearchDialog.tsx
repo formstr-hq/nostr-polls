@@ -293,6 +293,8 @@ const ContactSearchDialog: React.FC<ContactSearchDialogProps> = ({
                 overflow: "hidden",
               }}
             >
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              {/* @ts-expect-error - MUI sx union type too complex (pre-existing) */}
               <AvatarGroup max={4} sx={{ "& .MuiAvatar-root": { width: 28, height: 28, fontSize: 12 } }}>
                 {selectedContacts.map((c) => (
                   <Avatar key={c.pubkey} src={c.picture} />

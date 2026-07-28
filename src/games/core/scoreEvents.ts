@@ -25,8 +25,16 @@ export function getDailySeed(gameId: string, dateIso: string): string {
   return bytesToHex(sha256(new TextEncoder().encode(`${gameId}|${dateIso}`)));
 }
 
+export function getTrackSeed(gameId: string, trackId: string): string {
+  return bytesToHex(sha256(new TextEncoder().encode(`${gameId}|${trackId}`)));
+}
+
 export function scoreDTag(gameId: string, dateIso: string): string {
   return `${gameId}:${dateIso}`;
+}
+
+export function trackScoreDTag(gameId: string, trackId: string): string {
+  return `${gameId}:${trackId}`;
 }
 
 export interface StoredScore {
@@ -88,6 +96,54 @@ export async function publishDailyScore(
   const signed = await signer.signEvent(template);
   await dataLayer.publishEvent(signed);
   return signed;
+}
+
+/**
+ * Publishes a new best for a fixed per-track leaderboard. Same semantics as
+ * publishDailyScore — writes to local storage immediately, relay broadcast
+ * is async/best-effort.
+ */
+export async function publishTrackScore(
+  gameId: string,
+  trackId: string,
+  seed: string,
+  score: number,
+  inputLog: GameInput[]
+): Promise<Event> {
+  const template: EventTemplate = {
+    kind: KIND_GAME_SCORE,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ["d", trackScoreDTag(gameId, trackId)],
+      ["seed", seed],
+      ["score", String(score)],
+      ["game_version", GAME_VERSION],
+    ],
+    content: JSON.stringify(encodeInputLog(inputLog)),
+  };
+  const signer = await signerManager.getSigner();
+  const signed = await signer.signEvent(template);
+  await dataLayer.publishEvent(signed);
+  return signed;
+}
+
+/**
+ * Cache-only read of the caller's own score for a fixed per-track leaderboard.
+ * Mirrors getMyTodayScore but uses the track d-tag/seed scheme.
+ */
+export async function getMyTrackScore(
+  gameId: string,
+  trackId: string,
+  pubkey: string
+): Promise<StoredScore | null> {
+  const filters = [{ kinds: [KIND_GAME_SCORE], authors: [pubkey], "#d": [trackScoreDTag(gameId, trackId)], limit: 1 }];
+
+  const local = await collectOnce(filters, { localOnly: true });
+  if (local.length > 0) return parseScoreEvent(local[0]);
+
+  const networked = await collectOnce(filters, { localOnly: false });
+  if (networked.length === 0) return null;
+  return parseScoreEvent(networked[0]);
 }
 
 /**
