@@ -10,6 +10,7 @@
 
 # production
 /build
+/public/wllama
 
 # misc
 .DS_Store

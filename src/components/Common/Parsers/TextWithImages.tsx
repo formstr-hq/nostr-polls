@@ -19,7 +19,10 @@ import { YouTubePlayer } from "../Youtube";
 import { InlineVideo } from "./InlineVideo";
 import { Link } from "react-router-dom";
 import { aiService } from "../../../services/ai-service";
+import { wllamaTranslationService } from "../../../services/wllama-translation-service";
 import { useTranslationBatch } from "../../../contexts/translation-batch-context";
+import { useWllamaTranslation } from "../../../hooks/useWllamaTranslation";
+import { isNative } from "../../../utils/platform";
 import {
   getCachedTranslation,
   setCachedTranslation,
@@ -707,20 +710,29 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
 
   const { aiSettings, fetchUserProfileThrottled, profiles } = useAppContext();
   const { detectLanguage } = useTranslationBatch();
+  const wllamaModel = useWllamaTranslation();
   const browserLang = navigator.language.slice(0, 2).toLowerCase();
 
   // Language detection is synchronous (Unicode heuristic, no nRPC).
-  // Only show translate button when AI is configured AND the post is
-  // clearly written in a non-browser-language script.
+  // A deliberately loaded browser model makes translation available for all
+  // text (including Latin-script languages that Unicode cannot distinguish).
+  // The legacy Ollama fallback retains the conservative script check.
   useEffect(() => {
     setDisplayedText(content ?? "");
-    if (!aiSettings.model) {
+    setTranslatedText(null);
+
+    if (wllamaModel.status === "ready") {
+      setShouldShowTranslate(Boolean(content.trim()));
+      return;
+    }
+
+    if (!isNative || !aiSettings.model) {
       setShouldShowTranslate(false);
       return;
     }
     const lang = detectLanguage(content);
     setShouldShowTranslate(lang !== null && lang !== browserLang);
-  }, [content, aiSettings.model, browserLang, detectLanguage]);
+  }, [content, aiSettings.model, browserLang, detectLanguage, wllamaModel.status]);
 
   const handleTranslate = async () => {
     setIsTranslating(true);
@@ -733,12 +745,16 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
         return;
       }
 
-      // Use batched translateText method (detects language + translates in one call)
-      const result = await aiService.translateText({
-        model: aiSettings.model || "llama3",
-        text: content,
-        targetLang: browserLang,
-      });
+      const result = wllamaModel.status === "ready"
+        ? await wllamaTranslationService.translateText({
+            text: content,
+            targetLang: browserLang,
+          })
+        : await aiService.translateText({
+            model: aiSettings.model || "llama3",
+            text: content,
+            targetLang: browserLang,
+          });
 
       if (result.success && result.data) {
         const translation = result.data.translation || "⚠️ Translation failed.";

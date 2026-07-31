@@ -42,9 +42,11 @@
     "react-scripts": "5.0.1",
     "react-virtuoso": "^4.13.0",
     "react-zoom-pan-pinch": "^4.0.3",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "wllama-service": "^2.0.6"
   },
   "scripts": {
+    "postinstall": "node scripts/copy-wllama-wasm.cjs",
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
