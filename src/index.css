@@ -4,6 +4,39 @@ html, body {
   touch-action: pan-x pan-y;
 }
 
+html {
+  scrollbar-color: rgba(164, 172, 184, 0.82) rgba(10, 18, 28, 0.22);
+}
+
+* {
+  scrollbar-width: auto;
+}
+
+*::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(10, 18, 28, 0.22);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(178, 186, 198, 0.92), rgba(136, 145, 158, 0.92));
+  border: 2px solid rgba(10, 18, 28, 0.22);
+  border-radius: 999px;
+  min-height: 60px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(194, 201, 212, 0.96), rgba(150, 159, 171, 0.96));
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 #root {
   height: 100%;
   display: flex;

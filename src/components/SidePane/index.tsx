@@ -176,6 +176,8 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
             py: 1,
             overflowX: "hidden",
             overflowY: "auto",
+            scrollbarWidth: "none",
+            "&::-webkit-scrollbar": { display: "none" },
             transition: "width 0.2s ease",
           }}
         >
@@ -275,6 +277,8 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
           py: 1,
           overflowX: "hidden",
           overflowY: "auto",
+          scrollbarWidth: "none",
+          "&::-webkit-scrollbar": { display: "none" },
           transition: "width 0.2s ease",
         }}
       >
