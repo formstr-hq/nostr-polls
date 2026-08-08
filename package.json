@@ -47,9 +47,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/copy-wllama-wasm.cjs",
-    "prestart": "node scripts/copy-wllama-wasm.cjs",
     "start": "react-scripts start",
-    "prebuild": "node scripts/copy-wllama-wasm.cjs",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
