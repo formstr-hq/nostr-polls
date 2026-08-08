@@ -54,21 +54,22 @@ const BrowserTranslationSettings: React.FC = () => {
         {environment.success && (
           <Chip
             size="small"
-            color={environment.hasWebGPU && environment.crossOriginIsolated ? "success" : "default"}
+            color={environment.hasWebGPU ? "success" : "default"}
             label={
-              environment.hasWebGPU && environment.crossOriginIsolated
+              environment.hasWebGPU
                 ? "WebGPU available"
-                : "WebAssembly fallback"
+                : "WebAssembly only"
             }
           />
         )}
       </Box>
 
       {environment.success && !environment.crossOriginIsolated && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          This site is not cross-origin isolated. Translation can still use the
-          WebAssembly fallback, but hosting with COOP/COEP headers enables the
-          fastest runtime where supported.
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Cross-origin isolation is only needed for multi-threaded WebAssembly.
+          {environment.hasWebGPU
+            ? " WebGPU remains available on this host."
+            : " CPU inference will use single-threaded WebAssembly."}
         </Alert>
       )}
 

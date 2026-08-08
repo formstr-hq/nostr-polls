@@ -1,4 +1,6 @@
-import { WllamaService } from "wllama-service";
+import type { Wllama as WllamaInstance } from "@wllama/wllama/esm/index.js";
+
+type WllamaModule = typeof import("@wllama/wllama/esm/index.js");
 
 export type WllamaTranslationStatus = "idle" | "loading" | "ready" | "error";
 
@@ -21,12 +23,60 @@ export interface WllamaTranslationResult {
   error?: string;
 }
 
+interface GenerationResult {
+  success: boolean;
+  text?: string;
+  error?: string;
+}
+
 const publicUrl = process.env.PUBLIC_URL || "";
-const canUseWebGPU =
+const wasmPath = `${publicUrl}/wllama/wllama.wasm`;
+const hasWebGPU = () =>
   typeof window !== "undefined" &&
   typeof navigator !== "undefined" &&
-  window.crossOriginIsolated &&
   "gpu" in navigator;
+
+class InMemoryStorageBackend {
+  private readonly files = new Map<string, Blob>();
+
+  isSupported(): boolean {
+    return true;
+  }
+
+  read(key: string): Promise<Blob | null> {
+    return Promise.resolve(this.files.get(key) ?? null);
+  }
+
+  async write(key: string, stream: ReadableStream): Promise<void> {
+    this.files.set(key, await new Response(stream).blob());
+  }
+
+  getSize(key: string): Promise<number> {
+    return Promise.resolve(this.files.get(key)?.size ?? -1);
+  }
+
+  list(): Promise<Array<{ key: string; size: number }>> {
+    return Promise.resolve(
+      Array.from(this.files, ([key, file]) => ({ key, size: file.size })),
+    );
+  }
+
+  delete(key: string): Promise<void> {
+    this.files.delete(key);
+    return Promise.resolve();
+  }
+}
+
+const createCacheManager = (CacheManager: WllamaModule["CacheManager"]) => {
+  try {
+    return new CacheManager();
+  } catch {
+    // Some browser and Capacitor WebView environments do not expose OPFS.
+    // Local GGUF files do not need persistent storage, but Wllama still
+    // requires a supported cache backend when it is constructed.
+    return new CacheManager([new InMemoryStorageBackend()]);
+  }
+};
 
 /**
  * Owns the single in-browser model instance used by every poll card.
@@ -36,13 +86,7 @@ const canUseWebGPU =
  * duplicating it in IndexedDB would consume a surprising amount of storage.
  */
 class BrowserTranslationService {
-  private readonly service = new WllamaService({
-    wasmPath: `${publicUrl}/wllama/wllama.wasm`,
-    nCtx: 2048,
-    // wllama's WebGPU runtime requires cross-origin isolation. Force the
-    // reliable WASM path when the host does not send COOP/COEP headers.
-    nGpuLayers: canUseWebGPU ? 999 : 0,
-  });
+  private wllama: WllamaInstance | null = null;
 
   private state: WllamaTranslationState = {
     status: "idle",
@@ -64,7 +108,25 @@ class BrowserTranslationService {
   readonly getSnapshot = (): WllamaTranslationState => this.state;
 
   getEnvironment() {
-    return this.service.checkEnvironment();
+    if (typeof window === "undefined" || typeof navigator === "undefined") {
+      return {
+        success: false,
+        error: "Local translation can only run in a browser environment.",
+      };
+    }
+
+    if (typeof WebAssembly === "undefined") {
+      return {
+        success: false,
+        error: "WebAssembly is not supported in this browser.",
+      };
+    }
+
+    return {
+      success: true,
+      hasWebGPU: hasWebGPU(),
+      crossOriginIsolated: window.crossOriginIsolated,
+    };
   }
 
   async loadModel(file: File): Promise<boolean> {
@@ -89,35 +151,52 @@ class BrowserTranslationService {
       lastGenerationError: null,
     });
 
-    const result = await this.service.loadModel(file, (progress) => {
-      this.setState({ ...this.state, progress });
-    });
+    await this.releaseModel();
 
-    if (!result.success) {
+    try {
+      this.setState({ ...this.state, progress: 10 });
+      const { CacheManager, Wllama } = await import("@wllama/wllama/esm/index.js");
+      const wllama = new Wllama(
+        { default: wasmPath },
+        { cacheManager: createCacheManager(CacheManager) },
+      );
+      this.wllama = wllama;
+      this.setState({ ...this.state, progress: 30 });
+
+      const useWebGPU = hasWebGPU();
+      await wllama.loadModel([file], {
+        n_ctx: 2048,
+        // WebGPU does not require cross-origin isolation. COOP/COEP headers
+        // are only needed for Wllama's multi-threaded WASM CPU runtime.
+        n_gpu_layers: useWebGPU ? 999 : 0,
+        jinja: true,
+      });
+
+      this.setState({
+        status: "ready",
+        progress: 100,
+        modelName: file.name,
+        usedWebGPU: useWebGPU,
+        error: null,
+        lastGenerationError: null,
+      });
+      return true;
+    } catch (error) {
+      await this.releaseModel();
       this.setState({
         status: "error",
         progress: 0,
         modelName: "",
         usedWebGPU: false,
-        error: result.error || "Failed to load the model.",
+        error: this.errorMessage(error, "Failed to load the model."),
         lastGenerationError: null,
       });
       return false;
     }
-
-    this.setState({
-      status: "ready",
-      progress: 100,
-      modelName: this.service.currentModel || file.name,
-      usedWebGPU: result.usedWebGPU === true,
-      error: null,
-      lastGenerationError: null,
-    });
-    return true;
   }
 
   async unload(): Promise<void> {
-    await this.service.unload();
+    await this.releaseModel();
     this.setState({
       status: "idle",
       progress: 0,
@@ -144,7 +223,7 @@ class BrowserTranslationService {
     text: string;
     targetLang: string;
   }): Promise<WllamaTranslationResult> {
-    if (!this.service.isLoaded) {
+    if (!this.wllama?.isModelLoaded()) {
       return {
         success: false,
         error: "Load a browser translation model in Settings → AI first.",
@@ -178,7 +257,7 @@ class BrowserTranslationService {
     // Prefer the model's embedded chat template. Some otherwise valid GGUF
     // models do not include one (or reject a system role), so retry as a raw
     // completion with a fully formatted prompt before reporting failure.
-    const chatResult = await this.service.generate({
+    const chatResult = await this.generateChat({
       system: systemPrompt,
       prompt: params.text,
       maxTokens,
@@ -190,7 +269,7 @@ class BrowserTranslationService {
     let generatedText = chatResult.text?.trim();
     let fallbackError: string | undefined;
     if (!chatResult.success || !generatedText) {
-      const completionResult = await this.service.generateCompletion({
+      const completionResult = await this.generateCompletion({
         prompt: [
           systemPrompt,
           "",
@@ -241,6 +320,92 @@ class BrowserTranslationService {
       .replace(/\s*```$/i, "")
       .replace(/^(?:translation|translated text)\s*:\s*/i, "")
       .trim();
+  }
+
+  private async generateChat(params: {
+    system: string;
+    prompt: string;
+    maxTokens: number;
+    temperature: number;
+    topK: number;
+    topP: number;
+  }): Promise<GenerationResult> {
+    if (!this.wllama) {
+      return { success: false, error: "No model is loaded." };
+    }
+
+    try {
+      const response = await this.wllama.createChatCompletion({
+        messages: [
+          { role: "system", content: params.system },
+          { role: "user", content: params.prompt },
+        ],
+        stream: false,
+        max_tokens: params.maxTokens,
+        temperature: params.temperature,
+        top_k: params.topK,
+        top_p: params.topP,
+      });
+
+      return {
+        success: true,
+        text: response.choices?.[0]?.message?.content || "",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: this.errorMessage(error, "Chat generation failed."),
+      };
+    }
+  }
+
+  private async generateCompletion(params: {
+    prompt: string;
+    maxTokens: number;
+    temperature: number;
+    topK: number;
+    topP: number;
+  }): Promise<GenerationResult> {
+    if (!this.wllama) {
+      return { success: false, error: "No model is loaded." };
+    }
+
+    try {
+      const response = await this.wllama.createCompletion({
+        prompt: params.prompt,
+        stream: false,
+        max_tokens: params.maxTokens,
+        temperature: params.temperature,
+        top_k: params.topK,
+        top_p: params.topP,
+      });
+
+      return {
+        success: true,
+        text: response.choices?.[0]?.text || "",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: this.errorMessage(error, "Raw completion failed."),
+      };
+    }
+  }
+
+  private async releaseModel(): Promise<void> {
+    const wllama = this.wllama;
+    this.wllama = null;
+    if (!wllama) return;
+
+    try {
+      await wllama.exit();
+    } catch {
+      // Cleanup is best effort; the app state must still return to idle.
+    }
+  }
+
+  private errorMessage(error: unknown, fallback: string): string {
+    return error instanceof Error ? error.message : fallback;
   }
 
   /*

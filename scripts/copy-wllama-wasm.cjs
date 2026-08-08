@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
-// wllama-service installs @wllama/wllama transitively.
+// @wllama/wllama is a direct dependency so its runtime can be served locally.
 const possibleSrc = [
   path.resolve(
     __dirname,
@@ -13,8 +13,8 @@ const dest = path.resolve(__dirname, "../public/wllama/wllama.wasm");
 const src = possibleSrc.find((candidate) => fs.existsSync(candidate));
 
 if (!src) {
-  console.warn("⚠ wllama.wasm not found. Run: yarn install");
-  process.exit(0);
+  console.error("✗ wllama.wasm not found. Install dependencies before starting or building.");
+  process.exit(1);
 }
 
 fs.mkdirSync(path.dirname(dest), { recursive: true });

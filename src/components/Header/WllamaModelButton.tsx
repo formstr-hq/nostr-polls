@@ -96,7 +96,7 @@ export const WllamaModelButton: React.FC = () => {
         <DialogContent dividers>
           <Typography variant="body2" color="text.secondary">
             Choose an instruction-tuned GGUF model. Pollerama loads it locally
-            with wllama-service, and poll text never leaves this device.
+            with wllama, and poll text never leaves this device.
           </Typography>
 
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, my: 2 }}>
@@ -108,26 +108,15 @@ export const WllamaModelButton: React.FC = () => {
             {environment.success && (
               <Chip
                 size="small"
-                color={
-                  environment.hasWebGPU && environment.crossOriginIsolated
-                    ? "success"
-                    : "default"
-                }
+                color={environment.hasWebGPU ? "success" : "default"}
                 label={
-                  environment.hasWebGPU && environment.crossOriginIsolated
+                  environment.hasWebGPU
                     ? "WebGPU available"
-                    : "WebAssembly fallback"
+                    : "WebAssembly only"
                 }
               />
             )}
           </Box>
-
-          {environment.success && !environment.crossOriginIsolated && (
-            <Alert severity="warning" sx={{ mb: 2 }}>
-              This host is not cross-origin isolated, so the reliable
-              WebAssembly fallback will be used.
-            </Alert>
-          )}
 
           {!environment.success && (
             <Alert severity="error" sx={{ mb: 2 }}>
