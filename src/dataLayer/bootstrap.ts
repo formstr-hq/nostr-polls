@@ -18,7 +18,7 @@ import {
 } from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
 import { defaultRelays, searchRelays } from "../nostr";
-import { notifyRelayRefresh, subscribeRelayRefresh } from "./relayRefresh";
+import { notifyRelayRefresh, subscribeRelayRefresh, markRelayHydrated } from "./relayRefresh";
 
 let started = false;
 
@@ -46,6 +46,7 @@ export function bootstrapDataLayer(): DataLayer {
       baseChannel.onMessage((m) => {
         const kind = (m as { kind?: string } | null)?.kind;
         if (kind === "hydrated") {
+          markRelayHydrated();
           notifyRelayRefresh();
         } else if (kind === "ready") {
           readyCount += 1;

@@ -23,7 +23,7 @@ import {
   type Scope,
   type ScopeUser,
 } from "@formstr/local-relay";
-import { getRelayRefresh, subscribeRelayRefresh } from "./relayRefresh";
+import { getRelayRefresh, subscribeRelayRefresh, isRelayHydrated } from "./relayRefresh";
 
 /**
  * Reactive read of the relay refresh signal — bumps when the worker can newly
@@ -183,7 +183,10 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
       onEose: () => {
         eosedRef.current = true;
         recompute();
-        setLoading(false);
+        // A pre-hydration EOSE means the store was still loading, not actually
+        // empty — stay in `loading` (the `refresh` dep re-runs this effect once
+        // hydration completes) instead of flashing an empty/failed state.
+        if (isRelayHydrated()) setLoading(false);
       },
     });
     handleRef.current = handle;

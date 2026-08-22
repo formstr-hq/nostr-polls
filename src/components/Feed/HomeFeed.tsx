@@ -9,6 +9,7 @@ import { safeSetItem } from "../../utils/localStorage";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import UnifiedFeed from "./UnifiedFeed";
 import { Notes } from "../Notes";
 import PollResponseForm from "../PollResponse/PollResponseForm";
@@ -83,6 +84,7 @@ const HomeFeed: React.FC = () => {
   const { requestReportCheck, requestUserReportCheck } = useReports();
   const { setItems, clearItems } = useSubNav();
   const { registerRefresh } = useFeedActions();
+  const relayRefresh = useRelayRefresh();
 
   const [source, setSource] = useState<Source>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -413,7 +415,7 @@ const HomeFeed: React.FC = () => {
     setInitialLoadDone(cached.length > 0);
     fetchBatch("initial");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, relays]);
+  }, [source, relays, relayRefresh]);
 
   // The user's follows / web-of-trust resolve asynchronously after login, so on
   // a cold start the initial fetch above often runs with an empty author set and

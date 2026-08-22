@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Button, CircularProgress, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
 import { useSubNav } from "../../contexts/SubNavContext";
@@ -18,6 +19,7 @@ const FollowPacksFeed: React.FC = () => {
   const { user } = useUserContext();
   const { lists, bookmarkedPackKeys } = useListContext();
   const { setItems, clearItems } = useSubNav();
+  const relayRefresh = useRelayRefresh();
 
   const savedSource = (localStorage.getItem(STORAGE_KEY) as Source) || "global";
   const [source, setSource] = useState<Source>(savedSource);
@@ -131,7 +133,7 @@ const FollowPacksFeed: React.FC = () => {
   useEffect(() => {
     if (source !== "bookmarked") fetchBatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source]);
+  }, [source, relayRefresh]);
 
   const displayPacks = source === "bookmarked" ? bookmarkedPacks : packs;
   const isLoading = source === "bookmarked" ? false : loading;

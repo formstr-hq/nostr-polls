@@ -15,6 +15,7 @@
  */
 
 let refreshCount = 0;
+let hydrated = false;
 const listeners = new Set<() => void>();
 
 /** Bump the signal — call when the worker can newly serve more cached data. */
@@ -26,6 +27,21 @@ export function notifyRelayRefresh(): void {
 /** Current signal value (changes identity-stably as a number). */
 export function getRelayRefresh(): number {
   return refreshCount;
+}
+
+/**
+ * Mark IndexedDB hydration as complete. Consumers use this to hold off
+ * declaring "no results" until the store has actually finished loading —
+ * otherwise a pre-hydration EOSE flashes an empty/failed state right before
+ * the retry (driven by `notifyRelayRefresh`) paints the real data.
+ */
+export function markRelayHydrated(): void {
+  hydrated = true;
+}
+
+/** True once IndexedDB hydration has completed at least once this session. */
+export function isRelayHydrated(): boolean {
+  return hydrated;
 }
 
 /** Subscribe to refreshes; returns an unsubscribe fn (useSyncExternalStore shape). */

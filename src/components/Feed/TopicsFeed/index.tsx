@@ -16,6 +16,8 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../../dataLayer/hooks";
+import { isRelayHydrated } from "../../../dataLayer/relayRefresh";
 import { Virtuoso } from "react-virtuoso";
 import TopicCard from "./TopicsCard";
 import { useListContext } from "../../../hooks/useListContext";
@@ -41,6 +43,7 @@ const TopicsFeed: React.FC = () => {
   const interestsRefreshRef = useRef<(() => void) | undefined>(undefined);
 
   const { relays } = useRelays();
+  const relayRefresh = useRelayRefresh();
   const { myTopics } = useListContext();
   const navigate = useNavigate();
   const { tag } = useParams();
@@ -127,7 +130,7 @@ const TopicsFeed: React.FC = () => {
     });
 
     return () => sub.unobserve();
-  }, [relays, tagsMap]);
+  }, [relays, tagsMap, relayRefresh]);
 
   useEffect(() => {
     // If a specific tag is selected or no relays, don't fetch topics
@@ -162,7 +165,10 @@ const TopicsFeed: React.FC = () => {
           }
         },
         onEose: () => {
-          if (isMounted.current) setLoading(false);
+          // A pre-hydration EOSE means the store was still loading, not
+          // actually empty — the relayRefresh-dep re-run below retries once
+          // hydration completes, so hold off on clearing the spinner here.
+          if (isMounted.current && isRelayHydrated()) setLoading(false);
         },
       }
     );
@@ -197,7 +203,7 @@ const TopicsFeed: React.FC = () => {
       subsRef.current.forEach((s) => s.unobserve());
       subsRef.current = [];
     };
-  }, [tag, relays, refreshKey]); // refreshKey forces a re-fetch on manual refresh
+  }, [tag, relays, refreshKey, relayRefresh]); // refreshKey forces a re-fetch on manual refresh
 
   const handleRefresh = useCallback(() => {
     if (activeTab === "interests") {

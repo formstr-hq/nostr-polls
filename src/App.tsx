@@ -244,7 +244,7 @@ function AppContent() {
             <Route path="topics" element={<TopicsFeed />}>
               <Route path=":tag" element={<TopicExplorer />} />
             </Route>
-            <Route path="polls" index element={<PollFeed />} />
+            <Route path="polls" element={<PollFeed />} />
             <Route path="follow-packs" element={<FollowPacksFeed />} />
             <Route path="follow-packs/:naddr" element={<FollowPackDetail />} />
             <Route path="articles" element={<ArticlesFeed />} />

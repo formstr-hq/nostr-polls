@@ -26,6 +26,7 @@ import UnifiedFeed from "../UnifiedFeed";
 import OverlappingAvatars from "../../../components/Common/OverlappingAvatars";
 import { signEvent } from "../../../nostr";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../../dataLayer/hooks";
 import { useMetadata } from "../../../hooks/MetadataProvider";
 import { selectBestMetadataEvent } from "../../../utils/utils";
 import {
@@ -46,6 +47,7 @@ const TopicExplorer: React.FC = () => {
   const { myTopics, addTopicToMyTopics, removeTopicFromMyTopics } =
     useListContext();
   const navigate = useNavigate();
+  const relayRefresh = useRelayRefresh();
 
   const [tabValue, setTabValue] = useState<0 | 1>(0);
   const [feedMode, setFeedMode] = useState<
@@ -348,7 +350,7 @@ const TopicExplorer: React.FC = () => {
         subRef.current.close();
       }
     };
-  }, [tag, relays]);
+  }, [tag, relays, relayRefresh]);
 
   const sortedEvents = useMemo(() => {
     const base = tabValue === 0 ? notesEvents : pollsEvents;

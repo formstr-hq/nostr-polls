@@ -147,6 +147,18 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
             onClick={handleRefresh}
             sx={actionSx}
           />
+          {extraActions.map((action, index) => (
+            <SpeedDialAction
+              key={`extra-action-${index}`}
+              icon={action.icon}
+              tooltipTitle={action.name}
+              onClick={() => {
+                setOpen(false);
+                action.onClick();
+              }}
+              sx={actionSx}
+            />
+          ))}
           <SpeedDialAction
             icon={
               <Badge badgeContent={draftCount} color="primary" invisible={draftCount === 0} max={99}>

@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography, Tabs, Tab } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
+import { useRelayRefresh } from "../../dataLayer/hooks";
+import { isRelayHydrated } from "../../dataLayer/relayRefresh";
 import { Notes } from "../Notes";
 import UnifiedFeed from "../Feed/UnifiedFeed";
 
@@ -23,6 +25,7 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
   const [notes, setNotes] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [subTab, setSubTab] = useState(0);
+  const relayRefresh = useRelayRefresh();
 
   const fetchNotes = useCallback(() => {
     if (!pubkey) return;
@@ -45,12 +48,23 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
         });
       },
       onEose() {
-        setLoading(false);
+        // A pre-hydration EOSE means the store was still loading, not
+        // actually empty — the relayRefresh-dep re-run below retries once
+        // hydration completes, so hold off on clearing the spinner here.
+        if (isRelayHydrated()) setLoading(false);
       },
     });
 
-    return () => handle.unobserve();
-  }, [pubkey]);
+    // Safety net: don't let a stuck hydration signal spin forever.
+    const timeout = setTimeout(() => setLoading(false), 8000);
+    return () => {
+      handle.unobserve();
+      clearTimeout(timeout);
+    };
+    // relayRefresh isn't read in the body — it's a dependency purely to force
+    // a fresh fetchNotes identity (and re-run below) once hydration completes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pubkey, relayRefresh]);
 
   useEffect(() => {
     const cleanup = fetchNotes();
