@@ -4,7 +4,12 @@ import {
   PassphraseModal,
   PassphraseModalMode,
 } from "../components/Login/PassphraseModal";
-import { signerManager, StoredAccount } from "../singletons/Signer/SignerManager";
+import { AccountMismatchDialog } from "../components/Login/AccountMismatchDialog";
+import {
+  signerManager,
+  StoredAccount,
+  type SignerMismatchInfo,
+} from "../singletons/Signer/SignerManager";
 import { readCachedContacts } from "../nostr/contactsCache";
 
 export type User = {
@@ -66,9 +71,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [passphraseRequest, setPassphraseRequest] =
     useState<PassphraseRequest | null>(null);
   const [passphraseSubmitting, setPassphraseSubmitting] = useState(false);
+  const [mismatchInfo, setMismatchInfo] =
+    useState<SignerMismatchInfo | null>(null);
   // Pending login-modal resolver so SignerManager.getSigner() can await the
   // user finishing the login flow.
   const loginResolverRef = useRef<(() => void) | null>(null);
+  // Pending mismatch-dialog resolver; resolved when the user dismisses it.
+  const mismatchResolverRef = useRef<(() => void) | null>(null);
   // Cancel pressed while a submitted attempt was still pending. The next
   // passphrase prompt that comes in will be auto-cancelled.
   const autoCancelRef = useRef(false);
@@ -108,6 +117,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
       });
     });
 
+    signerManager.registerSignerMismatchCallback((info) => {
+      setMismatchInfo(info);
+      return new Promise<void>((resolve) => {
+        mismatchResolverRef.current = resolve;
+      });
+    });
+
     signerManager.onChange(() => {
       setUser((prev) => {
         const next = withCachedFollows(signerManager.getUser());
@@ -141,6 +157,15 @@ export function UserProvider({ children }: { children: ReactNode }) {
     // signer is now available (or surface its "no signer" error).
     const resolver = loginResolverRef.current;
     loginResolverRef.current = null;
+    if (resolver) resolver();
+  };
+
+  const handleMismatchOk = () => {
+    setMismatchInfo(null);
+    // Resolve the awaiting getSigner() promise so the mismatch throw can
+    // surface to the caller (which already shows its own error state).
+    const resolver = mismatchResolverRef.current;
+    mismatchResolverRef.current = null;
     if (resolver) resolver();
   };
 
@@ -188,6 +213,12 @@ export function UserProvider({ children }: { children: ReactNode }) {
         submitting={passphraseSubmitting}
         onSubmit={handlePassphraseSubmit}
         onCancel={handlePassphraseCancel}
+      />
+      <AccountMismatchDialog
+        open={mismatchInfo !== null}
+        expectedPubkey={mismatchInfo?.expectedPubkey ?? ""}
+        actualPubkey={mismatchInfo?.actualPubkey ?? ""}
+        onOk={handleMismatchOk}
       />
     </UserContext.Provider>
   );

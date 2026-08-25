@@ -84,6 +84,40 @@ export type PassphraseCallback = (
   req: PassphraseRequest,
 ) => Promise<string | null>;
 
+export type SignerMismatchInfo = {
+  expectedPubkey: string;
+  actualPubkey: string;
+};
+
+export type SignerMismatchCallback = (
+  info: SignerMismatchInfo,
+) => Promise<void>;
+
+/**
+ * Thrown when a signer is about to sign but reports a pubkey that doesn't
+ * match the app's active account for that signer. Signers built from a
+ * fixed key (ncryptsec, NIP-46, android) can never throw this — only the
+ * stateless NIP-07 extension signer can, because it always signs with
+ * whatever account is currently active *inside the extension* (`#1` for
+ * one, `#3` for another) which the extension can have switched at any time.
+ *
+ * Callers can distinguish this from other failures with
+ * `error instanceof SignerPubkeyMismatchError` or
+ * `error.name === "SignerPubkeyMismatchError"`.
+ */
+export class SignerPubkeyMismatchError extends Error {
+  readonly expectedPubkey: string;
+  readonly actualPubkey: string;
+  constructor(expectedPubkey: string, actualPubkey: string) {
+    super(
+      `Signer pubkey mismatch: expected ${expectedPubkey}, extension provided ${actualPubkey}`,
+    );
+    this.name = "SignerPubkeyMismatchError";
+    this.expectedPubkey = expectedPubkey;
+    this.actualPubkey = actualPubkey;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -134,6 +168,12 @@ class SignerManager {
   private onChangeCallbacks: Set<() => void> = new Set();
   private loginModalCallback: (() => Promise<void>) | null = null;
   private passphraseCallback: PassphraseCallback | null = null;
+  private mismatchCallback: SignerMismatchCallback | null = null;
+  /**
+   * Guards against a double-mismatch-prompt from re-entrant getSigner()
+   * calls (e.g. several sign actions queued while a modal is open).
+   */
+  private mismatchPending = false;
   /** Legacy nsec/guest accounts awaiting interactive passphrase migration. */
   private pendingMigrations: PendingMigration[] = [];
   /**
@@ -223,6 +263,10 @@ class SignerManager {
     this.passphraseCallback = callback;
   }
 
+  registerSignerMismatchCallback(callback: SignerMismatchCallback): void {
+    this.mismatchCallback = callback;
+  }
+
   onChange(cb: () => void): () => void {
     this.onChangeCallbacks.add(cb);
     return () => {
@@ -270,6 +314,63 @@ class SignerManager {
   }
 
   async getSigner(): Promise<ActiveSigner> {
+    const signer = await this.resolveActiveSigner();
+    return this.assertSignerMatchesActiveAccount(signer);
+  }
+
+  /**
+   * The pubkey a signer reports must be the same one we logged in as —
+   * otherwise every event it signs (feeds, DMs, votes, NIP-42 AUTH, ...)
+   * lands under a different identity than the profile this session is
+   * showing, which is the "wrong avatar on a post signed by me" bug.
+   *
+   * Signers built from a stored key (ncryptsec, NIP-46, android) can't
+   * drift, so this is a no-op for them. The stateless NIP-07 extension
+   * signer is the drift source: it always signs with whatever account is
+   * currently active inside the extension, which the user can switch
+   * without this app knowing.
+   *
+   * On mismatch we show a blocking dialog (registered via
+   * `registerSignerMismatchCallback`) and then FAIL the sign — never sign
+   * and never silently rebind.
+   */
+  private async assertSignerMatchesActiveAccount(
+    signer: ActiveSigner,
+  ): Promise<ActiveSigner> {
+    const account = this.signer.getActiveAccount();
+    if (!account) return signer; // nothing to compare against
+    let actualPubkey: string;
+    try {
+      actualPubkey = await signer.getPublicKey();
+    } catch {
+      return signer; // signer broken — let the sign attempt surface the real error
+    }
+    if (actualPubkey === account.pubkey) return signer;
+
+    console.warn(
+      `Signer pubkey mismatch: active account ${account.npub} but signer reports ${actualPubkey}`,
+    );
+
+    // Blocking UI (extension-only by definition, but fire whenever the UI
+    // is registered). Concurrency guard: if a modal is already open for a
+    // mismatch, don't stack another one — the pending caller just awaits
+    // the already-open dialog and the throw below still fires.
+    if (this.mismatchCallback && !this.mismatchPending) {
+      this.mismatchPending = true;
+      try {
+        await this.mismatchCallback({
+          expectedPubkey: account.pubkey,
+          actualPubkey,
+        });
+      } finally {
+        this.mismatchPending = false;
+      }
+    }
+
+    throw new SignerPubkeyMismatchError(account.pubkey, actualPubkey);
+  }
+
+  private async resolveActiveSigner(): Promise<ActiveSigner> {
     // Wait for any in-flight signer mutation (initial hydrate, ongoing
     // login/switch) so a sign request fired during boot doesn't race.
     await this.signerLock;
@@ -351,9 +452,9 @@ class SignerManager {
   ): Promise<void> {
     const signerPubkey = await signer.getPublicKey();
     if (signerPubkey !== user.pubkey) {
-      throw new Error(
-        `publishKind0: active signer pubkey ${signerPubkey} does not match target ${user.pubkey}`,
-      );
+      // Direct (pre-registered-callback) guard — the getSigner() path
+      // converts this into a blocking dialog before it ever gets here.
+      throw new SignerPubkeyMismatchError(user.pubkey, signerPubkey);
     }
     
     // Build profile object including extended fields if they exist
