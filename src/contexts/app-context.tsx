@@ -2,7 +2,6 @@ import { ReactNode, createContext, useRef, useState, useMemo, useCallback, useEf
 import { Event } from "nostr-tools/lib/types/core";
 import { Profile } from "../nostr/types";
 import { dataLayer, type Filter, type ObserveHandle } from "@formstr/local-relay";
-import { getCachedProfiles, setCachedProfile } from "../utils/localStorage";
 
 type AppContextInterface = {
   profiles: Map<string, Profile>;
@@ -91,7 +90,6 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
 
   const onProfileEvent = useCallback((event: Event) => {
     eventsRef.current.set(event.id, event);
-    if (event.kind === 0) setCachedProfile(event as any);
     bumpProfilesVersion();
   }, [bumpProfilesVersion]);
 
@@ -105,16 +103,6 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     setDataVersion((v) => v + 1);
     setProfilesVersion((v) => v + 1);
   }, []);
-
-  // Seed from the localStorage profile cache on first mount so avatars/names are
-  // available before any network responses arrive.
-  useEffect(() => {
-    const cached = getCachedProfiles();
-    if (cached.length > 0) {
-      for (const e of cached as Event[]) eventsRef.current.set(e.id, e);
-      bumpProfilesVersion();
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- the six standing interests (profiles + engagement) -------------------
   const interests = useRef({
@@ -196,7 +184,6 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   const addEventToProfiles = useCallback((event: Event) => {
     eventsRef.current.set(event.id, event);
     dataLayer.addEvent(event as any);
-    if (event.kind === 0) setCachedProfile(event as any);
     bumpProfilesVersion();
   }, [bumpProfilesVersion]);
 

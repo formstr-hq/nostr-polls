@@ -9,33 +9,31 @@ interface LinkPreviewData {
   siteName: string;
 }
 
+// In-memory, session-scoped: previews are enrichment (the link still works
+// without one), so they don't pay for localStorage quota. Capped LRU so a
+// long browsing session can't grow unbounded.
 const MEMORY_CACHE = new Map<string, LinkPreviewData | null>();
+const MEMORY_CACHE_MAX = 500;
 const CORS_PROXY = "https://corsproxy.io/?url=";
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function getCachedPreview(url: string): LinkPreviewData | null | undefined {
-  if (MEMORY_CACHE.has(url)) return MEMORY_CACHE.get(url);
-  try {
-    const raw = localStorage.getItem(`link_preview:${url}`);
-    if (raw) {
-      const { data, ts } = JSON.parse(raw);
-      if (Date.now() - ts < CACHE_TTL_MS) {
-        MEMORY_CACHE.set(url, data);
-        return data;
-      }
-    }
-  } catch {}
-  return undefined;
+  if (!MEMORY_CACHE.has(url)) return undefined;
+  const data = MEMORY_CACHE.get(url);
+  if (data === undefined) return undefined;
+  // Refresh recency for LRU.
+  MEMORY_CACHE.delete(url);
+  MEMORY_CACHE.set(url, data);
+  return data;
 }
 
 function setCachedPreview(url: string, data: LinkPreviewData | null) {
+  if (MEMORY_CACHE.has(url)) MEMORY_CACHE.delete(url);
   MEMORY_CACHE.set(url, data);
-  try {
-    localStorage.setItem(
-      `link_preview:${url}`,
-      JSON.stringify({ data, ts: Date.now() })
-    );
-  } catch {}
+  while (MEMORY_CACHE.size > MEMORY_CACHE_MAX) {
+    const oldest = MEMORY_CACHE.keys().next().value;
+    if (oldest === undefined) break;
+    MEMORY_CACHE.delete(oldest);
+  }
 }
 
 async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {

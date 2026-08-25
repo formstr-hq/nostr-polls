@@ -31,6 +31,10 @@ interface MovieMetadataModalProps {
   imdbId: string;
 }
 
+// In-memory, session-scoped: fallback metadata is enrichment (the modal
+// works without it), so it doesn't pay for localStorage quota.
+const fallbackCache = new Map<string, any>();
+
 const MovieMetadataModal: React.FC<MovieMetadataModalProps> = ({
   open,
   onClose,
@@ -47,15 +51,8 @@ const MovieMetadataModal: React.FC<MovieMetadataModalProps> = ({
   useBackClose(open, onClose);
 
   const fetchFallbackMovieMetadata = async (imdbId: string) => {
-    const cacheKey = `movie-fallback:${imdbId}`;
-    const cached = localStorage.getItem(cacheKey);
-
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch {
-        localStorage.removeItem(cacheKey);
-      }
+    if (fallbackCache.has(imdbId)) {
+      return fallbackCache.get(imdbId);
     }
 
     const sparql = `
@@ -110,7 +107,7 @@ LIMIT 1
         : [],
     };
 
-    localStorage.setItem(cacheKey, JSON.stringify(fallback));
+    fallbackCache.set(imdbId, fallback);
     return fallback;
   };
 

@@ -17,6 +17,13 @@ import {
   getConversationId,
   Rumor,
 } from "../nostr/nip17";
+import {
+  setLastSeen,
+  setMarkAllTs,
+  getLastSeen,
+  loadReadState,
+  clearReadState,
+} from "../nostr/dm-read-state";
 
 export interface DMMessage {
   id: string; // rumor id
@@ -70,114 +77,39 @@ interface DMContextInterface {
 
 export const DMContext = createContext<DMContextInterface | null>(null);
 
-// Giftwrap events (already NIP-44 encrypted) are safe to cache — no plaintext at rest.
-const GW_CACHE_PREFIX = "dm_gw_";
-// Legacy key used in earlier versions — purged on mount/logout.
+// Legacy keys from earlier versions (plaintext giftwrap cache / localStorage
+// reaction cache) — purged on logout so old installs shed the quota bloat.
 const LEGACY_CACHE_PREFIX = "dm_cache_";
-const LAST_SEEN_PREFIX = "dm_lastseen_";
-// Per-account "all read up to" watermark. markAllAsRead sets this so messages
-// that decrypt or arrive AFTER the click — or conversations not loaded yet at
-// click time — are still treated as read on the next load. A per-conversation
-// lastSeen alone missed those, so old messages reappeared as unread.
-const MARK_ALL_PREFIX = "dm_markall_";
-const REACTION_CACHE_PREFIX = "dm_reactions_";
-const GW_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const GW_LEGACY_PREFIX = "dm_gw_";
+const REACTION_LEGACY_PREFIX = "dm_reactions_";
+/**
+ * Reactions whose parent message hasn't arrived yet (e.g. a kind-7 rumor
+ * streamed before its message during a replay). Keyed by conversation id, then
+ * by target message id. In-memory only — the wraps themselves are still in the
+ * worker's IndexedDB store, so a real reload re-derives everything.
+ */
+const pendingReactions = new Map<string, Record<string, DMReaction[]>>();
 
-interface CachedGiftWrap {
-  event: Event;
-  cachedAt: number;
-}
-
-/** Persist the raw (still-encrypted) giftwrap so a reload avoids a relay re-fetch. */
-function cacheGiftWrap(wrapId: string, event: Event): void {
+/** Purge the legacy localStorage DM caches (giftwrap + reactions) and the
+ *  in-flight reaction buffer. Called on logout. */
+function clearLegacyDmCaches(): void {
   try {
-    const entry: CachedGiftWrap = { event, cachedAt: Date.now() };
-    localStorage.setItem(GW_CACHE_PREFIX + wrapId, JSON.stringify(entry));
-  } catch {
-    // localStorage full, ignore
-  }
-}
-
-/** Return the cached giftwrap Event if present and within TTL, otherwise null. */
-function getCachedGiftWrap(wrapId: string): Event | null {
-  try {
-    const raw = localStorage.getItem(GW_CACHE_PREFIX + wrapId);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as CachedGiftWrap;
-    if (!parsed.cachedAt || Date.now() - parsed.cachedAt > GW_CACHE_TTL_MS) {
-      localStorage.removeItem(GW_CACHE_PREFIX + wrapId);
-      return null;
-    }
-    return parsed.event;
-  } catch {
-    return null;
-  }
-}
-
-/** Remove giftwrap cache entries older than TTL. Called on mount. */
-function pruneExpiredGiftWraps(): void {
-  const keysToRemove: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key?.startsWith(GW_CACHE_PREFIX)) continue;
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) continue;
-      const parsed = JSON.parse(raw) as CachedGiftWrap;
-      if (!parsed.cachedAt || Date.now() - parsed.cachedAt > GW_CACHE_TTL_MS) {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (
+        key?.startsWith(LEGACY_CACHE_PREFIX) ||
+        key?.startsWith(GW_LEGACY_PREFIX) ||
+        key?.startsWith(REACTION_LEGACY_PREFIX)
+      ) {
         keysToRemove.push(key);
       }
-    } catch {
-      keysToRemove.push(key);
     }
-  }
-  keysToRemove.forEach((key) => localStorage.removeItem(key));
-}
-
-/** Clear all giftwrap cache entries and any legacy plaintext entries on logout. */
-function clearGiftWrapCache(): void {
-  const keysToRemove: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith(GW_CACHE_PREFIX) || key?.startsWith(LEGACY_CACHE_PREFIX)) {
-      keysToRemove.push(key);
-    }
-  }
-  keysToRemove.forEach((key) => localStorage.removeItem(key));
-}
-
-function getLastSeen(conversationId: string): number {
-  try {
-    const ts = localStorage.getItem(LAST_SEEN_PREFIX + conversationId);
-    return ts ? parseInt(ts, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function setLastSeen(conversationId: string, timestamp: number): void {
-  try {
-    localStorage.setItem(LAST_SEEN_PREFIX + conversationId, String(timestamp));
+    keysToRemove.forEach((key) => localStorage.removeItem(key));
   } catch {
     // ignore
   }
-}
-
-function getMarkAllTs(pubkey: string): number {
-  try {
-    const ts = localStorage.getItem(MARK_ALL_PREFIX + pubkey);
-    return ts ? parseInt(ts, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function setMarkAllTs(pubkey: string, timestamp: number): void {
-  try {
-    localStorage.setItem(MARK_ALL_PREFIX + pubkey, String(timestamp));
-  } catch {
-    // ignore
-  }
+  pendingReactions.clear();
 }
 
 export function DMProvider({ children }: { children: ReactNode }) {
@@ -186,10 +118,6 @@ export function DMProvider({ children }: { children: ReactNode }) {
     new Map()
   );
 
-  // Prune stale giftwrap cache entries on mount
-  useEffect(() => {
-    pruneExpiredGiftWraps();
-  }, []);
   const [loading, setLoading] = useState(false);
   const seenRumorIds = useRef<Set<string>>(new Set());
   // Gift-wrap event ids already processed — dedup BEFORE decrypt so a re-observe
@@ -208,6 +136,29 @@ export function DMProvider({ children }: { children: ReactNode }) {
   // If the user rejects a decrypt request, stop asking for the rest of the session
   const decryptionRejected = useRef(false);
 
+  /** Recompute `unreadCount` for each conversation against the read-state
+   *  watermark. Called once after `loadReadState` resolves so a conversation
+   *  the user has already read on another device shows as read here too. */
+  const applyReadStateToConversations = useCallback((myPubkey: string) => {
+    setConversations((prev) => {
+      const next = new Map<string, Conversation>();
+      let changed = false;
+      Array.from(prev.entries()).forEach(([id, conv]) => {
+        const lastSeen = getLastSeen(myPubkey, id);
+        const unread = conv.messages.filter(
+          (m) => m.pubkey !== myPubkey && m.created_at > lastSeen
+        ).length;
+        if (unread !== conv.unreadCount) {
+          next.set(id, { ...conv, unreadCount: unread });
+          changed = true;
+        } else {
+          next.set(id, conv);
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
   const addReactionToConversation = useCallback(
     (rumor: Rumor, myPubkey: string) => {
       const pTags = rumor.tags
@@ -223,31 +174,26 @@ export function DMProvider({ children }: { children: ReactNode }) {
         tags: rumor.tags.filter((t) => t[0] === "emoji"),
       };
 
-      // Cache reaction
-      try {
-        const cacheKey = REACTION_CACHE_PREFIX + conversationId;
-        const cached = localStorage.getItem(cacheKey);
-        const reactions: Record<string, DMReaction[]> = cached
-          ? JSON.parse(cached)
-          : {};
-        if (!reactions[targetMessageId]) reactions[targetMessageId] = [];
-        // Dedup: don't add same pubkey+emoji twice
-        if (
-          !reactions[targetMessageId].some(
-            (r) => r.pubkey === reaction.pubkey && r.emoji === reaction.emoji
-          )
-        ) {
-          reactions[targetMessageId].push(reaction);
-          localStorage.setItem(cacheKey, JSON.stringify(reactions));
-        }
-      } catch {
-        // localStorage full, ignore
-      }
-
+      // If the conversation exists, attach directly; otherwise buffer it so the
+      // conversation (created later from its parent message) picks it up.
       setConversations((prev) => {
-        const next = new Map(prev);
-        const existing = next.get(conversationId);
-        if (!existing) return prev;
+        const existing = prev.get(conversationId);
+        if (!existing) {
+          // Parent message hasn't landed yet — hold here; `addMessage`
+          // (which creates the conversation) drains the buffer.
+          const bucket = pendingReactions.get(conversationId) ?? {};
+          const list = bucket[targetMessageId] ?? [];
+          if (
+            !list.some(
+              (r) => r.pubkey === reaction.pubkey && r.emoji === reaction.emoji
+            )
+          ) {
+            list.push(reaction);
+            bucket[targetMessageId] = list;
+            pendingReactions.set(conversationId, bucket);
+          }
+          return prev;
+        }
 
         const reactionsMap = new Map(existing.reactions);
         const existing_reactions = reactionsMap.get(targetMessageId) || [];
@@ -260,6 +206,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
           return prev;
         }
         reactionsMap.set(targetMessageId, [...existing_reactions, reaction]);
+        const next = new Map(prev);
         next.set(conversationId, { ...existing, reactions: reactionsMap });
         return next;
       });
@@ -294,29 +241,22 @@ export function DMProvider({ children }: { children: ReactNode }) {
         tags: rumor.tags,
       };
 
-      // Load cached reactions for this conversation
-      let cachedReactions = new Map<string, DMReaction[]>();
-      try {
-        const cacheKey = REACTION_CACHE_PREFIX + conversationId;
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-          const parsed: Record<string, DMReaction[]> = JSON.parse(cached);
-          cachedReactions = new Map(Object.entries(parsed));
-        }
-      } catch {
-        // ignore
-      }
+      // Reactions that out-raced this conversation's creation (a kind-7 rumor
+      // replayed before its parent message) — drain them now.
+      const buffered = pendingReactions.get(conversationId) ?? null;
+      if (buffered) pendingReactions.delete(conversationId);
+      const initialReactions: Map<string, DMReaction[]> | null = buffered
+        ? new Map(Object.entries(buffered))
+        : null;
 
       setConversations((prev) => {
         const next = new Map(prev);
         const existing = next.get(conversationId);
-        // Read threshold = the later of this conversation's own lastSeen and the
-        // account-wide "mark all read" watermark, so a global mark-all covers
-        // messages/conversations that hadn't loaded when it was clicked.
-        const lastSeen = Math.max(
-          getLastSeen(conversationId),
-          getMarkAllTs(myPubkey)
-        );
+        // Read threshold = the later of this conversation's own lastSeen and
+        // the account-wide "mark all read" watermark (handled inside the
+        // module), so a global mark-all covers messages/conversations that
+        // hadn't loaded when it was clicked.
+        const lastSeen = getLastSeen(myPubkey, conversationId);
 
         if (existing) {
           if (existing.messages.some((m) => m.id === rumor.id)) return prev;
@@ -341,7 +281,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
             messages: [msg],
             lastMessageAt: rumor.created_at,
             unreadCount: isUnread ? 1 : 0,
-            reactions: cachedReactions,
+            reactions: initialReactions ?? new Map<string, DMReaction[]>(),
           });
         }
         return next;
@@ -360,13 +300,29 @@ export function DMProvider({ children }: { children: ReactNode }) {
       decryptionRejected.current = false;
       subRef.current?.unobserve();
       subRef.current = null;
-      // Clear giftwrap cache (and any legacy plaintext entries) on logout
-      clearGiftWrapCache();
+      // Shed legacy localStorage DM caches + the in-memory reaction buffer
+      clearLegacyDmCaches();
+      // Drop this tab's in-memory read-state + any pending 30078 publish.
+      if (lastUserKey.current) clearReadState(lastUserKey.current);
       return;
     }
 
     const myPubkey = user.pubkey;
     const privateKey = user.privateKey;
+
+    // Hydrate read-state (lastSeen watermarks) from the signed kind-30078
+    // event + one-time migration off legacy localStorage keys. Non-blocking:
+    // the first few messages may flash unread until this settles — harmless,
+    // and markAsRead from that instant still works (memory is authoritative).
+    loadReadState(myPubkey)
+      .then(() => {
+        // Re-derive unread counts against the freshly-loaded watermark so a
+        // conversation that was read on another device reads as read now.
+        applyReadStateToConversations(myPubkey);
+      })
+      .catch(() => {
+        // Worker still hydrating — next markAsRead republishes and wins.
+      });
 
     // Reset accumulated state only on a genuine account switch — NOT on a
     // refresh-driven re-observe for the same user (that would drop conversations
@@ -392,23 +348,17 @@ export function DMProvider({ children }: { children: ReactNode }) {
             if (seenWrapIds.current.has(event.id)) return;
             seenWrapIds.current.add(event.id);
 
-            // Persist the encrypted giftwrap so a reload can re-decrypt
-            // without waiting for the relay to re-deliver it.
-            // Only the encrypted blob is stored — no plaintext at rest.
-            const eventToDecrypt = getCachedGiftWrap(event.id) ?? event;
-            cacheGiftWrap(event.id, event);
-
             if (privateKey) {
               // Local key: decrypt instantly, no signer prompts
-              const rumor = await unwrapGiftWrap(eventToDecrypt, privateKey);
+              const rumor = await unwrapGiftWrap(event, privateKey);
               if (rumor) addMessage(rumor, event.id, myPubkey);
             } else {
               // External signer (Amber / NIP-07 / NIP-46): queue so only one
               // decrypt request is in-flight at a time — avoids bombarding the
               // user with simultaneous approval prompts on startup.
               decryptQueue.current = decryptQueue.current.then(async () => {
-                if (decryptionRejected.current) return;
-                const rumor = await unwrapGiftWrap(eventToDecrypt, undefined);
+               if (decryptionRejected.current) return;
+                 const rumor = await unwrapGiftWrap(event, undefined);
                 if (rumor) {
                   addMessage(rumor, event.id, myPubkey);
                 } else {
@@ -436,7 +386,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
       subRef.current?.unobserve();
       subRef.current = null;
     };
-  }, [user, addMessage, refresh]);
+  }, [user, addMessage, refresh, applyReadStateToConversations]);
 
   const sendMessage = useCallback(
     async (
@@ -480,8 +430,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
 
   const markAsRead = useCallback(
     (conversationId: string) => {
-      const now = Math.floor(Date.now() / 1000);
-      setLastSeen(conversationId, now);
+      if (!user) return;
+      setLastSeen(user.pubkey, conversationId, Math.floor(Date.now() / 1000));
 
       setConversations((prev) => {
         const next = new Map(prev);
@@ -492,7 +442,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
         return next;
       });
     },
-    []
+    [user]
   );
 
   const markAllAsRead = useCallback(() => {

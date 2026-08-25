@@ -14,7 +14,6 @@ import { useAppContext } from './useAppContext';
 import { useRelays } from './useRelays';
 import { initLocalNotifications, fireNotification, NotifExtra } from '../services/localNotificationService';
 import { dataLayer } from '@formstr/local-relay';
-import { getCachedProfiles } from '../utils/localStorage';
 
 const NOTIF_ID_DMS = 1002;
 // Cap how many relays the background worker polls — it opens one socket per relay.
@@ -332,25 +331,51 @@ export function useAndroidNotifications() {
     if (user?.pubkey) Preferences.set({ key: 'worker_pubkey', value: user.pubkey });
   }, [accounts, user?.pubkey]);
 
-  // Bridge: save a pubkey -> display-name map from the cached kind:0 profiles so
-  // the background worker can show "Alice zapped you" instead of a raw pubkey.
-  // Re-runs whenever the notification set changes, which is when the cache is most
-  // likely to have been freshly warmed with the relevant authors' profiles.
+  // Bridge: save a pubkey -> display-name map so the background worker can show
+  // "Alice zapped you" instead of a raw pubkey. Names come from the live profile
+  // map (in-memory), falling back to the local relay worker store for any author
+  // not yet on screen. Re-runs whenever the notification set changes — that's
+  // exactly when a new author's name needs to be bridged.
+  const getProfileRef = useRef(getProfile);
+  getProfileRef.current = getProfile;
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    const cached = getCachedProfiles();
-    if (cached.length === 0) return;
 
-    // Newest profiles first, then cap, so we keep the freshest names within budget.
-    const sorted = [...cached].sort((a, b) => b.created_at - a.created_at);
-    const nameMap: Record<string, string> = {};
-    for (const ev of sorted) {
-      if (Object.keys(nameMap).length >= MAX_WORKER_PROFILES) break;
-      const name = profileName(ev.content);
-      if (name) nameMap[ev.pubkey] = name;
-    }
-    Preferences.set({ key: 'worker_profiles', value: JSON.stringify(nameMap) });
-  }, [notifications]);
+    const targetPubkeys: string[] = [];
+    const pushTarget = (pk?: string) => {
+      if (!pk) return;
+      if (!targetPubkeys.includes(pk)) targetPubkeys.push(pk);
+    };
+    Array.from(notifications.values()).forEach((ev) => pushTarget(ev.pubkey));
+    Array.from(pollMap.values()).forEach((ev) => pushTarget(ev.pubkey));
+    Array.from(conversations.values()).forEach((conv) =>
+      conv.participants.forEach((p) => pushTarget(p))
+    );
+    if (targetPubkeys.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const nameMap: Record<string, string> = {};
+      for (let i = 0; i < targetPubkeys.length; i++) {
+        if (Object.keys(nameMap).length >= MAX_WORKER_PROFILES) break;
+        const pubkey = targetPubkeys[i];
+        const p = getProfileRef.current(pubkey);
+        let name = ((p?.display_name as string) || (p?.name as string) || '').trim() || undefined;
+        if (!name) {
+          try {
+            const ev = await dataLayer.fetchReplaceable(0, pubkey);
+            if (ev) name = profileName(ev.content);
+          } catch { /* skip — pubkey stays raw in the worker */ }
+        }
+        if (name) nameMap[pubkey] = name;
+      }
+      if (!cancelled && Object.keys(nameMap).length > 0) {
+        Preferences.set({ key: 'worker_profiles', value: JSON.stringify(nameMap) });
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [notifications]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bridge: save the relays the WorkManager Worker should poll. We use the
   // union of every logged-in account's NIP-65 read (inbox) relays — that's where
