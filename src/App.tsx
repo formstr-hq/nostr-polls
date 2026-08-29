@@ -58,6 +58,7 @@ import ProfilesFeed from "./components/Feed/ProfileFeed";
 import { PollFeed } from "./components/Feed/PollFeed";
 import MoviesFeed from "./components/Feed/MoviesFeed";
 import FollowPacksFeed from "./components/Feed/FollowPacksFeed";
+import BookmarksFeed from "./components/Feed/BookmarksFeed";
 import FollowPackDetail from "./components/FollowPacks/FollowPackDetail";
 import ArticlesFeed from "./components/Feed/ArticlesFeed";
 import MusicFeed from "./components/Feed/MusicFeed";
@@ -247,6 +248,7 @@ function AppContent() {
             <Route path="polls" element={<PollFeed />} />
             <Route path="follow-packs" element={<FollowPacksFeed />} />
             <Route path="follow-packs/:naddr" element={<FollowPackDetail />} />
+            <Route path="bookmarks" element={<BookmarksFeed />} />
             <Route path="articles" element={<ArticlesFeed />} />
             <Route path="articles/:naddr" element={<ArticleDetail />} />
             <Route path="music" element={<MusicFeed />} />

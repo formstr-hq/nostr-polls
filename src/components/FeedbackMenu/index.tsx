@@ -19,6 +19,7 @@ import { Event, nip19 } from "nostr-tools";
 import { useNavigate } from "react-router-dom";
 import RepostButton from "../Common/Repost/reposts";
 import ShareButton from "../Common/Share/ShareButton";
+import { BookmarkButton } from "../Common/Bookmark/BookmarkButton";
 
 interface FeedbackMenuProps {
   event: Event;
@@ -141,6 +142,8 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
             <RepostButton event={event} />
 
             <ShareButton event={event} />
+
+            <BookmarkButton event={event} />
 
             <Zap pollEvent={event} />
 

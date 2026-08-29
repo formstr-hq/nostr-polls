@@ -104,6 +104,27 @@ function migrateLegacyWotCache(pubkey: string): WotCacheRecord | null {
   return record;
 }
 
+// NIP-22 ref for a bookmarkable event: addressable kinds (d-tagged long-form)
+// use their canonical "kind:pubkey:identifier", everything else falls back to
+// the event id so the bookmark stays resolvable.
+export function eventRefOf(event: Event) {
+  if (event.kind >= 30000 && event.tags.some((t) => t[0] === "d")) {
+    return `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")![1]}`;
+  }
+  return `${event.kind}:${event.pubkey}:${event.id}`;
+}
+
+// Heuristic for a public `a` tag that is one of OUR event bookmarks (as opposed
+// to foreign NIP-53 a-tags we must preserve). Our refs carry a third segment:
+// either a d-identifier (addressable kinds) or a full 64-hex event id
+// (non-addressable kinds). Short 2-segment a-tags are ambiguous with other kinds
+// of a-style references and stay untouched either way.
+function isEventRef(ref: string) {
+  const parts = ref.split(":");
+  if (parts.length < 3) return false;
+  return /^39089$/.test(parts[0]) ? parts.length > 3 : !!parts[2];
+}
+
 interface ListContextInterface {
   lists: Map<string, Event> | undefined;
   selectedList: string | undefined;
@@ -127,6 +148,11 @@ interface ListContextInterface {
   bookmarkedPackKeys: Set<string>;
   bookmarkFollowPack: (packEvent: Event) => Promise<void>;
   unbookmarkFollowPack: (packEvent: Event) => Promise<void>;
+  // NIP-53 bookmarks of arbitrary events (notes, polls, articles, …), stored as
+  // public `a` tags on the kind-10003 event.
+  bookmarkedEventRefs: Set<string>;
+  bookmarkEvent: (event: Event) => Promise<void>;
+  unbookmarkEvent: (event: Event) => Promise<void>;
   fetchAndHydratePacks: (adrefs: string[]) => void;
   // Which of the user's own follows follow `pubkey` (the "followed by" set).
   getNetworkFollowers: (pubkey: string) => string[];
@@ -152,6 +178,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
   const [lists, setLists] = useState<Map<string, Event> | undefined>();
   const [selectedList, setSelectedList] = useState<string | undefined>();
   const [bookmarkedPackKeys, setBookmarkedPackKeys] = useState<Set<string>>(new Set());
+  const [bookmarkedEventRefs, setBookmarkedEventRefs] = useState<Set<string>>(new Set());
   const [pendingFollows, setPendingFollows] = useState<Set<string>>(new Set());
   const [bookmarks10003, setBookmarks10003] = useState<Event | null>(null);
   const [myTopics, setMyTopics] = useState<Set<string> | undefined>();
@@ -197,6 +224,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setMyTopics(undefined);
       setMyTopicsEvent(undefined);
       setBookmarkedPackKeys(new Set());
+      setBookmarkedEventRefs(new Set());
       setBookmarks10003(null);
       contactHandleRef.current?.unobserve();
       contactHandleRef.current = null;
@@ -367,6 +395,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   const processBookmarksEvent = async (event: Event) => {
     let adrefs: string[] = [];
+    const eventRefs: string[] = [];
 
     // Decrypt private tags from content (NIP-44 encrypted to self)
     if (event.content) {
@@ -388,12 +417,14 @@ export function ListProvider({ children }: { children: ReactNode }) {
     }
 
     // Also read any unencrypted public tags (backwards compat)
-    const publicAdrefs = event.tags
-      .filter((t) => t[0] === "a" && t[1]?.startsWith("39089:"))
-      .map((t) => t[1]);
+    const aTags = event.tags.filter((t) => t[0] === "a" && t[1]);
+    const publicAdrefs = aTags.filter((t) => t[1].startsWith("39089:")).map((t) => t[1]);
+    eventRefs.push(...aTags.filter((t) => !t[1].startsWith("39089:")).map((t) => t[1]));
     const allAdrefs = Array.from(new Set([...adrefs, ...publicAdrefs]));
+    const allEventRefs = Array.from(new Set(eventRefs));
 
     setBookmarkedPackKeys(new Set(allAdrefs));
+    setBookmarkedEventRefs(new Set(allEventRefs));
     fetchAndHydratePacks(allAdrefs);
   };
 
@@ -412,26 +443,114 @@ export function ListProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const buildAndPublishBookmarks = async (adrefs: string[]): Promise<Event> => {
+  // The latest kind-10003, with a durable fallback — mirroring followPubkey's
+  // contact-list handling. If the in-memory copy is missing/stale (a fetch that
+  // raced a network error resolves empty, and the account-reset effect also
+  // clears it) we must still build on top of the real list, never on top of
+  // nothing.
+  const fetchLatestBookmarks = async (): Promise<Event | null> => {
+    if (!user) return null;
+    const evts = await collectOnce([
+      { kinds: [10003], authors: [user.pubkey], limit: 1 },
+    ]);
+    if (evts.length > 0) {
+      return evts.sort((a, b) => b.created_at - a.created_at)[0];
+    }
+    try {
+      const raw = localStorage.getItem(`pollerama:bookmarks:${user.pubkey}`);
+      if (!raw) return null;
+      return JSON.parse(raw) as Event;
+    } catch {
+      return null;
+    }
+  };
+
+  // Re-merge a fresher list with whatever the UI already holds. Covers a
+  // bookmark added from another client (its ref would otherwise be dropped),
+  // while leaving a genuinely empty existing list empty.
+  const mergeBookmarks = async (
+    existing: Event | null,
+    packs: string[],
+    refs: string[],
+  ): Promise<{ packAdrefs: string[]; eventRefs: string[] }> => {
+    let existingPacks: string[] = [];
+    if (existing?.content) {
+      try {
+        const signer = await signerManager.getSigner();
+        const decrypted = await signer.nip44Decrypt!(user!.pubkey, existing.content);
+        const privateTags: string[][] = JSON.parse(decrypted);
+        if (Array.isArray(privateTags)) {
+          existingPacks = privateTags
+            .filter((t) => Array.isArray(t) && t[0] === "a" && t[1]?.startsWith("39089:"))
+            .map((t) => t[1]);
+        }
+      } catch {
+        // Fall back to public tags below
+      }
+    }
+    const aTags = (existing?.tags ?? []).filter((t) => t[0] === "a" && t[1]);
+    existingPacks = Array.from(
+      new Set([
+        ...existingPacks,
+        ...aTags.filter((t) => t[1].startsWith("39089:")).map((t) => t[1]),
+      ]),
+    );
+    const existingRefs = Array.from(
+      new Set(aTags.filter((t) => !t[1].startsWith("39089:")).map((t) => t[1])),
+    );
+    return {
+      packAdrefs: Array.from(new Set([...existingPacks, ...packs])),
+      eventRefs: Array.from(new Set([...existingRefs, ...refs])),
+    };
+  };
+
+  const buildAndPublishBookmarks = async (
+    packAdrefs: string[],
+    eventRefs: string[] = [],
+  ): Promise<Event> => {
+    // Never build on top of nothing when we know a real list exists: the
+    // initial fetch can resolve empty after a network error (or the account-
+    // reset effect clears the state), and a lone bookmark would then clobber
+    // it. Re-fetch the latest first and merge — the codebase's existing
+    // followPubkey contacts-list pattern.
+    const latest = await fetchLatestBookmarks();
+    const fresh = latest ?? bookmarks10003;
+    const merged = await mergeBookmarks(fresh, packAdrefs, eventRefs);
+
     const signer = await signerManager.getSigner();
     const pubkey = await signer.getPublicKey();
-    const privateTags = adrefs.map((a) => ["a", a]);
+    const privateTags = merged.packAdrefs.map((a) => ["a", a]);
     const encrypted = await signer.nip44Encrypt!(pubkey, JSON.stringify(privateTags));
 
-    // Preserve all existing public tags except our own 39089 a-tags (which are now private).
-    // This ensures we don't wipe pre-existing bookmarks (notes, URLs, hashtags, etc.)
-    // added by other clients.
-    const existingPublicTags = (bookmarks10003?.tags ?? []).filter(
-      (t) => !(t[0] === "a" && t[1]?.startsWith("39089:"))
+    // Preserve all existing public tags except our own 39089 a-tags (which are
+    // now private) and our own event refs (rebuilt from `eventRefs`). Other
+    // clients' a-tags (foreign NIP-53 bookmarks) are kept untouched.
+    const foreignTags = (fresh?.tags ?? []).filter(
+      (t) => !(t[0] === "a" && (t[1]?.startsWith("39089:") || isEventRef(t[1] ?? ""))),
     );
 
+    // Strictly newer than both wall-clock and any known existing list, so the
+    // published event wins over the older one on relay ordering.
+    const baseTs = Math.max(latest?.created_at ?? 0, bookmarks10003?.created_at ?? 0);
     const template: EventTemplate = {
       kind: 10003,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: existingPublicTags,
+      created_at: Math.max(Math.floor(Date.now() / 1000), baseTs + 1),
+      tags: [...foreignTags, ...merged.eventRefs.map((r) => ["a", r])],
       content: encrypted,
     };
     const signed = await signer.signEvent(template);
+    // Durable copy so a write made while the store is empty has something to
+    // fall back on.
+    try {
+      if (user) {
+        localStorage.setItem(
+          `pollerama:bookmarks:${user.pubkey}`,
+          JSON.stringify(signed),
+        );
+      }
+    } catch {
+      // best-effort persistence
+    }
     await dataLayer.publishEvent(signed);
     return signed;
   };
@@ -439,12 +558,14 @@ export function ListProvider({ children }: { children: ReactNode }) {
   const bookmarkFollowPack = async (packEvent: Event): Promise<void> => {
     const identifier = packEvent.tags.find((t) => t[0] === "d")?.[1] || "";
     const adref = `39089:${packEvent.pubkey}:${identifier}`;
-    const current = Array.from(bookmarkedPackKeys);
-    if (current.includes(adref)) return;
-    const newAdrefs = [...current, adref];
-    const signed = await buildAndPublishBookmarks(newAdrefs);
+    if (bookmarkedPackKeys.has(adref)) return;
+    const newAdrefs = [...Array.from(bookmarkedPackKeys), adref];
+    const signed = await buildAndPublishBookmarks(
+      newAdrefs,
+      Array.from(bookmarkedEventRefs),
+    );
     setBookmarks10003(signed);
-    setBookmarkedPackKeys(new Set(newAdrefs));
+    setBookmarkedPackKeys(new Set(bookmarkedPackKeys).add(adref));
     handleListEvent(packEvent);
   };
 
@@ -452,9 +573,27 @@ export function ListProvider({ children }: { children: ReactNode }) {
     const identifier = packEvent.tags.find((t) => t[0] === "d")?.[1] || "";
     const adref = `39089:${packEvent.pubkey}:${identifier}`;
     const newAdrefs = Array.from(bookmarkedPackKeys).filter((k) => k !== adref);
-    const signed = await buildAndPublishBookmarks(newAdrefs);
+    const signed = await buildAndPublishBookmarks(newAdrefs, Array.from(bookmarkedEventRefs));
     setBookmarks10003(signed);
     setBookmarkedPackKeys(new Set(newAdrefs));
+  };
+
+  const bookmarkEvent = async (event: Event): Promise<void> => {
+    const ref = eventRefOf(event);
+    if (bookmarkedEventRefs.has(ref)) return;
+    const newRefs = [...Array.from(bookmarkedEventRefs), ref];
+    const signed = await buildAndPublishBookmarks(Array.from(bookmarkedPackKeys), newRefs);
+    setBookmarks10003(signed);
+    setBookmarkedEventRefs(new Set(bookmarkedEventRefs).add(ref));
+    if (event.kind === 39089) handleListEvent(event);
+  };
+
+  const unbookmarkEvent = async (event: Event): Promise<void> => {
+    const ref = eventRefOf(event);
+    const newRefs = Array.from(bookmarkedEventRefs).filter((r) => r !== ref);
+    const signed = await buildAndPublishBookmarks(Array.from(bookmarkedPackKeys), newRefs);
+    setBookmarks10003(signed);
+    setBookmarkedEventRefs(new Set(newRefs));
   };
 
   const subscribeToContacts = () => {
@@ -936,6 +1075,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
         bookmarkedPackKeys,
         bookmarkFollowPack,
         unbookmarkFollowPack,
+        bookmarkedEventRefs,
+        bookmarkEvent,
+        unbookmarkEvent,
         fetchAndHydratePacks,
         getNetworkFollowers,
         getTrustScore,
