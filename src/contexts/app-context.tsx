@@ -11,6 +11,10 @@ type AppContextInterface = {
   likesMap: Map<string, Event[]>;
   zapsMap: Map<string, Event[]>;
   repostsMap: Map<string, Event[]>;
+  // NIP-53 bookmark lists (kind 10003), indexed by the `a`-tag event ref they
+  // reference. A count of distinct authors bookmarking one event comes from here.
+  bookmarksMap: Map<string, Event[]>;
+  getBookmarkCount: (eventRef: string) => number;
   getProfile: (pubkey: string) => Profile | undefined;
   getComments: (eventId: string) => Event[];
   getLikes: (eventId: string) => Event[];
@@ -25,6 +29,7 @@ type AppContextInterface = {
   fetchLikesThrottled: (pollEventId: string) => void;
   fetchZapsThrottled: (pollEventId: string) => void;
   fetchRepostsThrottled: (pollEventId: string) => void;
+  fetchBookmarkCountThrottled: (eventRef: string) => void;
   aiSettings: {
     model: string;
   };
@@ -112,6 +117,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     likes: newInterest(),
     zaps: newInterest(),
     reposts: newInterest(),
+    bookmarks: newInterest(),
   });
 
   const addToInterest = useCallback(
@@ -177,6 +183,14 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   const fetchRepostsThrottled = useCallback(
     (eventId: string) =>
       addToInterest(interests.current.reposts, eventId, (ids) => [{ kinds: [6, 16], "#e": ids }], onDataEvent),
+    [addToInterest, onDataEvent],
+  );
+  // NIP-53: every user's bookmark list (kind 10003) carries the bookmarked
+  // event as a public `a`-tag. Querying those tags author-less finds every
+  // list that references a given event — the set of bookmarkers.
+  const fetchBookmarkCountThrottled = useCallback(
+    (eventRef: string) =>
+      addToInterest(interests.current.bookmarks, eventRef, (ids) => [{ kinds: [10003], "#a": ids }], onDataEvent),
     [addToInterest, onDataEvent],
   );
 
@@ -287,11 +301,29 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const repostsMap = useMemo(() => byETag([6, 16]), [dataVersion]);
 
+  // NIP-53 bookmark lists, indexed by the `a`-tag event ref each one carries.
+  // A single event can appear in many users' lists → array of 10003 events.
+  const bookmarksMap = useMemo(() => {
+    const map = new Map<string, Event[]>();
+    for (const event of queryStore([10003])) {
+      for (const tag of event.tags) {
+        if (tag[0] === "a" && tag[1]) {
+          map.set(tag[1], [...(map.get(tag[1]) || []), event]);
+        }
+      }
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataVersion]);
+
   const getProfile = (pubkey: string): Profile | undefined => profiles.get(pubkey);
   const getComments = (eventId: string): Event[] => commentsMap.get(eventId) || [];
   const getLikes = (eventId: string): Event[] => likesMap.get(eventId) || [];
   const getZaps = (eventId: string): Event[] => zapsMap.get(eventId) || [];
   const getReposts = (eventId: string): Event[] => repostsMap.get(eventId) || [];
+  // Distinct users who bookmarked the event ref.
+  const getBookmarkCount = (eventRef: string): number =>
+    new Set((bookmarksMap.get(eventRef) || []).map((e) => e.pubkey)).size;
 
   return (
     <AppContext.Provider
@@ -303,6 +335,8 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
         likesMap,
         zapsMap,
         repostsMap,
+        bookmarksMap,
+        getBookmarkCount,
         getProfile,
         getComments,
         getLikes,
@@ -317,6 +351,7 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
         fetchLikesThrottled,
         fetchZapsThrottled,
         fetchRepostsThrottled,
+        fetchBookmarkCountThrottled,
         aiSettings,
         setAISettings,
         resetStore,

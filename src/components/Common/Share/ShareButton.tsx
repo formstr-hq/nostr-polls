@@ -58,7 +58,7 @@ const ShareButton: React.FC<ShareButtonProps> = ({ event }) => {
 
   return (
     <>
-      <div style={{ marginLeft: 20, marginTop: -5 }}>
+      <div style={{ display: "flex", alignItems: "center" }}>
         <Tooltip title="Share via DM" onClick={handleClick}>
           <span
             style={{

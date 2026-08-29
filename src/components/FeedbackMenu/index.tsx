@@ -107,7 +107,7 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
             onScroll={handleScroll}
             display="flex"
             alignItems="center"
-            gap={1}
+            gap={1.25}
             sx={{
               overflowX: "auto",
               WebkitOverflowScrolling: "touch",
@@ -135,9 +135,7 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
               />
             )}
 
-            <Box display="flex" alignItems="center">
-              <Likes pollEvent={event} />
-            </Box>
+            <Likes pollEvent={event} />
 
             <RepostButton event={event} />
 
@@ -147,9 +145,7 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
 
             <Zap pollEvent={event} />
 
-            <Box sx={{ ml: 1.5, mt: 0.3 }}>
-              <RatingPopover entityId={event.id} entityType="event" iconSize={26} />
-            </Box>
+            <RatingPopover entityId={event.id} entityType="event" iconSize={26} />
           </Box>
 
           {/* Scroll-left indicator */}

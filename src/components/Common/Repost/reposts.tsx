@@ -130,7 +130,6 @@ const RepostButton: React.FC<RepostButtonProps> = ({ event }) => {
   return (
     <div
       style={{
-        marginLeft: 20,
         display: "flex",
         flexDirection: "row",
         alignItems: "center",

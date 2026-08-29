@@ -164,9 +164,8 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     <Box
       display="flex"
       alignItems="center"
-      ml={2}
       position="relative"
-      sx={{ p: 0, my: -5 }}
+      sx={{ p: 0 }}
     >
       <Tooltip title={tooltipTitle}>
         <Box
