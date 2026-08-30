@@ -194,18 +194,20 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           {/* Top 2 emojis next to button — clicking the cluster (incl. the
               "+x" badge) opens the reactions details modal instead of the
               emoji picker. stopPropagation keeps the parent's click (which
-              opens the picker) from also firing. */}
+              opens the picker) from also firing. Only rendered when there are
+              reactions; an empty cluster would still carry its ml margin and
+              widen the row gap. */}
+          {hasReactions && (
           <Box
             display="flex"
             alignItems="center"
             ml={1}
             gap={0.5}
             onClick={(e) => {
-              if (!hasReactions) return;
               e.stopPropagation();
               setShowDetails(true);
             }}
-            sx={hasReactions ? { cursor: "pointer" } : undefined}
+            sx={{ cursor: "pointer" }}
           >
             {topEmojis.slice(0, 2).map((r) => (
               <span key={r.emoji} style={{ fontSize: 18 }}>
@@ -230,6 +232,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
               </span>
             )}
           </Box>
+          )}
         </Box>
       </Tooltip>
 
