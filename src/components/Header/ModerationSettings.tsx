@@ -28,10 +28,16 @@ export function ModerationSettings() {
 
   const toggles: { scope: WotScope; label: string; description: string }[] = [
     {
-      scope: "notifs",
-      label: "Notifications",
+      scope: "notifsForeground",
+      label: "Notifications — in-app",
       description:
-        "Only receive notifications (in-app and background push) from people in your Web of Trust. Muted users are always filtered.",
+        "Only show notifications in the in-app list from people in your Web of Trust.",
+    },
+    {
+      scope: "notifsBackground",
+      label: "Notifications — background push",
+      description:
+        "Only push OS notifications (while the app is closed or backgrounded) from people in your Web of Trust.",
     },
     {
       scope: "comments",

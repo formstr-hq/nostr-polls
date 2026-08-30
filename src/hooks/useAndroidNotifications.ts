@@ -344,7 +344,9 @@ export function useAndroidNotifications() {
   const mutedVersion = useModerationVersion();
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    const notifsOnly = contentPolicy.isWotOnly("notifs");
+    // The background/OS-push toggle owns this gate; the in-app toggle is
+    // enforced JS-side on drain (seedFromCache), not here.
+    const notifsOnly = contentPolicy.isWotOnly("notifsBackground");
     const bloom = notifsOnly ? buildWotBloom(contentPolicy.getWoT()) : null;
     Preferences.set({ key: 'worker_muted', value: JSON.stringify(contentPolicy.getMuted()) });
     Preferences.set({

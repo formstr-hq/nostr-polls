@@ -6,7 +6,10 @@
 // re-rendering. React layers subscribe via `version` (useSyncExternalStore)
 // and re-read whatever they need.
 
-export type WotScope = "notifs" | "comments" | "likes";
+export type WotScope = "notifsForeground" | "notifsBackground" | "comments" | "likes";
+
+export type NotifsScope = Extract<WotScope, "notifsForeground" | "notifsBackground">;
+export const NOTIFS_SCOPES: NotifsScope[] = ["notifsForeground", "notifsBackground"];
 
 // Durable caches: the device-local copy of our own (private) mute list gives
 // active filtering on launch before relays answer; the toggles are
@@ -25,7 +28,7 @@ type WotOnlyToggles = Record<WotScope, boolean>;
 class ContentPolicy {
   private muted = new Set<string>();
   private wot = new Set<string>();
-  private wotOnly: WotOnlyToggles = { notifs: false, comments: false, likes: false };
+  private wotOnly: WotOnlyToggles = { notifsForeground: false, notifsBackground: false, comments: false, likes: false };
   private listeners = new Set<() => void>();
   // Account the current muted set belongs to (guards cross-account writes).
   private account: string | null = null;
@@ -53,7 +56,8 @@ class ContentPolicy {
     this.account = pubkey;
     this.muted = new Set(readLocalMutes(pubkey));
     this.wotOnly = {
-      notifs: readToggle("notifs"),
+      notifsForeground: readToggle("notifsForeground"),
+      notifsBackground: readToggle("notifsBackground"),
       comments: readToggle("comments"),
       likes: readToggle("likes"),
     };
@@ -66,7 +70,7 @@ class ContentPolicy {
     this.account = null;
     this.muted = new Set();
     this.wot = new Set();
-    this.wotOnly = { notifs: false, comments: false, likes: false };
+    this.wotOnly = { notifsForeground: false, notifsBackground: false, comments: false, likes: false };
     this.emit();
   }
 
@@ -140,6 +144,23 @@ class ContentPolicy {
     if (this.wotOnly[scope] && this.wot.size > 0 && !this.wot.has(pubkey)) return false;
     return true;
   };
+
+  // ── notifications split-surface helpers ──────────────────────────────────
+  // The notifications surface is split into foreground (in-app list) and
+  // background (Android OS push). Gates just use the per-scope toggle; these
+  // helpers exist for call sites that talk about "notifications" generally.
+
+  /** True when either notifications toggle is on (for aggregate UI hints). */
+  anyNotifsWotOnly = (): boolean =>
+    this.wotOnly.notifsForeground || this.wotOnly.notifsBackground;
+
+  /** Ingestion gate for an in-app notification (foreground scope). */
+  passesForegroundNotif = (pubkey: string | undefined, ownPubkey?: string): boolean =>
+    this.passes(pubkey, "notifsForeground", ownPubkey);
+
+  /** Ingestion gate for an Android push notification (background scope). */
+  passesBackgroundNotif = (pubkey: string | undefined, ownPubkey?: string): boolean =>
+    this.passes(pubkey, "notifsBackground", ownPubkey);
 }
 
 function readLocalMutes(pubkey: string): string[] {

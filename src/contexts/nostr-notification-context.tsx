@@ -115,7 +115,7 @@ export function NostrNotificationsProvider({
         // Moderation gate: muted authors and (when the notifications toggle is
         // on) non-WoT authors never enter the in-app list — including events
         // already pushed by the background worker while the app was closed.
-        if (!contentPolicy.passes(ev.pubkey, "notifs", user?.pubkey)) continue;
+        if (!contentPolicy.passesForegroundNotif(ev.pubkey, user?.pubkey)) continue;
         if (next.has(ev.id)) continue;
         next.set(ev.id, ev);
         if (ev.created_at > latestNotifTsRef.current) {
@@ -137,7 +137,7 @@ export function NostrNotificationsProvider({
     if (event.pubkey === user?.pubkey) return;
     // Moderation gate: muted authors and (when the notifications WoT-only
     // toggle is on) non-WoT authors are dropped before any state updates.
-    if (!contentPolicy.passes(event.pubkey, "notifs", user?.pubkey)) return;
+    if (!contentPolicy.passesForegroundNotif(event.pubkey, user?.pubkey)) return;
 
     if (event.created_at > latestNotifTsRef.current) {
       latestNotifTsRef.current = event.created_at;
@@ -177,11 +177,11 @@ export function NostrNotificationsProvider({
   //
   const buildFilters = (pubkey: string, since: number): Filter[] => {
     const pollIdArray = Array.from(pollMap.current.keys());
-    // Fetch-level WoT gate: when the notifications toggle is on and the WoT
-    // set is small enough to filter on the wire, restrict `authors` so
-    // non-WoT events are never fetched at all (ingestion in pushNotification
-    // still gates whenever this can't apply).
-    const wotAuthors = contentPolicy.fetchAuthorsFor("notifs");
+    // Fetch-level WoT gate: when the in-app notifications toggle is on and
+    // the WoT set is small enough to filter on the wire, restrict `authors`
+    // so non-WoT events are never fetched at all (ingestion in
+    // pushNotification still gates whenever this can't apply).
+    const wotAuthors = contentPolicy.fetchAuthorsFor("notifsForeground");
     const filters: Filter[] = [
       // known notification kinds that tag the user:
       // 1=note/reply, 6=repost, 7=reaction, 16=generic-repost,
