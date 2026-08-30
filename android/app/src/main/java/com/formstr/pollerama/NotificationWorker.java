@@ -569,8 +569,10 @@ public class NotificationWorker extends Worker {
     /**
      * Bloom filter over the bridged web-of-trust set. The bit layout MUST match
      * src/utils/wotBloom.ts exactly (frozen wire format v1):
-     *   m = bits (power of two), k = 11 probes, big-endian u32 slices of the raw
-     *   hex pubkey bytes: h1 = bytes[0..4], h2 = bytes[4..8], idx_i = (h1 + i*h2) mod m,
+     *   m = bits (byte-aligned; NOT required to be a power of two — both sides
+     *   use true modulo), k = 11 probes, big-endian u32 slices of the raw
+     *   hex pubkey bytes: h1 = bytes[0..4], h2 = bytes[4..8], each passed
+     *   through MurmurHash3's fmix32, h2 forced odd, idx_i = (h1 + i*h2) mod m,
      *   bit set at (idx >>> 3) high-to-low: 1 << (idx & 7).
      * No cryptographic hash — both sides read the same 64 bits off the raw key,
      * so there is no library-parity risk.
