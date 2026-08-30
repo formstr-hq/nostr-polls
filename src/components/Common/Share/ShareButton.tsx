@@ -68,7 +68,11 @@ const ShareButton: React.FC<ShareButtonProps> = ({ event }) => {
               padding: 2,
             }}
           >
-            <SendIcon sx={{ fontSize: 20, transform: "rotate(-45deg)" }} />
+            {/* translateY lifts the optical center: the paper-plane glyph is
+                bottom-heavy, and the -45° rotation leaves its mass below the
+                box center, so it reads as sitting lower than the siblings.
+                translate applies in screen space (after the rotate). */}
+            <SendIcon sx={{ fontSize: 20, transform: "translateY(-2px) rotate(-45deg)" }} />
           </span>
         </Tooltip>
       </div>
