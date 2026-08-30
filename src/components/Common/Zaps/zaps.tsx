@@ -236,7 +236,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   };
 
   return (
-    <Wrapper style={{ marginLeft: 20 }}>
+    <Wrapper>
       <span style={{ display: "flex", flexDirection: "row", alignItems: "center" }}>
         <Tooltip title="Tap to zap · Hold to charge up the amount">
           <span

@@ -1,5 +1,7 @@
 import { useContext } from "react";
-import { ListContext } from "../contexts/lists-context";
+import { ListContext, eventRefOf } from "../contexts/lists-context";
+
+export { eventRefOf };
 
 export function useListContext() {
   const context = useContext(ListContext);

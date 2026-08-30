@@ -69,6 +69,7 @@ const NOSTRCONNECT_PERMS = [
   "sign_event:1059",
   "sign_event:9735",
   "sign_event:10050",
+  "sign_event:10003",
   "nip04_encrypt",
   "nip04_decrypt",
   "nip44_encrypt",

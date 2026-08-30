@@ -18,6 +18,7 @@ import BookIcon from "@mui/icons-material/MenuBook";
 import MovieIcon from "@mui/icons-material/Movie";
 import MusicNoteIcon from "@mui/icons-material/MusicNote";
 import PeopleIcon from "@mui/icons-material/People";
+import BookmarkIcon from "@mui/icons-material/Bookmark";
 import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import { SvgIconComponent } from "@mui/icons-material";
@@ -94,6 +95,7 @@ const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = 
   { value: "music",        label: "Music",        Icon: MusicNoteIcon },
   { value: "movies",       label: "Movies",       Icon: MovieIcon },
   { value: "follow-packs", label: "Packs",        Icon: PeopleIcon },
+  { value: "bookmarks",    label: "Bookmarks",    Icon: BookmarkIcon },
   { value: "games",        label: "Games",        Icon: SportsEsportsIcon },
 ];
 
