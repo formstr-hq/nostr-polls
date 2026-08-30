@@ -1,8 +1,6 @@
-import { useState } from "react";
 import {
   Box,
   Button,
-  Chip,
   CircularProgress,
   Divider,
   FormControlLabel,
@@ -14,16 +12,17 @@ import {
   Typography,
 } from "@mui/material";
 import { useReports } from "../../hooks/useReports";
-import { useModeration } from "../../contexts/moderation-context";
+import { useModeration, useModerationVersion } from "../../contexts/moderation-context";
 import { contentPolicy, WotScope, MAX_FILTER_AUTHORS } from "../../utils/contentPolicy";
 import { nip19 } from "nostr-tools";
 
 export function ModerationSettings() {
   const { wotReportThreshold, setWotReportThreshold } = useReports();
   const { mutedPubkeys, unmutePubkey, isLoading, wotOnly, setWotOnly } = useModeration();
-  const [mutedVersion, setMutedVersion] = useState(0);
-  // Re-render on any policy change (WoT size affects toggle helper text).
-  contentPolicy.subscribe(() => setMutedVersion((v) => v + 1));
+  // Re-render on any policy change (WoT size affects toggle helper text, mute
+  // changes the list). useModerationVersion subscribes inside an effect; the
+  // version value itself is not used, only its change-firing.
+  useModerationVersion();
 
   const wotSize = contentPolicy.getWoTSize();
 
@@ -169,12 +168,6 @@ export function ModerationSettings() {
           ))}
         </List>
       )}
-      <>{mutedVersion}</>
-      <Chip
-        size="small"
-        label="Muted list syncs across your devices (private to you)"
-        sx={{ mt: 1, display: mutedPubkeys.size > 0 ? "inline-flex" : "none" }}
-      />
     </Box>
   );
 }
