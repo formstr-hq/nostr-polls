@@ -11,8 +11,9 @@ type AppContextInterface = {
   likesMap: Map<string, Event[]>;
   zapsMap: Map<string, Event[]>;
   repostsMap: Map<string, Event[]>;
-  // NIP-53 bookmark lists (kind 10003), indexed by the `a`-tag event ref they
-  // reference. A count of distinct authors bookmarking one event comes from here.
+  // NIP-51 bookmark lists (kind 10003), indexed by both tag spellings they
+  // may carry: event ids (`e`) and addressable a-refs. A count of distinct
+  // authors bookmarking one event comes from here.
   bookmarksMap: Map<string, Event[]>;
   getBookmarkCount: (eventRef: string) => number;
   getProfile: (pubkey: string) => Profile | undefined;
@@ -51,6 +52,11 @@ interface Interest {
   timer: ReturnType<typeof setTimeout> | null;
 }
 const newInterest = (): Interest => ({ ids: new Set(), handle: null, timer: null });
+
+// How long a bookmark-count ref stays fetched before the interest re-arms for
+// it — keeps the author-less kind-10003 count queries from re-firing on every
+// feed scroll while still going live again eventually.
+const BOOKMARK_COUNT_TTL_MS = 5 * 60 * 1000;
 
 export function AppContextProvider({ children }: { children: ReactNode }) {
   const [aiSettings, setAISettings] = useState(
@@ -119,6 +125,8 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
     reposts: newInterest(),
     bookmarks: newInterest(),
   });
+  // Last-fetch timestamps for bookmark-count refs (TTL enforcement).
+  const bookmarkCountFetchedAt = useRef(new Map<string, number>());
 
   const addToInterest = useCallback(
     (
@@ -185,12 +193,30 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
       addToInterest(interests.current.reposts, eventId, (ids) => [{ kinds: [6, 16], "#e": ids }], onDataEvent),
     [addToInterest, onDataEvent],
   );
-  // NIP-53: every user's bookmark list (kind 10003) carries the bookmarked
-  // event as a public `a`-tag. Querying those tags author-less finds every
-  // list that references a given event — the set of bookmarkers.
+  // NIP-51: every user's bookmark list (kind 10003) carries the bookmarked
+  // event as an `e` tag (plain events) or an addressable a-ref. The interest
+  // holds both spellings of every ref so one author-less query pair finds the
+  // bookmarkers; a TTL re-arms the interest periodically so live counts still
+  // update without re-querying on every feed scroll.
   const fetchBookmarkCountThrottled = useCallback(
-    (eventRef: string) =>
-      addToInterest(interests.current.bookmarks, eventRef, (ids) => [{ kinds: [10003], "#a": ids }], onDataEvent),
+    (eventRef: string) => {
+      const interest = interests.current.bookmarks;
+      const now = Date.now();
+      const stamp = bookmarkCountFetchedAt.current.get(eventRef);
+      if (stamp && now - stamp < BOOKMARK_COUNT_TTL_MS && interest.ids.has(eventRef)) return;
+      bookmarkCountFetchedAt.current.set(eventRef, now);
+      addToInterest(
+        interest,
+        eventRef,
+        (ids) => [
+          // `e`-tag refs (notes, polls) and a-ref refs (addressable) in one go;
+          // ids that don't match the shape simply match nothing in a filter.
+          { kinds: [10003], "#e": ids },
+          { kinds: [10003], "#a": ids },
+        ],
+        onDataEvent,
+      );
+    },
     [addToInterest, onDataEvent],
   );
 
@@ -301,13 +327,14 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const repostsMap = useMemo(() => byETag([6, 16]), [dataVersion]);
 
-  // NIP-53 bookmark lists, indexed by the `a`-tag event ref each one carries.
-  // A single event can appear in many users' lists → array of 10003 events.
+  // NIP-51 bookmark lists, indexed by every ref tag they carry — `e` tags
+  // (plain events) and addressable a-refs alike. One event can appear in many
+  // users' lists → array of 10003 events.
   const bookmarksMap = useMemo(() => {
     const map = new Map<string, Event[]>();
     for (const event of queryStore([10003])) {
       for (const tag of event.tags) {
-        if (tag[0] === "a" && tag[1]) {
+        if ((tag[0] === "a" || tag[0] === "e") && tag[1]) {
           map.set(tag[1], [...(map.get(tag[1]) || []), event]);
         }
       }

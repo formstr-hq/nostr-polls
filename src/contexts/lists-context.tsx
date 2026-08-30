@@ -104,26 +104,34 @@ function migrateLegacyWotCache(pubkey: string): WotCacheRecord | null {
   return record;
 }
 
-// NIP-22 ref for a bookmarkable event: addressable kinds (d-tagged long-form)
-// use their canonical "kind:pubkey:identifier", everything else falls back to
-// the event id so the bookmark stays resolvable.
+// Ref for a bookmarkable event, in NIP-51 shape: addressable kinds (d-tagged,
+// parameterized-replaceable range) use the canonical "kind:pubkey:identifier"
+// a-ref, everything else (notes, polls, …) uses the bare event id — which the
+// list stores as an `e` tag. Other NIP-51 clients resolve both forms.
 export function eventRefOf(event: Event) {
-  if (event.kind >= 30000 && event.tags.some((t) => t[0] === "d")) {
+  if (event.kind >= 30000 && event.kind < 40000 && event.tags.some((t) => t[0] === "d")) {
     return `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")![1]}`;
   }
-  return `${event.kind}:${event.pubkey}:${event.id}`;
+  return event.id;
 }
 
-// Heuristic for a public `a` tag that is one of OUR event bookmarks (as opposed
-// to foreign NIP-53 a-tags we must preserve). Our refs carry a third segment:
-// either a d-identifier (addressable kinds) or a full 64-hex event id
-// (non-addressable kinds). Short 2-segment a-tags are ambiguous with other kinds
-// of a-style references and stay untouched either way.
-function isEventRef(ref: string) {
-  const parts = ref.split(":");
-  if (parts.length < 3) return false;
-  return /^39089$/.test(parts[0]) ? parts.length > 3 : !!parts[2];
-}
+// Refs written by earlier versions of this client always used a-tags of the
+// form `kind:pubkey:<event-id>` — but only for non-addressable kinds; for
+// addressable kinds the third segment was always the real d-identifier, so
+// those a-refs were already canonical and must be preserved as-is.
+const HEX64 = /^[0-9a-f]{64}$/i;
+const LEGACY_A_REF = /^(\d+):[0-9a-f]{64}:([0-9a-f]{64})$/i;
+
+// Legacy plain-event a-refs collapse to their event id (stored as `e` going
+// forward); addressable-kind a-refs and anything unrecognized pass through.
+export const normalizeBookmarkRef = (ref: string): string => {
+  const m = ref.match(LEGACY_A_REF);
+  if (!m) return ref;
+  const kind = Number(m[1]);
+  // Parameterized-replaceable range: the third segment is a real identifier.
+  if (kind >= 30000 && kind < 40000) return ref;
+  return m[2];
+};
 
 interface ListContextInterface {
   lists: Map<string, Event> | undefined;
@@ -148,8 +156,9 @@ interface ListContextInterface {
   bookmarkedPackKeys: Set<string>;
   bookmarkFollowPack: (packEvent: Event) => Promise<void>;
   unbookmarkFollowPack: (packEvent: Event) => Promise<void>;
-  // NIP-53 bookmarks of arbitrary events (notes, polls, articles, …), stored as
-  // public `a` tags on the kind-10003 event.
+  // NIP-51 bookmarks of arbitrary events (notes, polls, articles, …), stored
+  // as public `e` tags (plain events) and canonical `a` refs (addressable
+  // kinds) on the kind-10003 event.
   bookmarkedEventRefs: Set<string>;
   bookmarkEvent: (event: Event) => Promise<void>;
   unbookmarkEvent: (event: Event) => Promise<void>;
@@ -416,10 +425,18 @@ export function ListProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Also read any unencrypted public tags (backwards compat)
-    const aTags = event.tags.filter((t) => t[0] === "a" && t[1]);
-    const publicAdrefs = aTags.filter((t) => t[1].startsWith("39089:")).map((t) => t[1]);
-    eventRefs.push(...aTags.filter((t) => !t[1].startsWith("39089:")).map((t) => t[1]));
+    // Also read any unencrypted public tags. Current format: `e` tags for
+    // plain events, canonical a-refs for addressable kinds. Legacy refs
+    // (`kind:pubkey:<event-id>` a-tags from earlier builds) normalize to
+    // their event id; foreign NIP-51 addressable a-refs pass through.
+    const aTags = event.tags.filter((t) => (t[0] === "a" || t[0] === "e") && t[1]);
+    const publicAdrefs = aTags.filter((t) => t[0] === "a" && t[1].startsWith("39089:")).map((t) => t[1]);
+    eventRefs.push(
+      ...aTags
+        .filter((t) => t[0] === "a" && !t[1].startsWith("39089:"))
+        .map((t) => normalizeBookmarkRef(t[1])),
+    );
+    eventRefs.push(...aTags.filter((t) => t[0] === "e").map((t) => t[1]));
     const allAdrefs = Array.from(new Set([...adrefs, ...publicAdrefs]));
     const allEventRefs = Array.from(new Set(eventRefs));
 
@@ -465,13 +482,22 @@ export function ListProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Re-merge a fresher list with whatever the UI already holds. Covers a
-  // bookmark added from another client (its ref would otherwise be dropped),
-  // while leaving a genuinely empty existing list empty.
+  // Re-merge a fresher list with the current sets, then apply a delta. Reads
+  // BOTH ref spellings we may find on disk: the current format (e-tags for
+  // plain events, a-refs for addressable kinds) and legacy a-refs
+  // (`kind:pubkey:<event-id>` written by earlier versions), which normalize to
+  // plain event ids here — so the migration to NIP-51 tags happens on the next
+  // publish without losing anything.
+  interface BookmarkDelta {
+    addRefs?: string[];
+    removeRefs?: string[];
+    addPacks?: string[];
+    removePacks?: string[];
+  }
+
   const mergeBookmarks = async (
     existing: Event | null,
-    packs: string[],
-    refs: string[],
+    delta: BookmarkDelta = {},
   ): Promise<{ packAdrefs: string[]; eventRefs: string[] }> => {
     let existingPacks: string[] = [];
     if (existing?.content) {
@@ -488,26 +514,48 @@ export function ListProvider({ children }: { children: ReactNode }) {
         // Fall back to public tags below
       }
     }
-    const aTags = (existing?.tags ?? []).filter((t) => t[0] === "a" && t[1]);
+    const aTags = (existing?.tags ?? []).filter((t) => (t[0] === "a" || t[0] === "e") && t[1]);
     existingPacks = Array.from(
       new Set([
         ...existingPacks,
-        ...aTags.filter((t) => t[1].startsWith("39089:")).map((t) => t[1]),
+        ...aTags.filter((t) => t[0] === "a" && t[1].startsWith("39089:")).map((t) => t[1]),
       ]),
     );
     const existingRefs = Array.from(
-      new Set(aTags.filter((t) => !t[1].startsWith("39089:")).map((t) => t[1])),
+      new Set([
+        // Legacy event a-refs normalize to their event id; foreign addressable
+        // a-refs (and anything unrecognized) pass through untouched.
+        ...aTags
+          .filter((t) => t[0] === "a" && !t[1].startsWith("39089:"))
+          .map((t) => normalizeBookmarkRef(t[1])),
+        // Plain-event bookmarks, ours (current format) and other NIP-51 clients'.
+        ...aTags.filter((t) => t[0] === "e").map((t) => t[1]),
+      ]),
     );
-    return {
-      packAdrefs: Array.from(new Set([...existingPacks, ...packs])),
-      eventRefs: Array.from(new Set([...existingRefs, ...refs])),
-    };
+    let packAdrefs = Array.from(new Set([...existingPacks, ...(delta.addPacks ?? [])]));
+    let eventRefs = Array.from(new Set([...existingRefs, ...(delta.addRefs ?? [])]));
+    if (delta.removePacks?.length) packAdrefs = packAdrefs.filter((p) => !delta.removePacks!.includes(p));
+    if (delta.removeRefs?.length) eventRefs = eventRefs.filter((r) => !delta.removeRefs!.includes(r));
+    return { packAdrefs, eventRefs };
   };
 
+  // Every kind-10003 publication runs through this queue: each mutation
+  // re-fetches the freshest list and applies its delta, so rapid toggles or
+  // racing pack/event updates can never interleave read-modify-write cycles
+  // and drop each other's changes.
+  const bookmarkMutationQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueueBookmarkMutation = useCallback(
+    <T,>(fn: () => Promise<T>): Promise<T> => {
+      const next = bookmarkMutationQueue.current.then(fn, fn);
+      bookmarkMutationQueue.current = next.catch(() => undefined);
+      return next;
+    },
+    [],
+  );
+
   const buildAndPublishBookmarks = async (
-    packAdrefs: string[],
-    eventRefs: string[] = [],
-  ): Promise<Event> => {
+    delta: BookmarkDelta = {},
+  ): Promise<{ signed: Event; refs: string[]; packs: string[] }> => {
     // Never build on top of nothing when we know a real list exists: the
     // initial fetch can resolve empty after a network error (or the account-
     // reset effect clears the state), and a lone bookmark would then clobber
@@ -515,19 +563,30 @@ export function ListProvider({ children }: { children: ReactNode }) {
     // followPubkey contacts-list pattern.
     const latest = await fetchLatestBookmarks();
     const fresh = latest ?? bookmarks10003;
-    const merged = await mergeBookmarks(fresh, packAdrefs, eventRefs);
+    const merged = await mergeBookmarks(fresh, delta);
 
     const signer = await signerManager.getSigner();
     const pubkey = await signer.getPublicKey();
     const privateTags = merged.packAdrefs.map((a) => ["a", a]);
     const encrypted = await signer.nip44Encrypt!(pubkey, JSON.stringify(privateTags));
 
-    // Preserve all existing public tags except our own 39089 a-tags (which are
-    // now private) and our own event refs (rebuilt from `eventRefs`). Other
-    // clients' a-tags (foreign NIP-53 bookmarks) are kept untouched.
-    const foreignTags = (fresh?.tags ?? []).filter(
-      (t) => !(t[0] === "a" && (t[1]?.startsWith("39089:") || isEventRef(t[1] ?? ""))),
-    );
+    // NIP-51 tag spelling: plain events go out as `e` tags, addressable kinds
+    // as canonical a-refs. Tags that are neither of ours (d, title, … on
+    // curated sets) are carried over untouched.
+    const otherTags = (fresh?.tags ?? []).filter((t) => t[0] !== "a" && t[0] !== "e");
+    const refTags = merged.eventRefs.map((r) => (HEX64.test(r) ? ["e", r] : ["a", r]));
+
+    // Skip the publish entirely when the delta changes nothing — a redundant
+    // toggle would otherwise bump created_at and re-broadcast the same list.
+    // (`before` is the merged state with an empty delta, i.e. the normalized
+    // current list; identical lengths + sets ⇒ nothing to write.)
+    const before = await mergeBookmarks(fresh);
+    const same =
+      before.eventRefs.length === merged.eventRefs.length &&
+      before.packAdrefs.length === merged.packAdrefs.length;
+    if (same && fresh) {
+      return { signed: fresh, refs: merged.eventRefs, packs: merged.packAdrefs };
+    }
 
     // Strictly newer than both wall-clock and any known existing list, so the
     // published event wins over the older one on relay ordering.
@@ -535,7 +594,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
     const template: EventTemplate = {
       kind: 10003,
       created_at: Math.max(Math.floor(Date.now() / 1000), baseTs + 1),
-      tags: [...foreignTags, ...merged.eventRefs.map((r) => ["a", r])],
+      tags: [...otherTags, ...refTags],
       content: encrypted,
     };
     const signed = await signer.signEvent(template);
@@ -552,48 +611,50 @@ export function ListProvider({ children }: { children: ReactNode }) {
       // best-effort persistence
     }
     await dataLayer.publishEvent(signed);
-    return signed;
+    return { signed, refs: merged.eventRefs, packs: merged.packAdrefs };
   };
 
-  const bookmarkFollowPack = async (packEvent: Event): Promise<void> => {
+  // All four mutations run through enqueueBookmarkMutation so concurrent calls
+  // serialize; each one's merge re-reads the freshest list, so nothing is lost.
+  const bookmarkFollowPack = (packEvent: Event): Promise<void> => {
     const identifier = packEvent.tags.find((t) => t[0] === "d")?.[1] || "";
     const adref = `39089:${packEvent.pubkey}:${identifier}`;
-    if (bookmarkedPackKeys.has(adref)) return;
-    const newAdrefs = [...Array.from(bookmarkedPackKeys), adref];
-    const signed = await buildAndPublishBookmarks(
-      newAdrefs,
-      Array.from(bookmarkedEventRefs),
-    );
-    setBookmarks10003(signed);
-    setBookmarkedPackKeys(new Set(bookmarkedPackKeys).add(adref));
-    handleListEvent(packEvent);
+    if (!adref || adref === "39089:") return Promise.resolve();
+    return enqueueBookmarkMutation(async () => {
+      const { signed, packs } = await buildAndPublishBookmarks({ addPacks: [adref] });
+      setBookmarks10003(signed);
+      setBookmarkedPackKeys(new Set(packs));
+      handleListEvent(packEvent);
+    });
   };
 
-  const unbookmarkFollowPack = async (packEvent: Event): Promise<void> => {
+  const unbookmarkFollowPack = (packEvent: Event): Promise<void> => {
     const identifier = packEvent.tags.find((t) => t[0] === "d")?.[1] || "";
     const adref = `39089:${packEvent.pubkey}:${identifier}`;
-    const newAdrefs = Array.from(bookmarkedPackKeys).filter((k) => k !== adref);
-    const signed = await buildAndPublishBookmarks(newAdrefs, Array.from(bookmarkedEventRefs));
-    setBookmarks10003(signed);
-    setBookmarkedPackKeys(new Set(newAdrefs));
+    return enqueueBookmarkMutation(async () => {
+      const { signed, packs } = await buildAndPublishBookmarks({ removePacks: [adref] });
+      setBookmarks10003(signed);
+      setBookmarkedPackKeys(new Set(packs));
+    });
   };
 
-  const bookmarkEvent = async (event: Event): Promise<void> => {
+  const bookmarkEvent = (event: Event): Promise<void> => {
     const ref = eventRefOf(event);
-    if (bookmarkedEventRefs.has(ref)) return;
-    const newRefs = [...Array.from(bookmarkedEventRefs), ref];
-    const signed = await buildAndPublishBookmarks(Array.from(bookmarkedPackKeys), newRefs);
-    setBookmarks10003(signed);
-    setBookmarkedEventRefs(new Set(bookmarkedEventRefs).add(ref));
-    if (event.kind === 39089) handleListEvent(event);
+    return enqueueBookmarkMutation(async () => {
+      const { signed, refs } = await buildAndPublishBookmarks({ addRefs: [ref] });
+      setBookmarks10003(signed);
+      setBookmarkedEventRefs(new Set(refs));
+      if (event.kind === 39089) handleListEvent(event);
+    });
   };
 
-  const unbookmarkEvent = async (event: Event): Promise<void> => {
+  const unbookmarkEvent = (event: Event): Promise<void> => {
     const ref = eventRefOf(event);
-    const newRefs = Array.from(bookmarkedEventRefs).filter((r) => r !== ref);
-    const signed = await buildAndPublishBookmarks(Array.from(bookmarkedPackKeys), newRefs);
-    setBookmarks10003(signed);
-    setBookmarkedEventRefs(new Set(newRefs));
+    return enqueueBookmarkMutation(async () => {
+      const { signed, refs } = await buildAndPublishBookmarks({ removeRefs: [ref] });
+      setBookmarks10003(signed);
+      setBookmarkedEventRefs(new Set(refs));
+    });
   };
 
   const subscribeToContacts = () => {

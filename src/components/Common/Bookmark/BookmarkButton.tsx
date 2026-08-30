@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { CircularProgress, IconButton, Tooltip, Typography, useTheme } from "@mui/material";
 import BookmarkBorderIcon from "@mui/icons-material/BookmarkBorder";
 import BookmarkIcon from "@mui/icons-material/Bookmark";
@@ -23,9 +23,26 @@ export const BookmarkButton: React.FC<BookmarkButtonProps> = ({ event }) => {
   const ref = eventRefOf(event);
   const isBookmarked = bookmarkedEventRefs.has(ref);
   const bookmarkCount = getBookmarkCount(ref);
+  const buttonRef = useRef<HTMLDivElement>(null);
 
+  // Fetch the count only when the button is actually on screen: the
+  // author-less kind-10003 count query is one of the heavier interests, and
+  // offscreen cards shouldn't pay for it. The context layer applies its own
+  // 5-minute TTL on top, so re-entering the viewport re-checks cheaply.
   useEffect(() => {
-    fetchBookmarkCountThrottled(ref);
+    const el = buttonRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      fetchBookmarkCountThrottled(ref);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((en) => en.isIntersecting)) fetchBookmarkCountThrottled(ref);
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [ref, fetchBookmarkCountThrottled]);
 
   const handleClick = async (e: React.MouseEvent) => {
@@ -53,6 +70,7 @@ export const BookmarkButton: React.FC<BookmarkButtonProps> = ({ event }) => {
 
   return (
     <div
+      ref={buttonRef}
       style={{
         display: "flex",
         flexDirection: "row",
@@ -61,7 +79,12 @@ export const BookmarkButton: React.FC<BookmarkButtonProps> = ({ event }) => {
       }}
     >
       <Tooltip title={isBookmarked ? "Remove bookmark" : "Bookmark"}>
-        <IconButton size="small" disabled={pending} onClick={handleClick} color={isBookmarked ? "primary" : "default"}>
+        <IconButton
+          size="small"
+          disabled={pending}
+          onClick={handleClick}
+          color={isBookmarked ? "primary" : "default"}
+        >
           {pending ? (
             <CircularProgress size={18} color="inherit" />
           ) : isBookmarked ? (

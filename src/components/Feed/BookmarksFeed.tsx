@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Event, Filter } from "nostr-tools";
+import { Event, Filter, nip19 } from "nostr-tools";
 import { Box, Button, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
 import { useRelayRefresh } from "../../dataLayer/hooks";
@@ -14,7 +14,7 @@ import { FollowPackCard } from "../FollowPacks/FollowPackCard";
 import UnifiedFeed from "./UnifiedFeed";
 
 // One bookmarkable item: either a pack (from the private 39089 refs) or an
-// event resolved from a public NIP-53-style ref.
+// event resolved from a public NIP-51 ref.
 type BookmarkItem =
   | { type: "pack"; event: Event }
   | { type: "resolved"; ref: string; event: Event }
@@ -27,60 +27,101 @@ const KIND_PACK = 39089;
 
 const RESOLVE_TIMEOUT_MS = 5000;
 
-// Refs are produced by `eventRefOf` in lists-context: a 64-hex third segment
-// is an id reference, anything else is an addressable d-reference.
+// Refs follow the NIP-51 bookmark shape produced by `eventRefOf` in
+// lists-context: a bare 64-hex id (plain events, stored as `e` tags) or a
+// canonical `kind:pubkey:identifier` a-ref (addressable kinds).
 const HEX_ID = /^[0-9a-f]{64}$/i;
 
-const refParts = (ref: string) => {
-  const [kind, pubkey, third] = ref.split(":");
-  return { kind, pubkey, third };
+type RefParts = { kind: number; pubkey: string; identifier: string } | null;
+
+const refParts = (ref: string): RefParts => {
+  const [kind, pubkey, ...rest] = ref.split(":");
+  const identifier = rest.join(":");
+  if (!/^\d+$/.test(kind) || !pubkey || !identifier) return null;
+  return { kind: Number(kind), pubkey, identifier };
 };
 
 const matchRef = (ref: string, event: Event): boolean => {
-  const { kind, pubkey, third } = refParts(ref);
-  if (!kind || !pubkey || !third) return false;
-  return HEX_ID.test(third)
-    ? event.id === third
-    : event.kind === Number(kind) &&
-      event.pubkey === pubkey &&
-      event.tags.some((t) => t[0] === "d" && t[1] === third);
+  if (HEX_ID.test(ref)) return event.id === ref;
+  const parts = refParts(ref);
+  if (!parts) return false;
+  return (
+    event.kind === parts.kind &&
+    event.pubkey === parts.pubkey &&
+    event.tags.some((t) => t[0] === "d" && t[1] === parts.identifier)
+  );
 };
 
 const filtersForRefs = (refs: string[]): Filter[] => {
-  const ids: string[] = [];
-  const dQueries: Filter[] = [];
+  const ids = refs.filter((r) => HEX_ID.test(r));
+  const filters: Filter[] = [];
+  if (ids.length) filters.push({ ids, limit: ids.length });
   for (const ref of refs) {
-    const { kind, pubkey, third } = refParts(ref);
-    if (!kind || !pubkey || !third) continue;
-    if (HEX_ID.test(third)) ids.push(third);
-    else dQueries.push({ kinds: [Number(kind)], authors: [pubkey], "#d": [third], limit: 1 });
+    const parts = refParts(ref);
+    if (parts) {
+      filters.push({ kinds: [parts.kind], authors: [parts.pubkey], "#d": [parts.identifier], limit: 1 });
+    }
   }
-  if (ids.length) dQueries.push({ ids, limit: ids.length });
-  return dQueries;
+  return filters;
+};
+
+// Kinds this client can render in the bookmarks feed. `eventRefOf` bookmarks
+// anything, so anything unlisted here (and addressable kinds without a card)
+// falls through to the generic note renderer.
+// Single place to extend when a new bookmarkable kind gains a renderer.
+const KIND_RENDERERS: Record<number, (event: Event) => React.ReactNode> = {
+  [KIND_POLL]: (event) => <PollResponseForm pollEvent={event} />,
+  [KIND_ARTICLE]: (event) => <ArticleCard event={event} />,
+  [KIND_MUSIC]: (event) => <MusicCard event={event} />,
 };
 
 const createdAtOf = (item: BookmarkItem) =>
   item.type === "missing" ? 0 : item.event.created_at;
+
+// Friendly rendering for refs that no longer resolve (deleted events, relays
+// unreachable, or legacy refs pointing at gone content): a truncated npub
+// plus a link to an external explorer for the full id.
+const MissingBookmark = ({ refString }: { refString: string }) => {
+  const parts = refParts(refString);
+  const npub = parts ? nip19.nprofileEncode({ pubkey: parts.pubkey }) : null;
+  const short = npub ? `${npub.slice(0, 10)}…${npub.slice(-6)}` : refString.slice(0, 16);
+  const explorerUrl = HEX_ID.test(refString)
+    ? `https://nostr.band/${refString}`
+    : parts
+    ? `https://nostr.band/${nip19.npubEncode(parts.pubkey)}`
+    : null;
+  return (
+    <Box sx={{ p: 2, borderRadius: 2, border: 1, borderColor: "divider" }}>
+      <Typography variant="body2" color="text.secondary">
+        {parts
+          ? `Bookmark for a kind ${parts.kind} event by ${short}`
+          : `Bookmark ${short}`}{" "}
+        is no longer resolvable.
+        {explorerUrl && (
+          <Button
+            size="small"
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{ ml: 1, textTransform: "none", fontSize: "0.75rem" }}
+          >
+            Open in explorer
+          </Button>
+        )}
+      </Typography>
+    </Box>
+  );
+};
 
 const BookmarksItem = React.memo(({ item }: { item: BookmarkItem }) => {
   let inner: React.ReactNode;
   if (item.type === "pack") {
     inner = <FollowPackCard event={item.event} />;
   } else if (item.type === "missing") {
-    const { kind, pubkey } = refParts(item.ref);
-    inner = (
-      <Box sx={{ p: 2, rounded: 2, border: 1, borderColor: "divider" }}>
-        <Typography variant="body2" color="text.secondary">
-          Bookmark for kind {kind} by {pubkey} is no longer resolvable.
-        </Typography>
-      </Box>
-    );
+    inner = <MissingBookmark refString={item.ref} />;
   } else {
     const { event } = item;
-    if (event.kind === KIND_POLL) inner = <PollResponseForm pollEvent={event} />;
-    else if (event.kind === KIND_ARTICLE) inner = <ArticleCard event={event} />;
-    else if (event.kind === KIND_MUSIC) inner = <MusicCard event={event} />;
-    else inner = <Notes event={event} />;
+    inner = KIND_RENDERERS[event.kind]?.(event) ?? <Notes event={event} />;
   }
   return <Box sx={{ width: "100%" }}>{inner}</Box>;
 });
@@ -106,6 +147,12 @@ const BookmarksFeed: React.FC = () => {
   );
 
   const refList = useMemo(() => Array.from(bookmarkedEventRefs), [bookmarkedEventRefs]);
+
+  // The resolve effect reads profiles only to skip redundant author fetches —
+  // tracking it in a ref keeps the (expensive) resolve callback from being
+  // rebuilt every time any profile arrives.
+  const profilesRef = useRef(profiles);
+  profilesRef.current = profiles;
 
   const resolve = useCallback(() => {
     if (resolvingRef.current) return;
@@ -152,7 +199,7 @@ const BookmarksFeed: React.FC = () => {
 
     const handle = dataLayer.observe(filtersForRefs(refList), {
       onEvent: (event: Event) => {
-        if (event.kind === KIND_NOTE && !profiles?.get(event.pubkey)) {
+        if (event.kind === KIND_NOTE && !profilesRef.current?.get(event.pubkey)) {
           fetchUserProfileThrottled(event.pubkey);
         }
         for (const ref of refList) {
@@ -168,7 +215,7 @@ const BookmarksFeed: React.FC = () => {
 
     // Hard cap so zero-result resolutions still settle.
     setTimeout(finalize, RESOLVE_TIMEOUT_MS);
-  }, [refList, bookmarkedPacks, fetchUserProfileThrottled, profiles]);
+  }, [refList, bookmarkedPacks, fetchUserProfileThrottled]);
 
   useEffect(() => {
     if (user) resolve();
