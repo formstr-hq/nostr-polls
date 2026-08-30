@@ -94,11 +94,12 @@ export function ModerationSettings() {
       <Typography variant="body2" color="text.secondary" gutterBottom>
         When enabled, content outside your Web of Trust (people you follow and
         their follows) is not even fetched for that surface — filtered on the
-        wire where possible, at ingest otherwise.
+        wire where possible, at ingest otherwise. Muted users are always
+        filtered, regardless of these switches.
         {wotSize > MAX_FILTER_AUTHORS &&
           " Your Web of Trust is large, so notifications are filtered on arrival rather than at fetch time."}
         {wotSize === 0 &&
-          " Still computing your Web of Trust — filtering starts once it's ready."}
+          " Still computing your Web of Trust — while it's empty these switches have no effect (nothing is filtered)."}
       </Typography>
 
       <Box sx={{ mt: 2 }}>

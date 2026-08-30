@@ -77,7 +77,7 @@ class ContentPolicy {
   getMuted = (): string[] => Array.from(this.muted);
 
   /** Ingest (replace) the muted set — from the durable copy or a fresh
-   * kind-10005 decrypt. `persist` false when the caller will publish first. */
+   * kind-10000 decrypt. `persist` false when the caller will publish first. */
   setMuted(pubkeys: string[], persist = true) {
     this.muted = new Set(pubkeys);
     if (persist && this.account) {
