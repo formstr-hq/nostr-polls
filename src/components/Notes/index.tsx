@@ -46,6 +46,8 @@ import { useListContext } from "../../hooks/useListContext";
 import { dataLayer } from "@formstr/local-relay";
 import { useRelays } from "../../hooks/useRelays";
 import { useNotification } from "../../contexts/notification-context";
+import { useModeration } from "../../contexts/moderation-context";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
 import { aiService } from "../../services/ai-service";
 import { useReports } from "../../hooks/useReports";
@@ -136,6 +138,7 @@ export const Notes: React.FC<NotesProps> = ({
   const { showNotification } = useNotification();
 
   const { reportEvent, reportUser, isReportedByMe, getWoTReporters, wotReportThreshold, requestUserReportCheck } = useReports();
+  const { isMuted, mutePubkey, unmutePubkey } = useModeration();
   const [reportPostDialogOpen, setReportPostDialogOpen] = useState(false);
   const [reportUserDialogOpen, setReportUserDialogOpen] = useState(false);
   const [showReportedAnyway, setShowReportedAnyway] = useState(false);
@@ -635,6 +638,18 @@ export const Notes: React.FC<NotesProps> = ({
               >
                 <FlagIcon fontSize="small" sx={{ mr: 1 }} />
                 Report user
+              </MenuItem>
+            )}
+            {user && user.pubkey !== event.pubkey && (
+              <MenuItem
+                onClick={() => {
+                  handleCloseMenu();
+                  if (isMuted(event.pubkey)) unmutePubkey(event.pubkey);
+                  else mutePubkey(event.pubkey);
+                }}
+              >
+                <VisibilityOffIcon fontSize="small" sx={{ mr: 1 }} />
+                {isMuted(event.pubkey) ? "Unmute user" : "Mute user"}
               </MenuItem>
             )}
             {extras}

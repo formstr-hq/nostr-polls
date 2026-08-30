@@ -1,8 +1,52 @@
-import { Box, Slider, Typography } from "@mui/material";
+import { useState } from "react";
+import {
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Divider,
+  FormControlLabel,
+  List,
+  ListItem,
+  ListItemText,
+  Slider,
+  Switch,
+  Typography,
+} from "@mui/material";
 import { useReports } from "../../hooks/useReports";
+import { useModeration } from "../../contexts/moderation-context";
+import { contentPolicy, WotScope, MAX_FILTER_AUTHORS } from "../../utils/contentPolicy";
+import { nip19 } from "nostr-tools";
 
 export function ModerationSettings() {
   const { wotReportThreshold, setWotReportThreshold } = useReports();
+  const { mutedPubkeys, unmutePubkey, isLoading, wotOnly, setWotOnly } = useModeration();
+  const [mutedVersion, setMutedVersion] = useState(0);
+  // Re-render on any policy change (WoT size affects toggle helper text).
+  contentPolicy.subscribe(() => setMutedVersion((v) => v + 1));
+
+  const wotSize = contentPolicy.getWoTSize();
+
+  const toggles: { scope: WotScope; label: string; description: string }[] = [
+    {
+      scope: "notifs",
+      label: "Notifications",
+      description:
+        "Only receive notifications (in-app and background push) from people in your Web of Trust. Muted users are always filtered.",
+    },
+    {
+      scope: "comments",
+      label: "Comments",
+      description:
+        "Only fetch and show comments from people in your Web of Trust.",
+    },
+    {
+      scope: "likes",
+      label: "Likes",
+      description:
+        "Only fetch and show likes/reactions from people in your Web of Trust.",
+    },
+  ];
 
   return (
     <Box>
@@ -40,6 +84,104 @@ export function ModerationSettings() {
           choose to reveal hidden items individually.
         </Typography>
       </Box>
+
+      <Divider sx={{ my: 4 }} />
+
+      {/* ── WoT-only per-surface toggles ─────────────────────────────── */}
+      <Typography variant="subtitle1" gutterBottom>
+        Web of Trust only
+      </Typography>
+      <Typography variant="body2" color="text.secondary" gutterBottom>
+        When enabled, content outside your Web of Trust (people you follow and
+        their follows) is not even fetched for that surface — filtered on the
+        wire where possible, at ingest otherwise.
+        {wotSize > MAX_FILTER_AUTHORS &&
+          " Your Web of Trust is large, so notifications are filtered on arrival rather than at fetch time."}
+        {wotSize === 0 &&
+          " Still computing your Web of Trust — filtering starts once it's ready."}
+      </Typography>
+
+      <Box sx={{ mt: 2 }}>
+        {toggles.map(({ scope, label, description }) => (
+          <Box key={scope} sx={{ mb: 2, maxWidth: 480 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={wotOnly[scope]}
+                  onChange={(e) => setWotOnly(scope, e.target.checked)}
+                />
+              }
+              label={
+                <Box>
+                  <Typography variant="body1">{label}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {description}
+                  </Typography>
+                </Box>
+              }
+              sx={{ alignItems: "flex-start", m: 0 }}
+            />
+          </Box>
+        ))}
+      </Box>
+
+      <Divider sx={{ my: 4 }} />
+
+      {/* ── Muted users ──────────────────────────────────────────────── */}
+      <Typography variant="subtitle1" gutterBottom>
+        Muted users
+      </Typography>
+      <Typography variant="body2" color="text.secondary" gutterBottom>
+        Muted users never trigger notifications and are hidden from comments
+        and likes. Your mute list is private — it is stored encrypted and only
+        readable by you. Available on this device{mutedPubkeys.size > 0 ? ` (${mutedPubkeys.size})` : ""}.
+      </Typography>
+
+      {isLoading ? (
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2 }}>
+          <CircularProgress size={18} />
+          <Typography variant="body2" color="text.secondary">
+            Loading mute list…
+          </Typography>
+        </Box>
+      ) : mutedPubkeys.size === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Nobody is muted. Use the ⋯ menu on any note, comment, or poll to mute
+          its author.
+        </Typography>
+      ) : (
+        <List dense sx={{ maxWidth: 480 }}>
+          {Array.from(mutedPubkeys).map((pk) => (
+            <ListItem
+              key={pk}
+              secondaryAction={
+                <Button size="small" onClick={() => unmutePubkey(pk)}>
+                  Unmute
+                </Button>
+              }
+            >
+              <ListItemText
+                primary={shortNpub(pk)}
+                secondary={pk.slice(0, 16) + "…"}
+              />
+            </ListItem>
+          ))}
+        </List>
+      )}
+      <>{mutedVersion}</>
+      <Chip
+        size="small"
+        label="Muted list syncs across your devices (private to you)"
+        sx={{ mt: 1, display: mutedPubkeys.size > 0 ? "inline-flex" : "none" }}
+      />
     </Box>
   );
+}
+
+function shortNpub(pk: string): string {
+  try {
+    return nip19.npubEncode(pk).slice(0, 16) + "…";
+  } catch {
+    return pk.slice(0, 12) + "…";
+  }
 }

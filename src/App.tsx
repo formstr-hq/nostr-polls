@@ -34,6 +34,7 @@ import { RelayHealthProvider } from "./contexts/RelayHealthContext";
 import { NostrNotificationsProvider } from "./contexts/nostr-notification-context";
 import { DMProvider } from "./contexts/dm-context";
 import { ReportsProvider } from "./contexts/reports-context";
+import { ModerationProvider } from "./contexts/moderation-context";
 import { TranslationBatchProvider } from "./contexts/translation-batch-context";
 import { FeedScrollProvider } from "./contexts/FeedScrollContext";
 import { SubNavProvider } from "./contexts/SubNavContext";
@@ -338,6 +339,7 @@ const App: React.FC = () => {
         <DynamicThemeWrapper>
           <AppContextProvider>
             <UserProvider>
+              <ModerationProvider>
               <DataLayerScopeBridge>
               <RelayProvider>
                 <RelayHealthProvider>
@@ -380,6 +382,7 @@ const App: React.FC = () => {
                 </RelayHealthProvider>
               </RelayProvider>
               </DataLayerScopeBridge>
+              </ModerationProvider>
             </UserProvider>
           </AppContextProvider>
         </DynamicThemeWrapper>
