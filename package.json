@@ -51,6 +51,22 @@
     "eject": "react-scripts eject"
   },
   "jest": {
+    "transform": {
+      "^.+\\.(t|j)sx?$": [
+        "babel-jest",
+        {
+          "presets": [
+            "@babel/preset-env",
+            [
+              "@babel/preset-typescript",
+              {
+                "allowDeclareFields": true
+              }
+            ]
+          ]
+        }
+      ]
+    },
     "moduleNameMapper": {
       "^nostr-tools/nip46$": "<rootDir>/node_modules/nostr-tools/lib/cjs/nip46.js",
       "^nostr-tools/nip49$": "<rootDir>/node_modules/nostr-tools/lib/cjs/nip49.js",

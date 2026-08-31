@@ -5,7 +5,9 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  FormControlLabel,
   LinearProgress,
+  Switch,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -106,7 +108,7 @@ export const NetworkSettings: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [clearing, setClearing] = React.useState(false);
   const { user } = useUserContext();
-  const { isFetchingWoT, wotProfileCount, wotLastComputed, recomputeWebOfTrust } =
+  const { isFetchingWoT, wotProfileCount, wotLastComputed, recomputeWebOfTrust, wotTwoDegrees, setWotTwoDegrees } =
     useListContext();
   const wotSize = user?.webOfTrust?.size ?? 0;
 
@@ -260,6 +262,27 @@ export const NetworkSettings: React.FC = () => {
           Maps everyone the people you follow follow. Powers your network feed and
           content moderation; recomputed automatically every 5 days.
         </Typography>
+        <FormControlLabel
+          sx={{ mt: 1, alignItems: "flex-start" }}
+          control={
+            <Switch
+              checked={wotTwoDegrees}
+              onChange={(e) => setWotTwoDegrees(e.target.checked)}
+              disabled={isFetchingWoT || !user?.follows?.length}
+            />
+          }
+          label={
+            <Box>
+              <Typography variant="body2">Expand to 2 degrees</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Also fetch the contact lists of your friends-of-friends (top
+                {` ${"2000"}`} by trust). Makes the network much larger — used by
+                the WoT-only filters and suggestions. Applies on the next compute;
+                the switch triggers one.
+              </Typography>
+            </Box>
+          }
+        />
       </Box>
 
       <Divider />

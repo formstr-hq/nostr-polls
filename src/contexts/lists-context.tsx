@@ -29,6 +29,14 @@ import {
 const WOT_STORAGE_KEY_PREFIX = `pollerama:webOfTrust`;
 const WOT_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
 
+// Opt-in second-hop WoT expansion ("Expand to 2 degrees" in Network settings):
+// when on, after the normal computation a second round of kind-3 fetches runs
+// for the friends-of-friends the first round revealed. At 2 degrees the union
+// reaches 100k+ pubkeys, so this is opt-in and the second hop is chunk-capped.
+const WOT_TWO_DEGREE_KEY = "pollerama:wotTwoDegrees";
+const WOT_TWO_DEGREE_CHUNK = 400; // authors per relay filter (relay-safe cap)
+const WOT_TWO_DEGREE_MAX_SOURCES = 2000; // hard cap on hop-2 fetch authors
+
 // The web-of-trust "network index" maps every reachable pubkey to the subset of
 // the user's own follows that follow them. It powers the "followed by … you
 // follow" row on profiles, the per-pubkey trust score, and follow suggestions.
@@ -179,6 +187,10 @@ interface ListContextInterface {
   wotProfileCount: number;
   wotLastComputed: number | null; // ms epoch of the last successful compute
   recomputeWebOfTrust: () => void; // force a fresh fetch, bypassing the cache
+  // Opt-in 2-degree expansion (Network settings). When on, the computation
+  // chains a second hop of contact-list fetches (friends-of-friends' lists).
+  wotTwoDegrees: boolean;
+  setWotTwoDegrees: (on: boolean) => void;
 }
 
 export const ListContext = createContext<ListContextInterface | null>(null);
@@ -220,6 +232,26 @@ export function ListProvider({ children }: { children: ReactNode }) {
   const [isFetchingWoT, setIsFetchingWoT] = useState(false);
   const [wotProfileCount, setWotProfileCount] = useState(0);
   const [wotLastComputed, setWotLastComputed] = useState<number | null>(null);
+  // Opt-in 2-degree expansion (localStorage-backed, like the other toggles).
+  const [wotTwoDegrees, setWotTwoDegreesState] = useState<boolean>(
+    () => localStorage.getItem(WOT_TWO_DEGREE_KEY) === "1"
+  );
+
+  const setWotTwoDegrees = useCallback((on: boolean) => {
+    setWotTwoDegreesState(on);
+    try {
+      localStorage.setItem(WOT_TWO_DEGREE_KEY, on ? "1" : "0");
+    } catch {
+      // best-effort
+    }
+    if (on) {
+      // Expanding (not shrinking): bust the cache timestamp so the next
+      // computation gains the second hop. Shrinking back to 1 degree keeps
+      // the existing union — the seed-union rule means it can only grow.
+      void clearWotCacheTime(user?.pubkey ?? "");
+      wotAttemptedRef.current = false;
+    }
+  }, [user?.pubkey]);
   // Cached follow suggestions (worker-computed, persisted). Lives in a ref since
   // it's only read on demand via getFollowRecommendations, not rendered directly.
   const recommendationsRef = useRef<WotRecommendation[]>([]);
@@ -657,6 +689,137 @@ export function ListProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // ── 2-degree expansion helpers (opt-in; see WOT_TWO_DEGREE_KEY) ──────────
+
+  /** Rank the worker's 2nd-degree candidates for the hop-2 fetch: strongest
+   * trust first, capped. Recommendations already exclude own follows + self,
+   * so every source here is genuinely new (their lists were never fetched). */
+  const rankByTrustForHop2 = (
+    recommendations: WotRecommendation[],
+    ownFollows: string[],
+    cap: number
+  ): string[] => {
+    const followed = new Set(ownFollows);
+    return recommendations
+      .filter((r) => !followed.has(r.pubkey))
+      .slice(0, cap)
+      .map((r) => r.pubkey);
+  };
+
+  /** Fetch kind-3 of `sources` in relay-safe chunks, aggregate through a fresh
+   * worker pass seeded with `seedUnion`, and hand the enlarged result to
+   * `onDone`. Quality over quantity: sources are pre-sorted best-first, and
+   * later chunks are dropped if the quiet-window between chunks is exceeded —
+   * the cap bounds worst-case network work, not correctness (union can only
+   * grow, and the 5-day TTL recomputes eventually). */
+  const fetchSecondHop = (
+    accountPubkey: string,
+    sources: string[],
+    seedUnion: string[],
+    onDone: (result: {
+      union: string[];
+      serializedIndex: string;
+      recommendations: WotRecommendation[];
+      size: number;
+    }) => void
+  ) => {
+    const chunks: string[][] = [];
+    for (let i = 0; i < sources.length; i += WOT_TWO_DEGREE_CHUNK) {
+      chunks.push(sources.slice(i, i + WOT_TWO_DEGREE_CHUNK));
+    }
+
+    const worker = new Worker(new URL("../utils/wot-worker", import.meta.url));
+    wotWorkerRef.current = worker;
+    worker.postMessage({
+      type: "init",
+      seedUnion,
+      // Own follows join the "excluded from recs" set for hop 2 (their lists
+      // were already ingested; keep their edges out of the fresh index).
+      follows: user?.follows ?? [],
+      self: accountPubkey,
+    });
+
+    let committed = false;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      if (quietTimer) clearTimeout(quietTimer);
+      handle.unobserve();
+      worker.postMessage({ type: "commit" });
+    };
+
+    worker.onmessage = (e: MessageEvent) => {
+      const msg = e.data;
+      if (msg.type === "progress") {
+        setWotProfileCount(msg.size);
+        return;
+      }
+      if (msg.type !== "result") return;
+      worker.terminate();
+      if (wotWorkerRef.current === worker) wotWorkerRef.current = null;
+      onDone({
+        union: msg.union as string[],
+        serializedIndex: msg.serializedIndex as string,
+        recommendations: (msg.recommendations ?? []) as WotRecommendation[],
+        size: msg.size as number,
+      });
+    };
+
+    // Chunked observe: re-declare the filter with the next author chunk after
+    // each quiet period, so one standing interest covers all chunks without
+    // a per-chunk EOSE race. The hard timer bounds the whole hop.
+    let chunkIdx = 0;
+    const declareNextChunk = () => {
+      if (chunkIdx >= chunks.length) return;
+      const chunk = chunks[chunkIdx++];
+      const filter: Filter = { kinds: [3], authors: chunk, limit: 500 };
+      if (typeof handle.update === "function") {
+        handle.update([filter]);
+      }
+    };
+
+    let handle: { unobserve: () => void; update?: (filters: Filter[]) => void };
+    handle = dataLayer.observe(
+      [{ kinds: [3], authors: chunks[0], limit: 500 }],
+      {
+        onEvent: (event: Event) => {
+          worker.postMessage({
+            type: "event",
+            pubkey: event.pubkey,
+            tags: event.tags,
+          });
+          if (quietTimer) clearTimeout(quietTimer);
+          quietTimer = setTimeout(() => {
+            // Stream quiet: send the next chunk if any, else commit.
+            if (chunkIdx < chunks.length) {
+              declareNextChunk();
+              // Give the next chunk its own quiet window (reset by onEvent).
+              quietTimer = setTimeout(commit, 4000);
+            } else {
+              commit();
+            }
+          }, 1500);
+        },
+      }
+    );
+
+    // Whole-hop hard cap: 45s covers 5 chunks (2000 authors) at ~8s each.
+    const hardTimer = setTimeout(commit, 45000);
+    // Keep hardTimer referenced so lint doesn't flag it; commit clears it
+    // via `clearTimeout(hardTimer)` in the first-pass code path only, so
+    // clear it here after firing regardless:
+    void hardTimer;
+  };
+
+  /** Second-hop completion bookkeeping: clear the in-flight flags exactly
+   * like the first pass does. */
+  const setWotInFlightDone = () => {
+    wotInFlightRef.current = false;
+    setIsFetchingWoT(false);
+  };
+
   const subscribeToContacts = () => {
     if (!user || !user.follows?.length) return;
     // Guard against concurrent subscriptions: webOfTrust isn't set on `user`
@@ -753,6 +916,48 @@ export function ListProvider({ children }: { children: ReactNode }) {
         setUser((prev) =>
           prev ? ({ ...prev, webOfTrust: new Set(union) } as User) : null,
         );
+
+        // ── opt-in second hop ────────────────────────────────────────────
+        // "Expand to 2 degrees": fetch the kind-3 contact lists of the
+        // friends-of-friends this round revealed (top-trust first, chunked
+        // to relay-safe author lists, hard-capped), feed the results into a
+        // fresh worker pass, and commit the enlarged union with the same
+        // grow-only seed rule. The user's own follows' lists were already
+        // fetched by the first pass; hop-2 only adds new sources.
+        // Own the in-flight flag for the hop so a manual recompute can't
+        // double-spawn workers mid-expansion.
+        if (wotTwoDegrees && union.length > 0) {
+          const hop2Sources = rankByTrustForHop2(
+            recommendations,
+            follows,
+            WOT_TWO_DEGREE_MAX_SOURCES
+          );
+          if (hop2Sources.length > 0) {
+            wotInFlightRef.current = true;
+            setIsFetchingWoT(true);
+            fetchSecondHop(pubkey, hop2Sources, union, (hop2Result) => {
+              setWotInFlightDone();
+              if (hop2Result.union.length > 0) {
+                const now = Date.now();
+                void putWotCache({
+                  pubkey,
+                  union: hop2Result.union,
+                  serializedIndex: hop2Result.serializedIndex,
+                  recommendations: hop2Result.recommendations,
+                  time: now,
+                });
+                setWotLastComputed(now);
+              }
+              recommendationsRef.current = hop2Result.recommendations;
+              networkIndexRef.current = deserializeNetworkIndex(hop2Result.serializedIndex);
+              setWotIndexVersion((v) => v + 1);
+              setWotProfileCount(hop2Result.size);
+              setUser((prev) =>
+                prev ? ({ ...prev, webOfTrust: new Set(hop2Result.union) } as User) : null,
+              );
+            });
+          }
+        }
       };
 
       const handle = dataLayer.observe([filter], {
@@ -1148,6 +1353,8 @@ export function ListProvider({ children }: { children: ReactNode }) {
         wotProfileCount,
         wotLastComputed,
         recomputeWebOfTrust,
+        wotTwoDegrees,
+        setWotTwoDegrees,
       }}
     >
       {children}

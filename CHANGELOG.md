@@ -1,3 +1,11 @@
+# 1.16.0
+
+- Bookmarks: save any note, poll, or article with the bookmark button and find them later on the new Bookmarks page (under the profile menu). Bookmarked follow packs are supported too, and bookmark counts show how many people saved the same thing.
+- Mute: mute anyone from the ⋯ menu on a note, comment, or poll (or unmute them from Moderation settings). Muted accounts never trigger notifications and are hidden from comments and likes. Your mute list is private — stored encrypted, readable only by you — and syncs across your devices.
+- Web of Trust filters: new Moderation settings let you restrict comments, likes, and notifications to people in your Web of Trust only. Notifications can be filtered separately for the in-app list and for background push. Outside content isn't even fetched for those surfaces where possible, and the Android background notifier applies the same filter using an efficient compact filter.
+- Larger web of trust (optional): a new "Expand to 2 degrees" switch in Network settings also pulls the contact lists of your friends-of-friends (top 2,000 by trust), making the network — and the filters above — much more complete. Off by default; applies on the next recompute.
+- Fixed a render leak in Moderation settings that stacked listeners on every revisit.
+
 # 1.15.0
 
 - Games: a new Games section with three daily puzzles — 2048, Tetris and a racer. Everyone plays the exact same board and piece sequence for the day, Wordle-style, and you can play offline. Post your run to a daily leaderboard — there's no score-keeping server, so each run records your inputs and anyone can re-play them to verify the score, making the board provably fair.

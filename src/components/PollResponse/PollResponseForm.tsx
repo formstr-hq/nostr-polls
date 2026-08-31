@@ -49,6 +49,8 @@ import { useReports } from "../../hooks/useReports";
 import { ReportDialog } from "../Report/ReportDialog";
 import { ReportReason } from "../../contexts/reports-context";
 import FlagIcon from "@mui/icons-material/Flag";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import { useModeration } from "../../contexts/moderation-context";
 import OverlappingAvatars from "../Common/OverlappingAvatars";
 import { Nip05Badge } from "../Common/Nip05Badge";
 import { RelaySourceModal } from "../Common/RelaySourceModal";
@@ -113,6 +115,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
   const { relays } = useRelays();
   const { followPubkey } = useListContext();
   const { reportEvent, reportUser, isReportedByMe, getWoTReporters, wotReportThreshold, requestUserReportCheck } = useReports();
+  const { isMuted, mutePubkey, unmutePubkey } = useModeration();
   const eventRelays = useEventRelays(pollEvent.id);
   const handleCloseContactWarning = () => setShowContactListWarning(false);
   useBackClose(showContactListWarning, handleCloseContactWarning);
@@ -528,6 +531,19 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                 >
                   <FlagIcon fontSize="small" sx={{ mr: 1 }} />
                   Report author
+                </MenuItem>
+              )}
+              {user && user.pubkey !== pollEvent.pubkey && (
+                <MenuItem
+                  onClick={() => {
+                    setIsDetailsOpen(false);
+                    setAnchorEl(null);
+                    if (isMuted(pollEvent.pubkey)) unmutePubkey(pollEvent.pubkey);
+                    else mutePubkey(pollEvent.pubkey);
+                  }}
+                >
+                  <VisibilityOffIcon fontSize="small" sx={{ mr: 1 }} />
+                  {isMuted(pollEvent.pubkey) ? "Unmute user" : "Mute user"}
                 </MenuItem>
               )}
             </Menu>

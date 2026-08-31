@@ -107,7 +107,7 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
             onScroll={handleScroll}
             display="flex"
             alignItems="center"
-            gap={1.25}
+            gap={2}
             sx={{
               overflowX: "auto",
               WebkitOverflowScrolling: "touch",

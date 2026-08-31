@@ -10,6 +10,7 @@ import {
 import { Event, Filter } from "nostr-tools";
 import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import { collectOnce } from "../dataLayer/collect";
+import { contentPolicy } from "../utils/contentPolicy";
 import { useRelays } from "../hooks/useRelays";
 import { useUserContext } from "../hooks/useUserContext";
 
@@ -111,6 +112,10 @@ export function NostrNotificationsProvider({
       let bumpedUnread = 0;
       for (const ev of events) {
         if (ev.pubkey === user?.pubkey) continue;
+        // Moderation gate: muted authors and (when the notifications toggle is
+        // on) non-WoT authors never enter the in-app list — including events
+        // already pushed by the background worker while the app was closed.
+        if (!contentPolicy.passesForegroundNotif(ev.pubkey, user?.pubkey)) continue;
         if (next.has(ev.id)) continue;
         next.set(ev.id, ev);
         if (ev.created_at > latestNotifTsRef.current) {
@@ -130,6 +135,9 @@ export function NostrNotificationsProvider({
   const pushNotification = useCallback((event: Event) => {
     // Don't notify about your own activity
     if (event.pubkey === user?.pubkey) return;
+    // Moderation gate: muted authors and (when the notifications WoT-only
+    // toggle is on) non-WoT authors are dropped before any state updates.
+    if (!contentPolicy.passesForegroundNotif(event.pubkey, user?.pubkey)) return;
 
     if (event.created_at > latestNotifTsRef.current) {
       latestNotifTsRef.current = event.created_at;
@@ -169,6 +177,11 @@ export function NostrNotificationsProvider({
   //
   const buildFilters = (pubkey: string, since: number): Filter[] => {
     const pollIdArray = Array.from(pollMap.current.keys());
+    // Fetch-level WoT gate: when the in-app notifications toggle is on and
+    // the WoT set is small enough to filter on the wire, restrict `authors`
+    // so non-WoT events are never fetched at all (ingestion in
+    // pushNotification still gates whenever this can't apply).
+    const wotAuthors = contentPolicy.fetchAuthorsFor("notifsForeground");
     const filters: Filter[] = [
       // known notification kinds that tag the user:
       // 1=note/reply, 6=repost, 7=reaction, 16=generic-repost,
@@ -178,6 +191,7 @@ export function NostrNotificationsProvider({
         kinds: [1, 6, 7, 16, 1018, 1068, 1111, 9735, 9802, 30023],
         since,
         "#p": [pubkey],
+        ...(wotAuthors ? { authors: wotAuthors } : {}),
       },
     ];
     // poll responses via #e (catches old votes that predate the #p tag)
@@ -254,6 +268,28 @@ export function NostrNotificationsProvider({
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, relays, fetchPollIds]); // pushNotification intentionally omitted — stable useCallback with no deps
+
+  //
+  // ────────────────────────────────────────────────────────────
+  // Fetch-level WoT gate patch: the WoT set computes asynchronously after the
+  // subscription starts, so when the notifications toggle turns on (or the WoT
+  // finishes computing) and the wire filter can apply, re-declare the standing
+  // filters with an `authors` restriction. Ingestion stays gated either way.
+  // ────────────────────────────────────────────────────────────
+  //
+  const [policyVersion, setPolicyVersion] = useState(contentPolicy.version);
+  useEffect(() => contentPolicy.subscribe(() => setPolicyVersion(contentPolicy.version)), []);
+
+  useEffect(() => {
+    const handle = subHandleRef.current;
+    if (!handle || !user?.pubkey) return;
+    const since = Math.floor((Date.now() - DEFAULT_LOOKBACK_MS) / 1000);
+    try {
+      handle.update(buildFilters(user.pubkey, since));
+    } catch {
+      // ObserveHandle.update is best-effort; ingestion gating still applies.
+    }
+  }, [policyVersion, user?.pubkey]);
 
   //
   // ────────────────────────────────────────────────────────────

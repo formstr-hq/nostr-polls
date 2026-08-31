@@ -2,6 +2,7 @@ import { ReactNode, createContext, useRef, useState, useMemo, useCallback, useEf
 import { Event } from "nostr-tools/lib/types/core";
 import { Profile } from "../nostr/types";
 import { dataLayer, type Filter, type ObserveHandle } from "@formstr/local-relay";
+import { contentPolicy } from "../utils/contentPolicy";
 
 type AppContextInterface = {
   profiles: Map<string, Profile>;
@@ -75,6 +76,14 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   // optimistic removal (e.g. undoing a reaction) sticks even if the worker
   // re-streams the same event before the delete propagates.
   const deletedEventIds = useRef<Set<string>>(new Set());
+
+  // Active account pubkey for the moderation gates below. Read from localStorage
+  // (the signer manager persists it) rather than UserProvider — AppContextProvider
+  // sits above UserProvider in the tree, and the gates are version-bumped via the
+  // contentPolicy singleton anyway, so no reactivity is needed here.
+  const userPubkeyRef = useRef<string | undefined>(
+    localStorage.getItem("pollerama:activeAccount") || undefined
+  );
 
   // Debounce timers — coalesce rapid per-event bumps into a single re-render
   const profilesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -168,7 +177,13 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
       addToInterest(
         interests.current.comments,
         eventId,
-        (ids) => [{ kinds: [1, 1111], "#e": ids }, { kinds: [1111], "#a": ids }],
+        (ids) => {
+          // Fetch-level WoT gate: restrict authors on the wire when the
+          // comments toggle is on and the WoT set is small enough to filter.
+          const authors = contentPolicy.fetchAuthorsFor("comments");
+          const base: Filter[] = [{ kinds: [1, 1111], "#e": ids }, { kinds: [1111], "#a": ids }];
+          return authors ? base.map((f) => ({ ...f, authors })) : base;
+        },
         onDataEvent,
       ),
     [addToInterest, onDataEvent],
@@ -180,7 +195,17 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   );
   const fetchLikesThrottled = useCallback(
     (eventId: string) =>
-      addToInterest(interests.current.likes, eventId, (ids) => [{ kinds: [7], "#e": ids }], onDataEvent),
+      addToInterest(
+        interests.current.likes,
+        eventId,
+        (ids) => {
+          // Fetch-level WoT gate, same as comments.
+          const authors = contentPolicy.fetchAuthorsFor("likes");
+          const base: Filter[] = [{ kinds: [7], "#e": ids }];
+          return authors ? base.map((f) => ({ ...f, authors })) : base;
+        },
+        onDataEvent,
+      ),
     [addToInterest, onDataEvent],
   );
   const fetchZapsThrottled = useCallback(
@@ -265,13 +290,20 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
       const existing = map.get(key) || [];
       if (!existing.find((e) => e.id === event.id)) map.set(key, [...existing, event]);
     };
+    // Ingestion gate: keep own + WoT members when the comments toggle is on;
+    // muted authors are always dropped. (Covers the case the wire filter
+    // can't — WoT set too large for an `authors` filter.)
+    const gate = (event: Event) =>
+      contentPolicy.passes(event.pubkey, "comments", userPubkeyRef.current);
     // Kind 1: index by e-tag
     for (const event of queryStore([1])) {
+      if (!gate(event)) continue;
       const eTag = event.tags.find((tag) => tag[0] === "e");
       if (eTag) addToMap(eTag[1], event);
     }
     // Kind 1111 (NIP-22): index by A/a-tag (addressable ref) AND E/e-tag (event id)
     for (const event of queryStore([1111])) {
+      if (!gate(event)) continue;
       for (const tag of event.tags) {
         if (tag[0] === "A" || tag[0] === "a" || tag[0] === "E" || tag[0] === "e") {
           if (tag[1]) addToMap(tag[1], event);
@@ -308,7 +340,11 @@ export function AppContextProvider({ children }: { children: ReactNode }) {
   const byETag = useCallback(
     (kinds: number[]) => {
       const map = new Map<string, Event[]>();
+      // Ingestion gate applies only to likes (kind 7, the "likes" surface);
+      // zaps/reposts are out of scope for the WoT toggles and stay ungated.
+      const gated = kinds.length === 1 && kinds[0] === 7;
       for (const event of queryStore(kinds)) {
+        if (gated && !contentPolicy.passes(event.pubkey, "likes", userPubkeyRef.current)) continue;
         const eTag = event.tags.find((tag) => tag[0] === "e");
         if (eTag) {
           const targetId = eTag[1];

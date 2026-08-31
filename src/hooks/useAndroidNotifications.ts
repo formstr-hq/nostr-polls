@@ -14,6 +14,9 @@ import { useAppContext } from './useAppContext';
 import { useRelays } from './useRelays';
 import { initLocalNotifications, fireNotification, NotifExtra } from '../services/localNotificationService';
 import { dataLayer } from '@formstr/local-relay';
+import { contentPolicy } from '../utils/contentPolicy';
+import { buildWotBloom } from '../utils/wotBloom';
+import { useModerationVersion } from '../contexts/moderation-context';
 
 const NOTIF_ID_DMS = 1002;
 // Cap how many relays the background worker polls — it opens one socket per relay.
@@ -330,6 +333,31 @@ export function useAndroidNotifications() {
     Preferences.set({ key: 'worker_pubkeys', value: JSON.stringify(pubkeys) });
     if (user?.pubkey) Preferences.set({ key: 'worker_pubkey', value: user.pubkey });
   }, [accounts, user?.pubkey]);
+
+  // Bridge: moderation state for the background worker. Mutes stay a plain
+  // JSON array (small by nature). The WoT union can reach 100k–300k+ pubkeys
+  // at 2nd degree, so it crosses as a bloom filter (~16 bits/entry) instead
+  // of a JSON array — a multi-MB SharedPreferences blob would be re-parsed on
+  // every worker run. False positives only ever risk one stray OS
+  // notification: the in-app list re-filters drained payloads through
+  // contentPolicy with the exact set (see seedFromCache).
+  const mutedVersion = useModerationVersion();
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    // The background/OS-push toggle owns this gate; the in-app toggle is
+    // enforced JS-side on drain (seedFromCache), not here.
+    const notifsOnly = contentPolicy.isWotOnly("notifsBackground");
+    const bloom = notifsOnly ? buildWotBloom(contentPolicy.getWoT()) : null;
+    Preferences.set({ key: 'worker_muted', value: JSON.stringify(contentPolicy.getMuted()) });
+    Preferences.set({
+      key: 'worker_wot_only_notifs',
+      value: JSON.stringify({
+        enabled: notifsOnly && !!bloom,
+        bits: bloom?.bits ?? 0,
+        data: bloom?.data ?? "",
+      }),
+    });
+  }, [mutedVersion, user?.pubkey]);
 
   // Bridge: save a pubkey -> display-name map so the background worker can show
   // "Alice zapped you" instead of a raw pubkey. Names come from the live profile

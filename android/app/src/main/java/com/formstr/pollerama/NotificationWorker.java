@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
+import android.util.Base64;
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
 import androidx.work.Worker;
@@ -45,6 +46,8 @@ public class NotificationWorker extends Worker {
     private static final String KEY_LAST      = "worker_last_check";
     private static final String KEY_PENDING   = "notif_pending_ids";
     private static final String KEY_SEEN_DMS  = "worker_seen_dm_ids";
+    private static final String KEY_MUTED     = "worker_muted";
+    private static final String KEY_WOT_ONLY  = "worker_wot_only_notifs";
     private static final String EVENT_KEY_PREFIX = "notif_event_";
     private static final int    NOTIF_DMS     = 1002;
     private static final long   TIMEOUT_SEC   = 15;
@@ -106,6 +109,22 @@ public class NotificationWorker extends Worker {
             String name = profilesObj.optString(pk, null);
             if (name != null && !name.isEmpty()) profileNames.put(pk, name);
         }
+
+        // Moderation gates, bridged from the JS layer (see useAndroidNotifications):
+        //  - muted authors never notify (nor persist to the in-app queue).
+        //  - when the WoT-only-notifications toggle is on, only WoT members
+        //    notify. The WoT set crosses as a bloom filter (it can hold
+        //    100k+ pubkeys at 2nd degree; a JSON array would be a multi-MB
+        //    prefs blob). False positives = at most one stray OS notification;
+        //    the in-app list re-filters with the exact set on drain.
+        final Set<String> muted = new HashSet<>();
+        JSONArray mutedArr = parseJsonArray(prefs.getString(KEY_MUTED, "[]"));
+        for (int i = 0; i < mutedArr.length(); i++) {
+            String pk = mutedArr.optString(i, null);
+            if (pk != null && !pk.isEmpty()) muted.add(pk);
+        }
+        JSONObject wotOnlyObj = parseJsonObject(prefs.getString(KEY_WOT_ONLY, "{}"));
+        final BloomFilter wotBloom = BloomFilter.fromJson(wotOnlyObj);
 
         long lastCheck = prefs.getLong(KEY_LAST, System.currentTimeMillis() / 1000 - 3600);
         long nowSec    = System.currentTimeMillis() / 1000;
@@ -197,6 +216,12 @@ public class NotificationWorker extends Worker {
                             int kind = event.getInt("kind");
                             // Skip events authored by any of my accounts (won't notify yourself)
                             if (myPubkeys.contains(event.optString("pubkey"))) return;
+                            // Moderation gates: muted authors and (when the
+                            // WoT-only toggle is on) non-WoT authors are
+                            // dropped before dedup/persist/post.
+                            final String author = event.optString("pubkey");
+                            if (muted.contains(author)) return;
+                            if (wotBloom.enabled && !wotBloom.mightContain(author)) return;
                             if (kind == 1059) {
                                 dms.add(event);
                             } else {
@@ -539,5 +564,92 @@ public class NotificationWorker extends Worker {
         String name = profileNames.get(pubkey);
         if (name != null && !name.isEmpty()) return name;
         return pubkey != null && pubkey.length() >= 8 ? pubkey.substring(0, 8) + "…" : "Someone";
+    }
+
+    /**
+     * Bloom filter over the bridged web-of-trust set. The bit layout MUST match
+     * src/utils/wotBloom.ts exactly (frozen wire format v1):
+     *   m = bits (byte-aligned; NOT required to be a power of two — both sides
+     *   use true modulo), k = 11 probes, big-endian u32 slices of the raw
+     *   hex pubkey bytes: h1 = bytes[0..4], h2 = bytes[4..8], each passed
+     *   through MurmurHash3's fmix32, h2 forced odd, idx_i = (h1 + i*h2) mod m,
+     *   bit set at (idx >>> 3) high-to-low: 1 << (idx & 7).
+     * No cryptographic hash — both sides read the same 64 bits off the raw key,
+     * so there is no library-parity risk.
+     */
+    private static final class BloomFilter {
+        final boolean enabled;
+        private final int bits;
+        private final byte[] data;
+
+        private BloomFilter(boolean enabled, int bits, byte[] data) {
+            this.enabled = enabled;
+            this.bits = bits;
+            this.data = data;
+        }
+
+        /** Parse {enabled, bits, data(base64)} bridged from JS. Enabled only
+         * when a usable filter is present (enabled-but-empty falls back to
+         * notifying; the app re-filters on drain). */
+        static BloomFilter fromJson(JSONObject obj) {
+            if (obj == null || !obj.optBoolean("enabled", false)) return disabled();
+            int bits = obj.optInt("bits", 0);
+            String b64 = obj.optString("data", null);
+            if (bits < 1024 || bits % 8 != 0 || b64 == null || b64.isEmpty()) {
+                return disabled();
+            }
+            try {
+                byte[] raw = Base64.decode(b64, Base64.NO_WRAP);
+                if (raw.length != bits / 8) return disabled();
+                return new BloomFilter(true, bits, raw);
+            } catch (Exception e) {
+                return disabled();
+            }
+        }
+
+        static BloomFilter disabled() {
+            return new BloomFilter(false, 0, null);
+        }
+
+        boolean mightContain(String hexPubkey) {
+            if (!enabled || hexPubkey == null || hexPubkey.length() < 16) return !enabled;
+            long h1 = fmix32((int) u32be(hexPubkey, 0));
+            long h2 = fmix32((int) u32be(hexPubkey, 4)) | 1L;
+            for (int i = 0; i < 11; i++) {
+                long idx = (h1 + (long) i * h2) % bits;
+                int bit = (int) (idx & 7);
+                int byi = (int) (idx >>> 3);
+                if ((data[byi] & (1 << bit)) == 0) return false;
+            }
+            return true;
+        }
+
+        /** MurmurHash3 32-bit finalizer — MUST match wotBloom.ts fmix32 (frozen
+         * wire format v1). */
+        private static long fmix32(int h) {
+            int x = h;
+            x ^= x >>> 16;
+            x *= 0x85ebca6b;
+            x ^= x >>> 13;
+            x *= 0xc2b2ae35;
+            x ^= x >>> 16;
+            return x & 0xFFFFFFFFL;
+        }
+
+        /** Big-endian u32 from hex chars [off*2, off*2+8). Hex-decode-free: reads
+         * the same bytes the JS side decodes into its Uint8Array. */
+        private static long u32be(String hex, int off) {
+            int v = 0;
+            for (int i = 0; i < 4; i++) {
+                v = (v << 8) | hexPair(hex, off * 2 + i * 2);
+            }
+            return v & 0xFFFFFFFFL;
+        }
+
+        private static int hexPair(String hex, int off) {
+            int hi = Character.digit(hex.charAt(off), 16);
+            int lo = Character.digit(hex.charAt(off + 1), 16);
+            return (hi << 4) | lo;
+        }
     }
 }

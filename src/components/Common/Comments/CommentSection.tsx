@@ -34,6 +34,8 @@ import CommentInput from "./CommentInput";
 import { extractMentionTags } from '../../EventCreator/MentionTextArea';
 import { getColorsWithTheme } from "../../../styles/theme";
 import { useNotification } from "../../../contexts/notification-context";
+import { useModeration } from "../../../contexts/moderation-context";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import { usePublishDiagnostic } from "../../../hooks/usePublishDiagnostic";
 import { PublishDiagnosticModal } from "../PublishDiagnosticModal";
@@ -99,6 +101,7 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
   const { showNotification } = useNotification();
   const eventRelays = useEventRelays(comment.id);
   const { reportEvent, reportUser } = useReports();
+  const { isMuted, mutePubkey, unmutePubkey } = useModeration();
   const navigate = useNavigate();
 
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
@@ -284,6 +287,18 @@ const CommentCard: React.FC<CommentCardProps> = ({ comment, depth, commentAncest
           <MenuItem onClick={() => { setMenuAnchor(null); setReportUserOpen(true); }} sx={{ color: "error.main" }}>
             <FlagIcon fontSize="small" sx={{ mr: 1 }} />
             Report user
+          </MenuItem>
+        )}
+        {user && !isOwnComment && (
+          <MenuItem
+            onClick={() => {
+              setMenuAnchor(null);
+              if (isMuted(comment.pubkey)) unmutePubkey(comment.pubkey);
+              else mutePubkey(comment.pubkey);
+            }}
+          >
+            <VisibilityOffIcon fontSize="small" sx={{ mr: 1 }} />
+            {isMuted(comment.pubkey) ? "Unmute user" : "Mute user"}
           </MenuItem>
         )}
       </Menu>
