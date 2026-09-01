@@ -1,3 +1,7 @@
+# 1.17.0
+
+- Monero zaps (NIP-A3): add your Monero address in Edit Profile and others can zap you XMR — the zap dialog shows a Sats/Monero toggle whenever the recipient has a Monero address, with XMR presets, custom decimal amounts, and a QR code that opens your wallet (Monerujo etc.) with the amount pre-filled. Payment addresses are published as NIP-A3 payto targets (kind 10133), so other NIP-A3 clients can read them too.
+
 # 1.16.0
 
 - Bookmarks: save any note, poll, or article with the bookmark button and find them later on the new Bookmarks page (under the profile menu). Bookmarked follow packs are supported too, and bookmark counts show how many people saved the same thing.
