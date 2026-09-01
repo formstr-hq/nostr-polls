@@ -15,6 +15,7 @@ import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import ZapModal from "./ZapModal";
 import ZapDetailsModal from "./ZapDetailsModal";
 import { useZaps } from "../../../contexts/ZapProvider";
+import { fetchPaytoTarget } from "../../../utils/payto";
 
 interface ZapProps {
   pollEvent: Event;
@@ -54,6 +55,8 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   const [zapConfirmed, setZapConfirmed] = useState(false);
   // Amount the modal should open at — set by the hold-to-zap ramp.
   const [pendingAmount, setPendingAmount] = useState<number | undefined>(undefined);
+  // Recipient's Monero address from their NIP-A3 payto targets (kind 10133).
+  const [moneroAddress, setMoneroAddress] = useState<string | null>(null);
   const zapSubRef = useRef<ObserveHandle | null>(null);
   const { showNotification } = useNotification();
   const { relays } = useRelays();
@@ -77,6 +80,22 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   useEffect(() => {
     registerEventId(pollEvent.id);
   }, [pollEvent.id, registerEventId]);
+
+  // Fetch the recipient's payto targets once per poll author so the modal can
+  // offer a Monero option when they have one (NIP-A3, kind 10133).
+  useEffect(() => {
+    let cancelled = false;
+    fetchPaytoTarget(pollEvent.pubkey, "monero")
+      .then((target) => {
+        if (!cancelled) setMoneroAddress(target ? target.address : null);
+      })
+      .catch(() => {
+        if (!cancelled) setMoneroAddress(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pollEvent.pubkey]);
 
   // ── Hold-to-zap handlers ──────────────────────────────────────────────────
   // Press and hold the icon: after a short delay the amount ramps up while the
@@ -310,6 +329,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
         recipientName={recipientName}
         zapConfirmed={zapConfirmed}
         initialAmount={pendingAmount}
+        moneroAddress={moneroAddress}
       />
 
       <ZapDetailsModal

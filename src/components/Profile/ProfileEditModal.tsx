@@ -18,6 +18,16 @@ import { signerManager } from "../../singletons/Signer/SignerManager";
 import { useNotification } from "../../contexts/notification-context";
 import { uploadToBlossom, getBlossomServer } from "../../services/blossomService";
 import { signEvent } from "../../nostr";
+import {
+  fetchPaytoEvent,
+  getPaytoTargets,
+  invalidatePaytoCache,
+  isValidMoneroAddressStrict,
+  PAYTO_EVENT_KIND,
+  buildPaytoTags,
+  type PaytoTarget,
+} from "../../utils/payto";
+import { dataLayer } from "@formstr/local-relay";
 
 interface ProfileEditModalProps {
   open: boolean;
@@ -42,6 +52,9 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
   const [website, setWebsite] = useState("");
   const [nip05, setNip05] = useState("");
   const [lud16, setLud16] = useState("");
+  const [moneroAddress, setMoneroAddress] = useState("");
+  // Original monero target (if any) so we can merge with the existing 10133.
+  const [existingTargets, setExistingTargets] = useState<PaytoTarget[]>([]);
 
   useEffect(() => {
     if (open && userProfile) {
@@ -53,6 +66,18 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
       setWebsite(userProfile.website || "");
       setNip05(userProfile.nip05 || "");
       setLud16(userProfile.lud16 || "");
+      // Load any existing payto targets (NIP-A3) so the Monero field is
+      // pre-filled and other target types are preserved on save.
+      setMoneroAddress("");
+      setExistingTargets([]);
+      fetchPaytoEvent(userProfile.pubkey)
+        .then((event) => {
+          const targets = event ? getPaytoTargets(event) : [];
+          setExistingTargets(targets);
+          const monero = targets.find((t) => t.type === "monero");
+          setMoneroAddress(monero ? monero.address : "");
+        })
+        .catch(() => {});
     }
   }, [open, userProfile]);
 
@@ -104,8 +129,48 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
       return;
     }
 
+    const cleanMonero = moneroAddress.trim();
+    if (cleanMonero && !isValidMoneroAddressStrict(cleanMonero)) {
+      showNotification("Monero address looks invalid. It should be a 90-130 character primary or integrated address.", "error");
+      return;
+    }
+
     setLoading(true);
     try {
+      // Publish NIP-A3 payto targets (kind 10133) when the Monero field changed.
+      // Other existing target types are preserved; an empty field removes monero.
+      const prevMonero = existingTargets.find((t) => t.type === "monero");
+      const moneroChanged =
+        (prevMonero?.address || "") !== cleanMonero;
+      if (moneroChanged) {
+        const targets = existingTargets.filter((t) => t.type !== "monero");
+        if (cleanMonero) {
+          targets.push({ type: "monero", address: cleanMonero });
+        }
+        if (targets.length > 0) {
+          const template = {
+            kind: PAYTO_EVENT_KIND,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: buildPaytoTags(targets),
+            content: "",
+          };
+          const signed = await signEvent(template, user.privateKey);
+          await dataLayer.publishEvent(signed);
+          invalidatePaytoCache(user.pubkey, signed);
+        } else if (prevMonero) {
+          // No targets remain — publish an empty 10133 to clear monero off relays.
+          const template = {
+            kind: PAYTO_EVENT_KIND,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [],
+            content: "",
+          };
+          const signed = await signEvent(template, user.privateKey);
+          await dataLayer.publishEvent(signed);
+          invalidatePaytoCache(user.pubkey, signed);
+        }
+      }
+
       await signerManager.publishKind0({
         pubkey: user.pubkey,
         name: name.trim(),
@@ -250,6 +315,15 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
             fullWidth
             size="small"
             placeholder="name@wallet.com"
+          />
+          <TextField
+            label="Monero Address (NIP-A3)"
+            value={moneroAddress}
+            onChange={(e) => setMoneroAddress(e.target.value)}
+            fullWidth
+            size="small"
+            placeholder="4A... (receive Monero zaps)"
+            helperText="Published as a payto target (kind 10133) so others can zap you XMR."
           />
         </Box>
       </DialogContent>
