@@ -1,5 +1,4 @@
 import { Event } from "nostr-tools";
-import { dataLayer } from "@formstr/local-relay";
 import { collectOnce } from "../dataLayer/collect";
 
 // ── NIP-A3: payto: Payment Targets ─────────────────────────────────────────────
