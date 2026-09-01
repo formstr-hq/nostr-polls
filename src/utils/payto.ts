@@ -1,4 +1,5 @@
 import { Event } from "nostr-tools";
+import { dataLayer } from "@formstr/local-relay";
 import { collectOnce } from "../dataLayer/collect";
 
 // ── NIP-A3: payto: Payment Targets ─────────────────────────────────────────────
@@ -66,16 +67,31 @@ export function buildPaytoTags(targets: PaytoTarget[]): string[][] {
 /**
  * Fetch a pubkey's kind 10133 payto targets event (replaceable).
  *
- * NOTE: `dataLayer.fetchReplaceable` is cache-only (localOnly) — it never
- * triggers an upstream relay fetch, so other people's 10133 events would
- * never arrive. Instead we use `collectOnce`, which declares a standing
- * interest (the worker fetches from the user's relays) and resolves once
- * the stream goes quiet. Results are memoized per pubkey: payto targets
- * only change when the owner republishes, and this avoids a relay fetch
- * every time a Zap component mounts.
+ * The worker routes author-scoped reads via the outbox model: it reads the
+ * author's NIP-65 list (kind 10002) from ITS cache and queries their write
+ * relays — but nothing ever fetches other authors' 10002s (enrichment only
+ * covers kind 0). For authors whose relay list isn't cached, the 10133 read
+ * silently falls back to the user's own relays and misses the event.
+ *
+ * So: first warm the author's kind 10002 over the network (declared via a
+ * short-lived interest; collectOnce resolves on stream-quiet), THEN fetch the
+ * 10133. Results are memoized per pubkey so this happens once per author.
  */
 const paytoEventCache = new Map<string, Event | null>();
 const paytoEventInflight = new Map<string, Promise<Event | null>>();
+// Pubkeys we've already network-probed — a miss won't retry until restart.
+const paytoProbed = new Set<string>();
+
+async function warmAuthorRelayList(pubkey: string): Promise<void> {
+  try {
+    await collectOnce([{ kinds: [10002], authors: [pubkey], limit: 1 }], {
+      timeoutMs: 4000,
+      quietMs: 600,
+    });
+  } catch {
+    // best-effort: fall back to the user's own relays for the 10133 read
+  }
+}
 
 export async function fetchPaytoEvent(
   pubkey: string
@@ -88,12 +104,20 @@ export async function fetchPaytoEvent(
   }
   const promise = (async () => {
     try {
-      const [event] = await collectOnce(
-        [{ kinds: [PAYTO_EVENT_KIND], authors: [pubkey], limit: 1 }],
-        { timeoutMs: 4000, quietMs: 700 }
-      );
-      paytoEventCache.set(pubkey, event || null);
-      return event || null;
+      // Cache-only probe first: if the author's relay list or 10133 is already
+      // in the store, the worker can route the 10133 read immediately.
+      let event = await dataLayer.fetchReplaceable(PAYTO_EVENT_KIND, pubkey);
+      if (!event && !paytoProbed.has(pubkey)) {
+        paytoProbed.add(pubkey);
+        await warmAuthorRelayList(pubkey);
+        const [fetched] = await collectOnce(
+          [{ kinds: [PAYTO_EVENT_KIND], authors: [pubkey], limit: 1 }],
+          { timeoutMs: 5000, quietMs: 700 }
+        );
+        event = fetched || null;
+      }
+      paytoEventCache.set(pubkey, event);
+      return event;
     } catch {
       paytoEventCache.set(pubkey, null);
       return null;
