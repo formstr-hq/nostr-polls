@@ -1,5 +1,6 @@
 import { Event } from "nostr-tools";
 import { dataLayer } from "@formstr/local-relay";
+import { collectOnce } from "../dataLayer/collect";
 
 // ── NIP-A3: payto: Payment Targets ─────────────────────────────────────────────
 // Payment targets live in a replaceable kind 10133 event as tags:
@@ -63,9 +64,59 @@ export function buildPaytoTags(targets: PaytoTarget[]): string[][] {
     .map((t) => ["payto", t.type.toLowerCase(), t.address]);
 }
 
-/** Fetch a pubkey's kind 10133 payto targets event (replaceable). */
-export async function fetchPaytoEvent(pubkey: string): Promise<Event | null> {
-  return dataLayer.fetchReplaceable(PAYTO_EVENT_KIND, pubkey);
+/**
+ * Fetch a pubkey's kind 10133 payto targets event (replaceable).
+ *
+ * NOTE: `dataLayer.fetchReplaceable` is cache-only (localOnly) — it never
+ * triggers an upstream relay fetch, so other people's 10133 events would
+ * never arrive. Instead we use `collectOnce`, which declares a standing
+ * interest (the worker fetches from the user's relays) and resolves once
+ * the stream goes quiet. Results are memoized per pubkey: payto targets
+ * only change when the owner republishes, and this avoids a relay fetch
+ * every time a Zap component mounts.
+ */
+const paytoEventCache = new Map<string, Event | null>();
+const paytoEventInflight = new Map<string, Promise<Event | null>>();
+
+export async function fetchPaytoEvent(
+  pubkey: string
+): Promise<Event | null> {
+  if (paytoEventCache.has(pubkey)) {
+    return paytoEventCache.get(pubkey) ?? null;
+  }
+  if (paytoEventInflight.has(pubkey)) {
+    return paytoEventInflight.get(pubkey)!;
+  }
+  const promise = (async () => {
+    try {
+      const [event] = await collectOnce(
+        [{ kinds: [PAYTO_EVENT_KIND], authors: [pubkey], limit: 1 }],
+        { timeoutMs: 4000, quietMs: 700 }
+      );
+      paytoEventCache.set(pubkey, event || null);
+      return event || null;
+    } catch {
+      paytoEventCache.set(pubkey, null);
+      return null;
+    } finally {
+      paytoEventInflight.delete(pubkey);
+    }
+  })();
+  paytoEventInflight.set(pubkey, promise);
+  return promise;
+}
+
+/**
+ * Cache-buster for the fetch memo — after publishing a new 10133 the caller
+ * can seed the cache with the signed event (or clear it) so the next read
+ * reflects the update immediately.
+ */
+export function invalidatePaytoCache(pubkey: string, event?: Event | null) {
+  if (event === undefined) {
+    paytoEventCache.delete(pubkey);
+  } else {
+    paytoEventCache.set(pubkey, event);
+  }
 }
 
 /** Fetch a pubkey's payto targets, or an empty array when none published. */

@@ -21,6 +21,7 @@ import { signEvent } from "../../nostr";
 import {
   fetchPaytoEvent,
   getPaytoTargets,
+  invalidatePaytoCache,
   isValidMoneroAddressStrict,
   PAYTO_EVENT_KIND,
   buildPaytoTags,
@@ -155,6 +156,7 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
           };
           const signed = await signEvent(template, user.privateKey);
           await dataLayer.publishEvent(signed);
+          invalidatePaytoCache(user.pubkey, signed);
         } else if (prevMonero) {
           // No targets remain — publish an empty 10133 to clear monero off relays.
           const template = {
@@ -165,6 +167,7 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
           };
           const signed = await signEvent(template, user.privateKey);
           await dataLayer.publishEvent(signed);
+          invalidatePaytoCache(user.pubkey, signed);
         }
       }
 
