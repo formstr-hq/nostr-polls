@@ -10,6 +10,7 @@ import { getColorsWithTheme } from "../../styles/theme";
 import { NotificationBell } from "./NotificationBell";
 import { useDMContext } from "../../hooks/useDMContext";
 import { SearchModal } from "../Search/SearchModal";
+import { WllamaModelButton } from "./WllamaModelButton";
 
 const StyledAppBar = styled(AppBar)(({ theme }) => {
   return {
@@ -33,6 +34,7 @@ const HeaderCenterSection = styled("div")({
 const HeaderRightSection = styled("div")({
   marginLeft: "auto",
   display: "flex",
+  alignItems: "center",
 });
 
 const LogoAndTitle = styled("div")({
@@ -68,6 +70,7 @@ const Header: React.FC = () => {
             </LogoAndTitle>
           </HeaderCenterSection>
           <HeaderRightSection>
+            <WllamaModelButton />
             <IconButton color="inherit" onClick={() => setSearchOpen(true)}>
               <SearchIcon />
             </IconButton>
