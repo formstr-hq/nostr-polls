@@ -53,6 +53,7 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
   const [nip05, setNip05] = useState("");
   const [lud16, setLud16] = useState("");
   const [moneroAddress, setMoneroAddress] = useState("");
+  const [loadingMonero, setLoadingMonero] = useState(false);
   // Original monero target (if any) so we can merge with the existing 10133.
   const [existingTargets, setExistingTargets] = useState<PaytoTarget[]>([]);
 
@@ -70,14 +71,16 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
       // pre-filled and other target types are preserved on save.
       setMoneroAddress("");
       setExistingTargets([]);
-      fetchPaytoEvent(userProfile.pubkey)
+      setLoadingMonero(true);
+      fetchPaytoEvent(userProfile.pubkey, { forceRefetch: true })
         .then((event) => {
           const targets = event ? getPaytoTargets(event) : [];
           setExistingTargets(targets);
           const monero = targets.find((t) => t.type === "monero");
           setMoneroAddress(monero ? monero.address : "");
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => setLoadingMonero(false));
     }
   }, [open, userProfile]);
 
@@ -324,6 +327,11 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
             size="small"
             placeholder="4A... (receive Monero zaps)"
             helperText="Published as a payto target (kind 10133) so others can zap you XMR."
+            InputProps={{
+              endAdornment: loadingMonero ? (
+                <CircularProgress size={18} />
+              ) : undefined,
+            }}
           />
         </Box>
       </DialogContent>

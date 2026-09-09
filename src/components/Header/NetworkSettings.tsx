@@ -17,6 +17,7 @@ import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import { dataLayer, type Diagnostics, type RelayHealth } from "@formstr/local-relay";
 import { useListContext } from "../../hooks/useListContext";
 import { useUserContext } from "../../hooks/useUserContext";
+import { RelayListEditor } from "./RelayListEditor";
 
 // IndexedDB database the worker persists the shared event store to. Matches
 // `new IndexedDBStorage("shared")` in the worker entry (`pollerama-local-relay`
@@ -217,6 +218,17 @@ export const NetworkSettings: React.FC = () => {
       </Box>
 
       <Divider />
+
+      {/* Relay list editor (NIP-65, kind 10002) — only meaningful when logged in */}
+      {user?.pubkey && (
+        <>
+          <Box>
+            <SectionHeader>Your Relay List (NIP-65)</SectionHeader>
+            <RelayListEditor />
+          </Box>
+          <Divider />
+        </>
+      )}
 
       {/* Web of trust */}
       <Box>

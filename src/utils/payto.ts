@@ -76,6 +76,7 @@ export function buildPaytoTags(targets: PaytoTarget[]): string[][] {
  * So: first warm the author's kind 10002 over the network (declared via a
  * short-lived interest; collectOnce resolves on stream-quiet), THEN fetch the
  * 10133. Results are memoized per pubkey so this happens once per author.
+ * Callers that need a fresh read (profile editor) pass forceRefetch to retry.
  */
 const paytoEventCache = new Map<string, Event | null>();
 const paytoEventInflight = new Map<string, Promise<Event | null>>();
@@ -94,12 +95,19 @@ async function warmAuthorRelayList(pubkey: string): Promise<void> {
 }
 
 export async function fetchPaytoEvent(
-  pubkey: string
+  pubkey: string,
+  options?: { forceRefetch?: boolean }
 ): Promise<Event | null> {
-  if (paytoEventCache.has(pubkey)) {
+  const forceRefetch = options?.forceRefetch ?? false;
+  if (forceRefetch) {
+    // A forced read (e.g. the profile editor reopening) drops the memo and the
+    // probe pin so the network fallback can run again.
+    paytoEventCache.delete(pubkey);
+    paytoProbed.delete(pubkey);
+  } else if (paytoEventCache.has(pubkey)) {
     return paytoEventCache.get(pubkey) ?? null;
   }
-  if (paytoEventInflight.has(pubkey)) {
+  if (!forceRefetch && paytoEventInflight.has(pubkey)) {
     return paytoEventInflight.get(pubkey)!;
   }
   const promise = (async () => {
