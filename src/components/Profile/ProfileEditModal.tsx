@@ -59,6 +59,9 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
 
   useEffect(() => {
     if (open && userProfile) {
+      // The parsed kind-0 content historically lacked a pubkey; fall back to
+      // the signed-in user so the payto fetch is keyed on a real pubkey.
+      const profilePubkey = userProfile.pubkey || user?.pubkey || "";
       setName(userProfile.name || "");
       setDisplayName(userProfile.display_name || "");
       setAbout(userProfile.about || "");
@@ -71,8 +74,12 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
       // pre-filled and other target types are preserved on save.
       setMoneroAddress("");
       setExistingTargets([]);
+      if (!profilePubkey) {
+        setLoadingMonero(false);
+        return;
+      }
       setLoadingMonero(true);
-      fetchPaytoEvent(userProfile.pubkey, { forceRefetch: true })
+      fetchPaytoEvent(profilePubkey, { forceRefetch: true })
         .then((event) => {
           const targets = event ? getPaytoTargets(event) : [];
           setExistingTargets(targets);
@@ -82,7 +89,7 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
         .catch(() => {})
         .finally(() => setLoadingMonero(false));
     }
-  }, [open, userProfile]);
+  }, [open, userProfile, user?.pubkey]);
 
   const [uploadingField, setUploadingField] = useState<"picture" | "banner" | null>(null);
 
