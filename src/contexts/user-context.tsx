@@ -132,6 +132,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
         return next;
       });
       setAccounts([...signerManager.getAccounts()]);
+      // Keep the payto self-read registration in step with account changes.
+      registerPaytoOwnPubkey(signerManager.getUser()?.pubkey ?? null);
       // A successful unlock fires the package signer's login event, which lands
       // here. If a passphrase prompt was awaiting that unlock, close it.
       if (signerManager.getUser()) {
