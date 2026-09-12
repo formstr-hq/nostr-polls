@@ -11,6 +11,7 @@ import {
   type SignerMismatchInfo,
 } from "../singletons/Signer/SignerManager";
 import { readCachedContacts } from "../nostr/contactsCache";
+import { registerPaytoOwnPubkey } from "../utils/payto";
 
 export type User = {
   name?: string;
@@ -131,6 +132,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
         return next;
       });
       setAccounts([...signerManager.getAccounts()]);
+      // Keep the payto self-read registration in step with account changes.
+      registerPaytoOwnPubkey(signerManager.getUser()?.pubkey ?? null);
       // A successful unlock fires the package signer's login event, which lands
       // here. If a passphrase prompt was awaiting that unlock, close it.
       if (signerManager.getUser()) {
@@ -139,6 +142,10 @@ export function UserProvider({ children }: { children: ReactNode }) {
         setPassphraseRequest(null);
       }
     });
+
+    // Let payto fetches know who "self" is: self-reads skip the NIP-65 warm
+    // step so they hit the user's own relays instead of outbox routing.
+    registerPaytoOwnPubkey(signerManager.getUser()?.pubkey ?? null);
   }, []);
 
   const requestLogin = () => setLoginModalOpen(true);

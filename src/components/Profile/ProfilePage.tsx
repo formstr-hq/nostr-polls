@@ -193,7 +193,12 @@ const ProfilePage: React.FC = () => {
         // previously visited profile).
         const cached = await dataLayer.fetchReplaceable(0, extractedPubkey);
         if (cached) {
-          setProfile(JSON.parse(cached.content || "{}"));
+          // The parsed kind-0 content has no pubkey — add it so consumers
+          // (e.g. the profile editor's payto fetch) can key off this profile.
+          setProfile({
+            ...JSON.parse(cached.content || "{}"),
+            pubkey: extractedPubkey,
+          });
           setLoading(false);
           return;
         }
@@ -201,7 +206,10 @@ const ProfilePage: React.FC = () => {
         // Not in cache — fetch from relays using the current relay list.
         const profileEvent = await fetchUserProfile(extractedPubkey, relaysRef.current);
         if (profileEvent) {
-          setProfile(JSON.parse(profileEvent.content || "{}"));
+          setProfile({
+            ...JSON.parse(profileEvent.content || "{}"),
+            pubkey: extractedPubkey,
+          });
         }
 
         setLoading(false);

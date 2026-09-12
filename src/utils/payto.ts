@@ -76,13 +76,31 @@ export function buildPaytoTags(targets: PaytoTarget[]): string[][] {
  * So: first warm the author's kind 10002 over the network (declared via a
  * short-lived interest; collectOnce resolves on stream-quiet), THEN fetch the
  * 10133. Results are memoized per pubkey so this happens once per author.
+ * Callers that need a fresh read (profile editor) pass forceRefetch to retry.
+ *
+ * The warm step is skipped for the user's OWN pubkey, and a self miss falls
+ * back to an AUTHOR-LESS read: the worker routes author-less filters to the
+ * user's own relays, where self-published events actually landed (publish
+ * targets are write ∪ user relays, and write relays may have rejected the
+ * publish — an outright rejection creates no retry debt). Author-scoped reads
+ * for self would instead be pinned to the NIP-65 write relays only and miss.
  */
 const paytoEventCache = new Map<string, Event | null>();
+const paytoEventCacheAt = new Map<string, number>();
 const paytoEventInflight = new Map<string, Promise<Event | null>>();
 // Pubkeys we've already network-probed — a miss won't retry until restart.
 const paytoProbed = new Set<string>();
+// The signed-in user's pubkey, registered by UserProvider at session start.
+let ownPubkey: string | null = null;
+/** How long a memoized miss blocks re-probing (a republish should show up). */
+const MISS_TTL_MS = 30_000;
+
+export function registerPaytoOwnPubkey(pubkey: string | null): void {
+  ownPubkey = pubkey;
+}
 
 async function warmAuthorRelayList(pubkey: string): Promise<void> {
+  if (pubkey === ownPubkey) return; // self-read races both legs instead
   try {
     await collectOnce([{ kinds: [10002], authors: [pubkey], limit: 1 }], {
       timeoutMs: 4000,
@@ -93,13 +111,57 @@ async function warmAuthorRelayList(pubkey: string): Promise<void> {
   }
 }
 
+/**
+ * Self path: the author-scoped leg (outbox-routed to NIP-65 write relays) and
+ * the author-less leg (routed to our own relays) race CONCURRENTLY. Serial
+ * fallback gave the first leg the full timeout budget; on a cold socket both
+ * legs can miss individually while together they'd win — and a first-open
+ * miss made the editor look broken until a second open (store replay).
+ */
+function fetchSelfPaytoEvent(pubkey: string): Promise<Event | null> {
+  const scoped = collectOnce(
+    [{ kinds: [PAYTO_EVENT_KIND], authors: [pubkey], limit: 1 }],
+    { timeoutMs: 6000, quietMs: 700 }
+  )
+    .then((evts) => evts[0] ?? null)
+    .catch(() => null);
+  const authorless = collectOnce(
+    [{ kinds: [PAYTO_EVENT_KIND], limit: 1 }],
+    { timeoutMs: 6000, quietMs: 700 }
+  )
+    .then((evts) => evts.find((e) => e.pubkey === pubkey) ?? null)
+    .catch(() => null);
+  return Promise.all([scoped, authorless]).then(([a, b]) => a ?? b ?? null);
+}
+
 export async function fetchPaytoEvent(
-  pubkey: string
+  pubkey: string,
+  options?: { forceRefetch?: boolean }
 ): Promise<Event | null> {
-  if (paytoEventCache.has(pubkey)) {
-    return paytoEventCache.get(pubkey) ?? null;
+  const forceRefetch = options?.forceRefetch ?? false;
+  const cached = paytoEventCache.get(pubkey) ?? null;
+  if (forceRefetch) {
+    // Only a memoized MISS (or no entry) needs dropping so the editor retries.
+    // A positive hit stays authoritative: discarding it here meant a good
+    // value seeded by the zap path could be lost to a failed refresh, making
+    // the first editor open show empty until a second open re-read the store.
+    if (!cached) {
+      paytoEventCache.delete(pubkey);
+      paytoEventCacheAt.delete(pubkey);
+      paytoProbed.delete(pubkey);
+    }
+  } else if (paytoEventCache.has(pubkey)) {
+    // Memoized misses expire so a republish becomes visible; hits stick.
+    const cachedAt = paytoEventCacheAt.get(pubkey) ?? 0;
+    const isMiss = cached === null;
+    if (!isMiss || Date.now() - cachedAt < MISS_TTL_MS) {
+      return cached;
+    }
+    paytoEventCache.delete(pubkey);
+    paytoEventCacheAt.delete(pubkey);
+    paytoProbed.delete(pubkey);
   }
-  if (paytoEventInflight.has(pubkey)) {
+  if (!forceRefetch && paytoEventInflight.has(pubkey)) {
     return paytoEventInflight.get(pubkey)!;
   }
   const promise = (async () => {
@@ -109,17 +171,31 @@ export async function fetchPaytoEvent(
       let event = await dataLayer.fetchReplaceable(PAYTO_EVENT_KIND, pubkey);
       if (!event && !paytoProbed.has(pubkey)) {
         paytoProbed.add(pubkey);
-        await warmAuthorRelayList(pubkey);
-        const [fetched] = await collectOnce(
-          [{ kinds: [PAYTO_EVENT_KIND], authors: [pubkey], limit: 1 }],
-          { timeoutMs: 5000, quietMs: 700 }
-        );
-        event = fetched || null;
+        event =
+          pubkey === ownPubkey
+            ? await fetchSelfPaytoEvent(pubkey)
+            : await (async () => {
+                await warmAuthorRelayList(pubkey);
+                const [fetched] = await collectOnce(
+                  [{ kinds: [PAYTO_EVENT_KIND], authors: [pubkey], limit: 1 }],
+                  { timeoutMs: 5000, quietMs: 700 }
+                );
+                return fetched || null;
+              })();
       }
+      // A failed refresh must never lose an already-known target.
+      if (!event && cached) event = cached;
       paytoEventCache.set(pubkey, event);
+      paytoEventCacheAt.set(pubkey, Date.now());
       return event;
     } catch {
+      if (cached) {
+        paytoEventCache.set(pubkey, cached);
+        paytoEventCacheAt.set(pubkey, Date.now());
+        return cached;
+      }
       paytoEventCache.set(pubkey, null);
+      paytoEventCacheAt.set(pubkey, Date.now());
       return null;
     } finally {
       paytoEventInflight.delete(pubkey);
@@ -137,8 +213,10 @@ export async function fetchPaytoEvent(
 export function invalidatePaytoCache(pubkey: string, event?: Event | null) {
   if (event === undefined) {
     paytoEventCache.delete(pubkey);
+    paytoEventCacheAt.delete(pubkey);
   } else {
     paytoEventCache.set(pubkey, event);
+    paytoEventCacheAt.set(pubkey, Date.now());
   }
 }
 

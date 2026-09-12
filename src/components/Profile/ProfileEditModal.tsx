@@ -53,11 +53,15 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
   const [nip05, setNip05] = useState("");
   const [lud16, setLud16] = useState("");
   const [moneroAddress, setMoneroAddress] = useState("");
+  const [loadingMonero, setLoadingMonero] = useState(false);
   // Original monero target (if any) so we can merge with the existing 10133.
   const [existingTargets, setExistingTargets] = useState<PaytoTarget[]>([]);
 
   useEffect(() => {
     if (open && userProfile) {
+      // The parsed kind-0 content historically lacked a pubkey; fall back to
+      // the signed-in user so the payto fetch is keyed on a real pubkey.
+      const profilePubkey = userProfile.pubkey || user?.pubkey || "";
       setName(userProfile.name || "");
       setDisplayName(userProfile.display_name || "");
       setAbout(userProfile.about || "");
@@ -70,16 +74,22 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
       // pre-filled and other target types are preserved on save.
       setMoneroAddress("");
       setExistingTargets([]);
-      fetchPaytoEvent(userProfile.pubkey)
+      if (!profilePubkey) {
+        setLoadingMonero(false);
+        return;
+      }
+      setLoadingMonero(true);
+      fetchPaytoEvent(profilePubkey, { forceRefetch: true })
         .then((event) => {
           const targets = event ? getPaytoTargets(event) : [];
           setExistingTargets(targets);
           const monero = targets.find((t) => t.type === "monero");
           setMoneroAddress(monero ? monero.address : "");
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => setLoadingMonero(false));
     }
-  }, [open, userProfile]);
+  }, [open, userProfile, user?.pubkey]);
 
   const [uploadingField, setUploadingField] = useState<"picture" | "banner" | null>(null);
 
@@ -324,6 +334,11 @@ export const ProfileEditModal: React.FC<ProfileEditModalProps> = ({
             size="small"
             placeholder="4A... (receive Monero zaps)"
             helperText="Published as a payto target (kind 10133) so others can zap you XMR."
+            InputProps={{
+              endAdornment: loadingMonero ? (
+                <CircularProgress size={18} />
+              ) : undefined,
+            }}
           />
         </Box>
       </DialogContent>
