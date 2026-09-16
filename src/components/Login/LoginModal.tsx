@@ -363,6 +363,33 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           />
         )}
 
+        {/* Browser NIP-55: an Android signer app reached from the browser via
+            `nostrsigner` intents + clipboard. Only offered in an Android
+            browser with clipboard access — false on desktop and inside the
+            native shell, where the installed-signer rows above take over. */}
+        {!isNative && signerManager.getPackageSigner().supportsNip55Web() && (
+          <OptionButton
+            icon={<PhonelinkLockOutlinedIcon />}
+            title="Signer App"
+            description="Amber or another NIP-55 app on this device"
+            accentColor={theme.palette.secondary.main}
+            accentAlpha={accentAlpha}
+            onClick={async () => {
+              setError("");
+              setErrorDetails(null);
+              try {
+                await signerManager.runLogin((s) => s.loginWithNip55Web());
+                finishLogin();
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                setError(`Signer sign-in failed: ${msg}`);
+                setErrorDetails(formatErrorDetails(err));
+                console.error("[NIP-55 web sign-in]", err);
+              }
+            }}
+          />
+        )}
+
         <Box>
           <OptionButton
             icon={<HubOutlinedIcon />}
