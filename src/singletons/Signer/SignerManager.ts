@@ -66,8 +66,11 @@ export const signerTransportPool = new SimplePool();
 // (UserMenu, user-context) don't need to change call sites.
 // ---------------------------------------------------------------------------
 
-/** Method values exposed to consumers. Mirrors the package's `LoginMethod`. */
-export type LoginMethod = "extension" | "nip46" | "android" | "ncryptsec";
+/**
+ * Method values exposed to consumers. Mirrors the package's `LoginMethod`,
+ * including `nip55-web` (browser NIP-55: intents + clipboard, no Capacitor).
+ */
+export type LoginMethod = "extension" | "nip46" | "android" | "nip55-web" | "ncryptsec";
 
 export type StoredAccount = {
   pubkey: string;
