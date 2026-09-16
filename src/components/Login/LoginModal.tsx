@@ -122,6 +122,11 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const isDark = theme.palette.mode === "dark";
   const accentAlpha = isDark ? "22" : "18";
 
+  // Browser NIP-55: hidden in the native shell (the installed-signer rows take
+  // over) and warned about on Firefox for Android, which cannot read the
+  // clipboard. `visible` gates rendering; `warning` does not disable the row.
+  const nip55Web = signerManager.getPackageSigner().nip55WebSupport();
+
   const toggleSection = (section: Exclude<ExpandedSection, null>) => {
     setError("");
     setErrorDetails(null);
@@ -364,30 +369,37 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
         )}
 
         {/* Browser NIP-55: an Android signer app reached from the browser via
-            `nostrsigner` intents + clipboard. Only offered in an Android
-            browser with clipboard access — false on desktop and inside the
-            native shell, where the installed-signer rows above take over. */}
-        {!isNative && signerManager.getPackageSigner().supportsNip55Web() && (
-          <OptionButton
-            icon={<PhonelinkLockOutlinedIcon />}
-            title="Signer App"
-            description="Amber or another NIP-55 app on this device"
-            accentColor={theme.palette.secondary.main}
-            accentAlpha={accentAlpha}
-            onClick={async () => {
-              setError("");
-              setErrorDetails(null);
-              try {
-                await signerManager.runLogin((s) => s.loginWithNip55Web());
-                finishLogin();
-              } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                setError(`Signer sign-in failed: ${msg}`);
-                setErrorDetails(formatErrorDetails(err));
-                console.error("[NIP-55 web sign-in]", err);
-              }
-            }}
-          />
+            `nostrsigner` intents + clipboard. Hidden on desktop and inside the
+            native shell (where the installed-signer rows above take over),
+            warned about on Firefox for Android. */}
+        {!isNative && nip55Web.visible && (
+          <>
+            <OptionButton
+              icon={<PhonelinkLockOutlinedIcon />}
+              title="Signer App"
+              description="Amber or another NIP-55 app on this device"
+              accentColor={theme.palette.secondary.main}
+              accentAlpha={accentAlpha}
+              onClick={async () => {
+                setError("");
+                setErrorDetails(null);
+                try {
+                  await signerManager.runLogin((s) => s.loginWithNip55Web());
+                  finishLogin();
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  setError(`Signer sign-in failed: ${msg}`);
+                  setErrorDetails(formatErrorDetails(err));
+                  console.error("[NIP-55 web sign-in]", err);
+                }
+              }}
+            />
+            {nip55Web.warning && (
+              <Alert severity="warning" sx={{ mx: 2, mb: 1 }}>
+                {nip55Web.warning}
+              </Alert>
+            )}
+          </>
         )}
 
         <Box>
