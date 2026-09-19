@@ -5,6 +5,7 @@ import { signerManager } from "../singletons/Signer/SignerManager";
 import { withClientTag } from "../services/clientTagSettings";
 
 export const defaultRelays = [
+  "wss://relay.formstr.app",
   "wss://relay.damus.io/",
   "wss://relay.primal.net/",
   "wss://nos.lol",
