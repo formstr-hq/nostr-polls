@@ -23,6 +23,7 @@ import HowToVoteOutlinedIcon from "@mui/icons-material/HowToVoteOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { QRCodeSVG } from "qrcode.react";
 import { signerManager, signerTransportPool } from "../../singletons/Signer/SignerManager";
+import { nip46Relays } from "../../nostr";
 import { useUserContext } from "../../hooks/useUserContext";
 import { CreateAccountModal } from "./CreateAccountModal";
 import { isAndroidNative, isNative } from "../../utils/platform";
@@ -84,7 +85,9 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const [bunkerUri, setBunkerUri] = useState("");
   const [ncryptsec, setNcryptsec] = useState("");
   const [ncryptsecPass, setNcryptsecPass] = useState("");
-  const [qrRelays, setQrRelays] = useState("wss://relay.nsec.app");
+  // NIP-46 pairing relay(s) offered by default. Kept in sync with the app's
+  // relay config; the field stays editable so users can point at another relay.
+  const [qrRelays, setQrRelays] = useState(nip46Relays.join(", "));
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
@@ -211,7 +214,19 @@ export const LoginModal: React.FC<Props> = ({ open, onClose }) => {
       finishLogin();
     } catch (err: any) {
       if (err?.name !== "AbortError") {
-        setError(err?.message ?? "Remote signer pairing failed.");
+        // The transport layer surfaces relay failures as a bare
+        // "subscription closed before connection was established." with no
+        // hint that the relay is the problem — call that out explicitly.
+        const detail =
+          err?.message ?? "Remote signer pairing failed.";
+        const relayProblem = /subscription closed|connection failed/i.test(
+          detail,
+        );
+        setError(
+          relayProblem
+            ? `Couldn't reach the pairing relay. Some public relays are offline or don't support NIP-46 (kind 24133) — try a different relay above.\n\n(${detail})`
+            : detail,
+        );
         console.error(err);
       }
       setQrUri(null);

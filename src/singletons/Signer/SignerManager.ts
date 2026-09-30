@@ -177,6 +177,13 @@ class SignerManager {
    * calls (e.g. several sign actions queued while a modal is open).
    */
   private mismatchPending = false;
+  /**
+   * In-flight login-modal wait, shared so concurrent `getSigner()` callers all
+   * await ONE open modal. Without this, the second caller would overwrite the
+   * first's resolver in `user-context` and the first would hang forever. Reset
+   * as soon as the modal resolves (i.e. the user finished or dismissed it).
+   */
+  private loginModalPending: Promise<void> | null = null;
   /** Legacy nsec/guest accounts awaiting interactive passphrase migration. */
   private pendingMigrations: PendingMigration[] = [];
   /**
@@ -381,9 +388,9 @@ class SignerManager {
     const active = this.signer.getActiveSigner();
     if (active) return active;
 
-    // No active signer — the recovery paths below all mutate active state,
-    // so acquire the lock before they touch the package signer.
-    return this.withSignerLock(async () => {
+    // Everything that can recover a signer WITHOUT user interaction runs under
+    // the lock. The login modal is deliberately NOT opened in here — see below.
+    const recovered = await this.withSignerLock(async () => {
       // Re-check inside the lock: another caller may have unlocked already
       // while we were waiting.
       const alreadyActive = this.signer.getActiveSigner();
@@ -424,15 +431,37 @@ class SignerManager {
         if (migrated) return migrated;
       }
 
-      // Case 3: no account at all — open the login modal.
-      if (this.loginModalCallback) {
-        await this.loginModalCallback();
-        const after = this.signer.getActiveSigner();
-        if (after) return after;
-      }
-
-      throw new Error("No signer available and no login flow registered.");
+      // Case 3 needs the login modal, which must be awaited outside the lock.
+      return null;
     });
+
+    if (recovered) return recovered;
+
+    // Case 3: no account at all — open the login modal. This MUST happen
+    // OUTSIDE `withSignerLock`: the modal's login flows (notably the NIP-46
+    // nostrconnect QR, which awaits `runLogin` → `withSignerLock`) need the
+    // lock to hand back, so holding it while awaiting the modal deadlocks the
+    // login — `onUri` never fires and the QR never renders. Once the modal
+    // resolves, the login flow has already committed the active signer under
+    // the lock, so reading it here is safe.
+    //
+    // Concurrent callers share a single modal wait (see `loginModalPending`);
+    // otherwise the second caller would re-register the modal resolver and the
+    // first would never resolve.
+    if (this.loginModalCallback) {
+      if (!this.loginModalPending) {
+        this.loginModalPending = Promise.resolve()
+          .then(() => this.loginModalCallback!())
+          .finally(() => {
+            this.loginModalPending = null;
+          });
+      }
+      await this.loginModalPending;
+      const after = this.signer.getActiveSigner();
+      if (after) return after;
+    }
+
+    throw new Error("No signer available and no login flow registered.");
   }
 
   async publishKind0(user: User): Promise<void> {

@@ -16,6 +16,17 @@ export const defaultRelays = [
   // relay.nostr.band removed — confirmed dead
 ];
 
+/**
+ * Default relay for the NIP-46 `nostrconnect://` QR pairing flow.
+ *
+ * Kept to a single, known-good relay: the pairing subscription fails outright
+ * if any relay in the list is unreachable, so adding extra public relays only
+ * adds failure modes. The app's own relay handles kind:24133 RPC reliably.
+ * The former hardcoded default, `relay.nsec.app`, was decommissioned and
+ * silently broke every QR login. Users can still edit the field before pairing.
+ */
+export const nip46Relays = ["wss://relay.formstr.app"];
+
 // Relays that support NIP-50 free-text search
 export const searchRelays = [
   "wss://relay.noswhere.com",
