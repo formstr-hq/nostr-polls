@@ -142,3 +142,89 @@ export async function sendTypingPing(
     declined.add(peer);
   }
 }
+// --- presence (ping-pong) ----------------------------------------------------
+//
+// Online status rides the same wrapped pipeline as typing: an ephemeral ping
+// key (bound once per session by the real key) seals a kind-20001 rumor that
+// carries a t="presence" tag. Sharing is strictly opt-in per contact — the
+// toggle lives in the chat header, off for everyone by default. The receiver
+// observes wraps addressed to it; no consent needed to SEE a peer who opted in.
+
+/** Relay TTL for a presence ping. */
+const PRESENCE_PING_EXPIRY_S = 45;
+
+function presenceStoreKey(myPk: string): string {
+  return "presence:send:" + myPk;
+}
+
+/** Peers the user opted into sharing their presence with (default: none). */
+export function presenceSendPeers(myPk: string): string[] {
+  try {
+    const raw = localStorage.getItem(presenceStoreKey(myPk));
+    const arr = raw ? (JSON.parse(raw) as unknown) : [];
+    if (Array.isArray(arr)) {
+      return arr.filter((x): x is string => typeof x === "string");
+    }
+  } catch {
+    // corrupted store — treat as empty
+  }
+  return [];
+}
+
+export function isPresenceSendEnabled(myPk: string, peerPk: string): boolean {
+  return presenceSendPeers(myPk).some((p) => p === peerPk);
+}
+
+export function setPresenceSendEnabled(
+  myPk: string,
+  peerPk: string,
+  on: boolean
+): void {
+  const peers = presenceSendPeers(myPk);
+  let next: string[];
+  if (on && !peers.some((p) => p === peerPk)) {
+    next = peers.concat([peerPk]);
+  } else if (!on) {
+    next = peers.filter((p) => p !== peerPk);
+  } else {
+    next = peers;
+  }
+  try {
+    localStorage.setItem(presenceStoreKey(myPk), JSON.stringify(next));
+  } catch {
+    // storage unavailable (private mode) — toggle is session-scoped then
+  }
+}
+
+/**
+ * Publish one presence ping to `peer` — same ephemeral binding as typing,
+ * signer-free beyond the once-per-session binding prompt. Self-skips while
+ * the app is hidden: presence means "my app is reachable right now", and the
+ * socket pause/resume handling keeps the radio quiet while it isn't.
+ */
+export async function sendPresencePing(
+  peer: string,
+  realPk: string,
+  privateKey?: string
+): Promise<void> {
+  if (declined.has(peer)) return;
+  if (
+    typeof document !== "undefined" &&
+    document.visibilityState === "hidden"
+  ) {
+    return;
+  }
+  try {
+    const session = await ensureTypingSession(peer, realPk, privateKey);
+    const nowS = Math.floor(Date.now() / 1000);
+    const rumor = createRumor(session.pk, peer, "", undefined, 20001, [
+      ["expiration", String(nowS + PRESENCE_PING_EXPIRY_S)],
+      ["t", "presence"],
+    ]);
+    await publishLocalSignedWraps(session.sk, rumor, [peer]);
+  } catch {
+    // Binding refused or publish failed — presence is cosmetic; stay quiet
+    // for the session instead of re-prompting on every tick.
+    declined.add(peer);
+  }
+}

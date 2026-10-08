@@ -11,7 +11,7 @@ import { Event } from "nostr-tools";
 import { useUserContext } from "../hooks/useUserContext";
 import { dataLayer, type ObserveHandle, type PublishResult } from "@formstr/local-relay";
 import { useRelayRefresh } from "../dataLayer/hooks";
-import { postRelayWorkerFrame } from "../dataLayer/bootstrap";
+import { postRelayWorkerFrame, nudgeRelaySync } from "../dataLayer/bootstrap";
 import {
   unwrapGiftWrap,
   wrapAndSendDM,
@@ -19,6 +19,7 @@ import {
   wrapAndSendFile,
   getConversationId,
   parseTypingKeyRumor,
+  isPresencePingRumor,
   Rumor,
 } from "../nostr/nip17";
 import {
@@ -28,7 +29,13 @@ import {
   uploadToBlossom,
   measureImageDim,
 } from "../nostr/fileMessage";
-import { sendTypingPing, resetTypingSessions } from "../nostr/typing";
+import {
+  sendTypingPing,
+  sendPresencePing,
+  presenceSendPeers,
+  setPresenceSendEnabled,
+  resetTypingSessions,
+} from "../nostr/typing";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
@@ -98,6 +105,10 @@ interface DMContextInterface {
   notifyTyping: (peerPubkey: string) => void;
   /** peer pubkey -> epoch ms until which their "typing…" state is live. */
   typingPeers: Map<string, number>;
+  /** peer pubkey -> epoch ms until which their "online" state is live. */
+  presencePeers: Map<string, number>;
+  /** Opt MY account into sharing presence with one peer (off by default). */
+  setPresenceFor: (peerPubkey: string, on: boolean) => void;
   /** Fetch the next older window of gift wraps (until-cursor pagination). */
   loadOlder: () => void;
   /** True while an older window is being fetched. */
@@ -152,6 +163,14 @@ const DM_PAGE = 100;
  * is ~30s (relay shed horizon); the UI cadence should be snappier.
  */
 const TYPING_VISIBLE_MS = 6000;
+
+/**
+ * Presence pings land every ~30s while the sender's app is visible; 90s of
+ * grace (≈3 missed pings) before a peer drops back to offline.
+ */
+const PRESENCE_ONLINE_MS = 90 * 1000;
+/** Re-open all upstream sockets after this long, while foregrounded. */
+const KEEPALIVE_INTERVAL_MS = 3 * 60 * 1000;
 
 /**
  * Merge the already-sorted messages array with a small ascending batch without
@@ -230,8 +249,18 @@ export function DMProvider({ children }: { children: ReactNode }) {
   // Wrapped pings that raced ahead of their binding wrap: ephemeralPk ->
   // held pings, flushed when the binding lands (or dropped on expiry).
   const pendingTypingRef = useRef(
-    new Map<string, Array<{ expiresAtMs: number; wrapId: string }>>()
+    new Map<
+      string,
+      Array<{ expiresAtMs: number; wrapId: string; presence: boolean }>
+    >()
   );
+  // Presence (ping-pong): peer -> epoch ms until which their last wrapped
+  // ping keeps them "online". Memory-only, like typing state.
+  const [presencePeers, setPresencePeers] = useState<Map<string, number>>(
+    () => new Map<string, number>()
+  );
+  const presencePeersRef = useRef(presencePeers);
+  presencePeersRef.current = presencePeers;
   useEffect(() => {
     const t = setInterval(() => {
       const now = Date.now();
@@ -545,6 +574,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
       typingKeyBindingsRef.current.clear();
       pendingTypingRef.current.clear();
       resetTypingSessions();
+      const emptyPresence = new Map<string, number>();
+      presencePeersRef.current = emptyPresence;
+      setPresencePeers(emptyPresence);
     }
 
     // Follow list feeds the cold-wrap warmth check. One query per session,
@@ -621,6 +653,40 @@ export function DMProvider({ children }: { children: ReactNode }) {
     };
     const sweepTimer = setInterval(sweepColdWraps, 10 * 60 * 1000);
 
+    // Presence ping-pong: opt-in per contact (off by default). Pings go out
+    // every 30s while the app is visible — presence means "my app is
+    // reachable now", so hidden/backgrounded sessions stay silent.
+    const sendPresenceTick = () => {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+      const peers = presenceSendPeers(myPubkey);
+      for (const peer of peers) {
+        void sendPresencePing(peer, myPubkey, user?.privateKey);
+      }
+    };
+    const presenceTimer = setInterval(sendPresenceTick, 30 * 1000);
+    sendPresenceTick();
+
+    // Foreground keepalive: a socket can die half-open (network switch,
+    // relay restart, mobile power-save) without ever firing onclose — the
+    // SDK only reconnects on a real close, so subscriptions silently rot and
+    // live messages stop arriving. pause() tears down every upstream socket;
+    // resume() reopens standing interests and replays the REQs. Hidden tabs
+    // skip it (bootstrap already pauses on backgrounding; visibilitychange
+    // resumes on return).
+    const keepaliveTimer = setInterval(() => {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible"
+      ) {
+        nudgeRelaySync();
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+
     const startSubscription = async () => {
       setLoading(true);
 
@@ -645,16 +711,29 @@ export function DMProvider({ children }: { children: ReactNode }) {
                 return new Map(prev).set(peer, expiresAtMs);
               });
             };
+            const applyPresenceState = (peer: string, untilMs: number) => {
+              if ((presencePeersRef.current.get(peer) ?? 0) >= untilMs) return;
+              setPresencePeers((prev) => {
+                if ((prev.get(peer) ?? 0) >= untilMs) return prev;
+                return new Map(prev).set(peer, untilMs);
+              });
+            };
             const routeOrStore = (rumor: Rumor, wrapId: string): boolean => {
               const now = Date.now();
               const expiresAt = rumor.created_at * 1000 + TYPING_VISIBLE_MS;
               if (rumor.kind === 20001) {
-                // Ping sealed by an ephemeral typing key: accept only with a
-                // live binding, attribute to the bound real pubkey. An expired
-                // ping or dead binding is junk — drop its wrap either way.
+                // Ephemeral-sealed ping (typing OR opt-in presence): accept
+                // only with a live binding, attribute to the bound real
+                // pubkey. Typing shows ~6s; presence holds ~90s. Junk is
+                // dropped either way.
+                const isPresence = isPresencePingRumor(rumor);
                 const binding = typingKeyBindingsRef.current.get(rumor.pubkey);
                 if (binding && binding.until > now / 1000 && expiresAt > now) {
-                  applyTypingState(binding.realPk, expiresAt);
+                  if (isPresence) {
+                    applyPresenceState(binding.realPk, now + PRESENCE_ONLINE_MS);
+                  } else {
+                    applyTypingState(binding.realPk, expiresAt);
+                  }
                   postRelayWorkerFrame({
                     kind: "app:remove-events",
                     ids: [wrapId],
@@ -662,12 +741,15 @@ export function DMProvider({ children }: { children: ReactNode }) {
                 } else if (expiresAt > now && !binding) {
                   // Binding wrap may still be in flight — hold briefly.
                   const q = pendingTypingRef.current.get(rumor.pubkey);
+                  const held = {
+                    expiresAtMs: isPresence ? now + PRESENCE_ONLINE_MS : expiresAt,
+                    wrapId,
+                    presence: isPresence,
+                  };
                   if (!q) {
-                    pendingTypingRef.current.set(rumor.pubkey, [
-                      { expiresAtMs: expiresAt, wrapId },
-                    ]);
+                    pendingTypingRef.current.set(rumor.pubkey, [held]);
                   } else if (q.length < 50) {
-                    q.push({ expiresAtMs: expiresAt, wrapId });
+                    q.push(held);
                   }
                 } else {
                   postRelayWorkerFrame({
@@ -692,7 +774,11 @@ export function DMProvider({ children }: { children: ReactNode }) {
                   pendingTypingRef.current.delete(bindingMsg.ephemeralPk);
                   for (const p of q) {
                     if (p.expiresAtMs > now) {
-                      applyTypingState(rumor.pubkey, p.expiresAtMs);
+                      if (p.presence) {
+                        applyPresenceState(rumor.pubkey, p.expiresAtMs);
+                      } else {
+                        applyTypingState(rumor.pubkey, p.expiresAtMs);
+                      }
                     }
                     dropIds.push(p.wrapId);
                   }
@@ -800,6 +886,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
       }
       // Stop the cold-wrap sweeper with the account's subscription.
       clearInterval(sweepTimer);
+      clearInterval(presenceTimer);
+      clearInterval(keepaliveTimer);
       // Flush stragglers into state before teardown — the flush closes over
       // the account the batch belongs to.
       flushPending();
@@ -932,6 +1020,24 @@ export function DMProvider({ children }: { children: ReactNode }) {
     [user]
   );
 
+  // Toggle MY opt-in to share presence with one peer (persisted locally, off
+  // by default). Enabling pings immediately so the peer sees you online
+  // without waiting for the next tick.
+  const setPresenceFor = useCallback(
+    (peerPubkey: string, on: boolean) => {
+      if (!user) return;
+      setPresenceSendEnabled(user.pubkey, peerPubkey, on);
+      if (
+        on &&
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible"
+      ) {
+        void sendPresencePing(peerPubkey, user.pubkey, user.privateKey);
+      }
+    },
+    [user]
+  );
+
   const markAsRead = useCallback(
     (conversationId: string) => {
       if (!user) return;
@@ -991,6 +1097,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
       sendFile,
       notifyTyping,
       typingPeers,
+      presencePeers,
+      setPresenceFor,
     }),
     [
       conversations,
@@ -1006,6 +1114,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
       sendFile,
       notifyTyping,
       typingPeers,
+      presencePeers,
+      setPresenceFor,
     ]
   );
 

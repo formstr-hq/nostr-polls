@@ -603,6 +603,19 @@ export async function publishLocalSignedWraps(
 }
 
 /**
+ * True for a wrapped presence ping: kind-20001 rumor carrying t="presence".
+ * Distinguished from typing pings so receivers can apply the longer online
+ * window instead of the 6s typing flash.
+ */
+export function isPresencePingRumor(rumor: Rumor): boolean {
+  if (rumor.kind !== 20001) return false;
+  for (const t of rumor.tags) {
+    if (t[0] === "t" && t[1] === "presence") return true;
+  }
+  return false;
+}
+
+/**
  * Compute a conversation ID from participant pubkeys.
  * Sorts all participants and joins with "+".
  */

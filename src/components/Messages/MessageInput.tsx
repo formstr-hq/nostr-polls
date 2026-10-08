@@ -135,13 +135,6 @@ const MessageInput: React.FC<MessageInputProps> = ({
     await recorder.cancel();
   }, [recorder]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
   return (
     <Box>
       {/* Reply preview bar */}
@@ -301,7 +294,6 @@ const MessageInput: React.FC<MessageInputProps> = ({
                 trackCursor();
                 onTyping?.();
               }}
-              onKeyDown={handleKeyDown}
               onKeyUp={trackCursor}
               onClick={trackCursor}
               onSelect={trackCursor}

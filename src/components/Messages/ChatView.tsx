@@ -17,6 +17,7 @@ import { useDMContext } from "../../hooks/useDMContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { useUserContext } from "../../hooks/useUserContext";
 import { getConversationId, fetchInboxRelays } from "../../nostr/nip17";
+import { isPresenceSendEnabled } from "../../nostr/typing";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { DMMessage, SendTracking } from "../../contexts/dm-context";
 import { dataLayer, type PublishResult } from "@formstr/local-relay";
@@ -64,6 +65,8 @@ const ChatView: React.FC = () => {
     sendFile,
     notifyTyping,
     typingPeers,
+    presencePeers,
+    setPresenceFor,
   } = useDMContext();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user } = useUserContext();
@@ -91,6 +94,33 @@ const ChatView: React.FC = () => {
   } catch {
     // invalid npub
   }
+
+  // Presence (ping-pong): green dot = this peer's app is reachable (wrapped
+  // ephemeral pings); the dot-button toggles MY opt-in to share back. Off by
+  // default for everyone.
+  const [presenceShared, setPresenceShared] = useState(false);
+  const [, setPresenceTick] = useState(0);
+  useEffect(() => {
+    setPresenceShared(
+      recipientPubkey
+        ? isPresenceSendEnabled(user?.pubkey ?? "", recipientPubkey)
+        : false
+    );
+  }, [recipientPubkey, user?.pubkey]);
+  // Re-render tick so the online dot can expire without a state push.
+  useEffect(() => {
+    if (presencePeers.size === 0) return;
+    const t = setInterval(() => setPresenceTick((x) => x + 1), 15000);
+    return () => clearInterval(t);
+  }, [presencePeers]);
+  const peerOnline =
+    !!recipientPubkey && (presencePeers.get(recipientPubkey) ?? 0) > Date.now();
+  const toggleSharePresence = () => {
+    if (!user || !recipientPubkey) return;
+    const next = !presenceShared;
+    setPresenceFor(recipientPubkey, next);
+    setPresenceShared(next);
+  };
 
   const conversationId =
     user && recipientPubkey
@@ -147,9 +177,21 @@ const ChatView: React.FC = () => {
     }
   }, [conversationId, conversation, markAsRead]);
 
+  // Jump to bottom WITHOUT animation whenever the conversation is opened or
+  // its first messages land; smooth-scroll only for messages that arrive in
+  // an already-open chat (the old code animating the whole history walk on
+  // every open felt broken).
+  const scrollCountRef = useRef(0);
+  const scrollConvRef = useRef<string | null>(null);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [conversation?.messages?.length]);
+    const el = messagesEndRef.current;
+    if (!el) return;
+    const instant =
+      scrollConvRef.current !== conversationId || scrollCountRef.current === 0;
+    scrollConvRef.current = conversationId ?? null;
+    scrollCountRef.current = derived.messages.length;
+    el.scrollIntoView({ behavior: instant ? "auto" : "smooth" });
+  }, [conversationId, derived.messages.length]);
 
   // The worker fans each gift wrap out to the relays it owns and reports the
   // per-relay outcome in the PublishResult. We render that directly — there is
@@ -290,7 +332,43 @@ const ChatView: React.FC = () => {
           }
         >
           {recipientName}
+          {peerOnline && (
+            <Box
+              component="span"
+              title="online now"
+              sx={{
+                display: "inline-block",
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                bgcolor: "success.main",
+                ml: 0.75,
+                verticalAlign: "middle",
+              }}
+            />
+          )}
         </Typography>
+        <IconButton
+          size="small"
+          onClick={toggleSharePresence}
+          title={
+            presenceShared
+              ? "Sharing your online status — tap to stop"
+              : "Share your online status with this contact"
+          }
+          sx={{ ml: "auto" }}
+        >
+          <Box
+            sx={{
+              width: 12,
+              height: 12,
+              borderRadius: "50%",
+              bgcolor: presenceShared ? "success.main" : "transparent",
+              border: 1.5,
+              borderColor: presenceShared ? "success.main" : "text.disabled",
+            }}
+          />
+        </IconButton>
       </Box>
 
       {(recipientPubkey && (() => {

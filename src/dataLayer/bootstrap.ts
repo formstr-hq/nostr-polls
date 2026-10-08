@@ -22,6 +22,23 @@ import { notifyRelayRefresh, subscribeRelayRefresh, markRelayHydrated } from "./
 
 let started = false;
 
+/** Module handle to the live LocalRelayClient (for nudgeRelaySync). */
+let boundClient: LocalRelayClient | null = null;
+
+/**
+ * Foreground socket-rot recovery: tear down every upstream socket and reopen
+ * the standing sync interests on fresh ones. The SDK only reconnects when it
+ * sees a real close event — a half-open socket (network switch, relay
+ * restart, mobile power-save) just goes silent forever, so live messages stop
+ * arriving. Cheap: interests already live in the worker and replay is
+ * REQ-only over freshly opened sockets.
+ */
+export function nudgeRelaySync(): void {
+  if (!boundClient) return;
+  boundClient.pause();
+  boundClient.resume();
+}
+
 /** Raw relay-worker handle — app-defined frames outside the nostr protocol
  *  (e.g. the WoT cold-wrap sweep) post straight to the worker. */
 let relayWorker: Worker | null = null;
@@ -76,6 +93,8 @@ export function bootstrapDataLayer(): DataLayer {
       }
     },
   });
+
+  boundClient = client;
 
   // Base relay set: the upstream sync floor AND the relays that author-LESS
   // interests (DMs/kind-1059, mentions, "global") get their LIVE subscriptions on.
