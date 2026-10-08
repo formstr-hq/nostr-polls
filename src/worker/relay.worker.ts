@@ -11,12 +11,37 @@ import {
   selfChannel,
   IndexedDBStorage,
   defaultPrunePolicy,
+  type Channel,
 } from "@formstr/local-relay";
 
-const channel = selfChannel(self as unknown as {
+const base = selfChannel(self as unknown as {
   postMessage: (m: unknown) => void;
   onmessage: ((e: MessageEvent) => void) | null;
 });
+
+// `app:remove-events` — main-thread flood control. Intercepted before the
+// relay protocol sees it; EventDB.remove is private in 0.6.4's .d.ts but
+// present at runtime (same honest cast as prunePolicy below) and the removal
+// propagates through write-through persistence as a real IndexedDB delete.
+let service!: RelayService;
+const channel: Channel = {
+  post: (m) => base.post(m),
+  close: () => base.close(),
+  onMessage: (handler) =>
+    base.onMessage((m) => {
+      if ((m as { kind?: string } | null)?.kind === "app:remove-events") {
+        const ids = (m as { ids?: unknown }).ids;
+        if (Array.isArray(ids)) {
+          const db = service.db as unknown as { remove(id: string): void };
+          for (const id of ids) {
+            if (typeof id === "string" && id) db.remove(id);
+          }
+        }
+        return;
+      }
+      handler(m);
+    }),
+};
 
 // Retention: the library prune is age-TTL + hard cap (50k events total), and
 // protected kinds skip BOTH the TTL sweep and the eviction filter. The 7-day
@@ -26,11 +51,16 @@ const channel = selfChannel(self as unknown as {
 // oldest-first once the store passes the global cap. The DM read-state
 // watermark (kind 30078) stays protected: one tiny event per conversation,
 // load-bearing for unread counts.
+//
+// Beyond this policy: the main thread is the only place a wrap's sender is
+// visible (it lives inside the encrypted seal), so IT classifies out-of-WoT
+// wraps and asks the worker to drop them once a 72h intro-safety grace
+// elapses — see the `app:remove-events` intercept below.
 const prunePolicy = defaultPrunePolicy();
 prunePolicy.protectedKinds.add(30078);
 prunePolicy.ttlByKind.set(1059, 365 * 24 * 60 * 60);
 
-const service = new RelayService({
+service = new RelayService({
   channel,
   storage: new IndexedDBStorage("shared"),
   // 0.6.4 honors options.prunePolicy at runtime (RelayService stores it and the
@@ -45,7 +75,7 @@ const service = new RelayService({
 // empty store and miss the hydrated cache. We post a `hydrated` frame once the
 // store is loaded so the main thread can re-declare its interests against it.
 void service.start().then(() => {
-  channel.post({ kind: "hydrated" });
+  base.post({ kind: "hydrated" });
 });
 
 export {};

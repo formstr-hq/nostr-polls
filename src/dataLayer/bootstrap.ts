@@ -22,6 +22,14 @@ import { notifyRelayRefresh, subscribeRelayRefresh, markRelayHydrated } from "./
 
 let started = false;
 
+/** Raw relay-worker handle — app-defined frames outside the nostr protocol
+ *  (e.g. the WoT cold-wrap sweep) post straight to the worker. */
+let relayWorker: Worker | null = null;
+/** Post an app-defined frame directly to the relay worker. No-op before boot. */
+export function postRelayWorkerFrame(frame: unknown): void {
+  if (relayWorker) relayWorker.postMessage(frame);
+}
+
 /** Idempotent: spawns the worker + wires the DataLayer once, returns the singleton. */
 export function bootstrapDataLayer(): DataLayer {
   if (started) return getDataLayer();
@@ -30,6 +38,7 @@ export function bootstrapDataLayer(): DataLayer {
   // Webpack 5 emits a same-origin worker chunk for this URL form (proven by the
   // existing mining worker); loads under http(s)/capacitor origins alike.
   const worker = new Worker(new URL("../worker/relay.worker", import.meta.url));
+  relayWorker = worker;
   const baseChannel = workerChannel(worker);
 
   // Wrap the channel to watch the worker boundary for moments when it can newly

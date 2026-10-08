@@ -11,6 +11,7 @@ import { Event } from "nostr-tools";
 import { useUserContext } from "../hooks/useUserContext";
 import { dataLayer, type ObserveHandle, type PublishResult } from "@formstr/local-relay";
 import { useRelayRefresh } from "../dataLayer/hooks";
+import { postRelayWorkerFrame } from "../dataLayer/bootstrap";
 import {
   unwrapGiftWrap,
   wrapAndSendDM,
@@ -105,6 +106,30 @@ interface DMContextInterface {
 }
 
 export const DMContext = createContext<DMContextInterface | null>(null);
+
+// --- Out-of-WoT wrap retention (flood control) ---
+/** Intro-safety window: out-of-WoT wraps younger than this are kept, so a
+ *  first message from a brand-new peer always has time to be seen. */
+const COLD_WRAP_GRACE_SECONDS = 72 * 60 * 60;
+type ColdWrapEntry = { sender: string | null; createdAt: number };
+/**
+ * Peers the user demonstrably engages with: non-self participants of
+ * conversations that contain at least one self-authored message. Conversation
+ * existence alone is NOT warmth — a NIP-17 intro from a stranger builds one.
+ */
+function engagedPeers(
+  conversations: Map<string, Conversation>,
+  myPubkey: string
+): Set<string> {
+  const out = new Set<string>();
+  Array.from(conversations.values()).forEach((conv) => {
+    if (!conv.messages.some((m) => m.pubkey === myPubkey)) return;
+    conv.participants.forEach((p) => {
+      if (p !== myPubkey) out.add(p);
+    });
+  });
+  return out;
+}
 
 // Legacy keys from earlier versions (plaintext giftwrap cache / localStorage
 // reaction cache) — purged on logout so old installs shed the quota bloat.
@@ -231,6 +256,17 @@ export function DMProvider({ children }: { children: ReactNode }) {
   const cursorUntilRef = useRef(0);
   const pageNewRef = useRef(0);
   const loadingMoreRef = useRef(false);
+  // Out-of-WoT wrap queue (flood control): wrap id -> { sender, createdAt }.
+  // Classified at unwrap time — the sender only becomes visible after
+  // decryption, which happens here, never in the worker. Warmth is re-checked
+  // at sweep time against the CURRENT follow list + engaged peers, so a boot
+  // race (follows not yet loaded) can only delay deletion, never cause one.
+  const coldWrapsRef = useRef<Map<string, ColdWrapEntry>>(new Map());
+  const followsRef = useRef<Set<string>>(new Set());
+  const conversationsRef = useRef<Map<string, Conversation>>(new Map());
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   /** Recompute `unreadCount` for each conversation against the read-state
    *  watermark. Called once after `loadReadState` resolves so a conversation
@@ -454,6 +490,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
       seenWrapIds.current.clear();
       lastUserKey.current = null;
       decryptionRejected.current = false;
+      coldWrapsRef.current.clear();
+      followsRef.current.clear();
       subRef.current?.unobserve();
       subRef.current = null;
       // Shed legacy localStorage DM caches + the in-memory reaction buffer
@@ -489,7 +527,30 @@ export function DMProvider({ children }: { children: ReactNode }) {
       seenRumorIds.current.clear();
       seenWrapIds.current.clear();
       decryptionRejected.current = false;
+      coldWrapsRef.current.clear();
+      followsRef.current.clear();
     }
+
+    // Follow list feeds the cold-wrap warmth check. One query per session,
+    // dropped at EOSE; the sweep re-checks warmth at delete time, so a slow
+    // follow fetch can only delay deletion, never cause a wrong one.
+    let followsHandle: ObserveHandle | null = null;
+    followsHandle = dataLayer.observe(
+      [{ authors: [myPubkey], kinds: [3], limit: 1 }],
+      {
+        onEvent: (e: Event) => {
+          const next = new Set<string>();
+          e.tags.forEach((t) => {
+            if (t[0] === "p" && t[1]) next.add(t[1]);
+          });
+          followsRef.current = next;
+        },
+        onEose: () => {
+          followsHandle?.unobserve();
+          followsHandle = null;
+        },
+      }
+    );
 
     // Batch the ingest path: accumulate decrypted rumors and flush them into
     // state at most once per 50 ms, so a replay burst costs one render per
@@ -503,12 +564,46 @@ export function DMProvider({ children }: { children: ReactNode }) {
       const batch = pendingBatch;
       pendingBatch = [];
       addMessages(batch, myPubkey);
+      // Replay floods die on sight: cold wraps older than the grace period
+      // are swept the moment their batch lands.
+      sweepColdWraps();
     };
 
     const pushPending = (rumor: Rumor, wrapId: string) => {
       pendingBatch.push({ rumor, wrapId });
       if (!flushTimer) flushTimer = setTimeout(flushPending, 50);
     };
+
+    // Drop out-of-WoT wraps: warm (self / followed / engaged peers) are never
+    // deleted; everything else is deleted locally once the intro-safety grace
+    // elapses. Local-only by design — a kind-5 cannot delete another author's
+    // wrap — and re-delivery dedup (seenWrapIds) swallows resurrections, so
+    // the sweep is a retention aid rather than an eviction guarantee.
+    const sweepColdWraps = () => {
+      const now = Math.floor(Date.now() / 1000);
+      const warmPeers = engagedPeers(conversationsRef.current, myPubkey);
+      const followSet = followsRef.current;
+      const drop: string[] = [];
+      Array.from(coldWrapsRef.current.entries()).forEach(([id, entry]) => {
+        const warm =
+          entry.sender !== null &&
+          (entry.sender === myPubkey ||
+            followSet.has(entry.sender) ||
+            warmPeers.has(entry.sender));
+        if (warm) {
+          coldWrapsRef.current.delete(id);
+          return;
+        }
+        if (now - entry.createdAt >= COLD_WRAP_GRACE_SECONDS) {
+          drop.push(id);
+          coldWrapsRef.current.delete(id);
+        }
+      });
+      if (drop.length > 0) {
+        postRelayWorkerFrame({ kind: "app:remove-events", ids: drop });
+      }
+    };
+    const sweepTimer = setInterval(sweepColdWraps, 10 * 60 * 1000);
 
     const startSubscription = async () => {
       setLoading(true);
@@ -555,6 +650,13 @@ export function DMProvider({ children }: { children: ReactNode }) {
               // Local key: decrypt instantly, no signer prompts
               const rumor = await unwrapGiftWrap(event, privateKey);
               if (rumor) pushPending(rumor, event.id);
+              // WoT classification: a null rumor here is a deterministic
+              // local-key failure — unclassifiable junk, queued sender-less
+              // and dropped by the sweep after the grace window.
+              coldWrapsRef.current.set(event.id, {
+                sender: rumor ? rumor.pubkey : null,
+                createdAt: event.created_at,
+              });
             } else {
               // External signer (Amber / NIP-07 / NIP-46): queue so only one
               // decrypt request is in-flight at a time — avoids bombarding the
@@ -567,6 +669,14 @@ export function DMProvider({ children }: { children: ReactNode }) {
                 } else {
                   // null means the signer rejected or failed — stop asking
                   decryptionRejected.current = true;
+                }
+                if (rumor) {
+                  // Classification only — a rejection is ambiguous (user said
+                  // no), so failed external unwraps are never queued.
+                  coldWrapsRef.current.set(event.id, {
+                    sender: rumor.pubkey,
+                    createdAt: event.created_at,
+                  });
                 }
               });
             }
@@ -602,6 +712,8 @@ export function DMProvider({ children }: { children: ReactNode }) {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
+      // Stop the cold-wrap sweeper with the account's subscription.
+      clearInterval(sweepTimer);
       // Flush stragglers into state before teardown — the flush closes over
       // the account the batch belongs to.
       flushPending();
