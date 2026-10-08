@@ -11,6 +11,7 @@ import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { dataLayer, type PublishResult } from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
+import { buildFileTags, FileMeta } from "./fileMessage";
 
 // A rumor is an unsigned event with an id
 export type Rumor = UnsignedEvent & { id: string };
@@ -328,20 +329,18 @@ function unwrapGiftWrapLocal(
 }
 
 /**
- * Wrap and send a DM using NIP-17 protocol.
- * Handles both LocalSigner (has privateKey) and external signer paths.
+ * Shared NIP-59 wrap-and-publish core. Takes a ready rumor (kind 14 text,
+ * kind 15 file, kind 7 reaction), wraps it to the recipient + the sender on
+ * both LocalSigner and external-signer paths, publishes via the worker (which
+ * routes each wrap by its #p tag), and merges per-relay outcomes.
  */
-export async function wrapAndSendDM(
+async function wrapAndPublishRumor(
+  rumor: Rumor,
   recipientPubkey: string,
-  content: string,
-  privateKey?: string,
-  replyToId?: string
+  privateKey?: string
 ): Promise<SendResult> {
   const signer = await signerManager.getSigner();
   const senderPubkey = await signer.getPublicKey();
-
-  // Create the rumor (unsigned kind 14)
-  const rumor = createRumor(senderPubkey, recipientPubkey, content, replyToId);
 
   let wraps: Event[];
 
@@ -367,6 +366,54 @@ export async function wrapAndSendDM(
   const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
 
   return { rumor, wraps, result: mergePublishResults(results) };
+}
+
+/**
+ * Wrap and send a DM using NIP-17 protocol.
+ * Handles both LocalSigner (has privateKey) and external signer paths.
+ */
+export async function wrapAndSendDM(
+  recipientPubkey: string,
+  content: string,
+  privateKey?: string,
+  replyToId?: string
+): Promise<SendResult> {
+  const signer = await signerManager.getSigner();
+  const senderPubkey = await signer.getPublicKey();
+
+  // Create the rumor (unsigned kind 14)
+  const rumor = createRumor(senderPubkey, recipientPubkey, content, replyToId);
+
+  return wrapAndPublishRumor(rumor, recipientPubkey, privateKey);
+}
+
+/**
+ * Wrap and send a file attachment (NIP-17 kind 15) encrypted per NIP-59.
+ * `fileMeta` must already be fully populated: the blob uploaded (encrypted)
+ * to Blossom with `url` + `encryptedSha`, plus `key`/`nonce` and hashes —
+ * see fileMessage.ts.
+ */
+export async function wrapAndSendFile(
+  recipientPubkey: string,
+  fileMeta: FileMeta,
+  privateKey?: string,
+  replyToId?: string
+): Promise<SendResult> {
+  const signer = await signerManager.getSigner();
+  const senderPubkey = await signer.getPublicKey();
+
+  // Kind 15 rumor: content = the encrypted blob's URL, tags carry the
+  // NIP-94-style decryption contract (file-type/encryption-algorithm/keys/…).
+  const rumor = createRumor(
+    senderPubkey,
+    recipientPubkey,
+    fileMeta.url,
+    replyToId,
+    15,
+    buildFileTags(fileMeta)
+  );
+
+  return wrapAndPublishRumor(rumor, recipientPubkey, privateKey);
 }
 
 /**

@@ -1,14 +1,28 @@
-import React, { useRef, useState } from "react";
-import { Box, Typography, Paper, Chip, CircularProgress, Tooltip } from "@mui/material";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  Box,
+  Typography,
+  Paper,
+  Chip,
+  CircularProgress,
+  Tooltip,
+  IconButton,
+} from "@mui/material";
 import ReplyIcon from "@mui/icons-material/Reply";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import TimerOffIcon from "@mui/icons-material/TimerOff";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import PauseIcon from "@mui/icons-material/Pause";
+import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
+import DownloadIcon from "@mui/icons-material/Download";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import { useTheme } from "@mui/material/styles";
 import { MsgSendStatus, RelayStatus } from "./ChatView";
 import dayjs from "dayjs";
 import { DMMessage } from "../../contexts/dm-context";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
+import { decryptBlob, FileMeta } from "../../nostr/fileMessage";
 
 const SWIPE_THRESHOLD = 64;
 
@@ -40,6 +54,293 @@ const RelayDot: React.FC<{ relay: string; status: RelayStatus; reason?: string }
   }
 
   return <Tooltip title={label} placement="top">{indicator}</Tooltip>;
+};
+
+/** Session-memory object URLs for decrypted attachments. Nothing at rest —
+ *  the cache (and the blobs behind it) dies with the page. */
+const mediaUrlCache = new Map<string, string>();
+function cachedMediaUrl(
+  cacheKey: string,
+  produce: () => Promise<Blob>
+): Promise<string> {
+  const hit = mediaUrlCache.get(cacheKey);
+  if (hit) return Promise.resolve(hit);
+  return produce().then((blob) => {
+    const url = URL.createObjectURL(blob);
+    mediaUrlCache.set(cacheKey, url);
+    return url;
+  });
+}
+
+/** Hook: decrypt-on-demand -> objectURL with a loading/error state. */
+function useDecryptedMedia(meta: FileMeta): [string | null, "loading" | "ready" | "error"] {
+  const [url, setUrl] = useState<string | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  useEffect(() => {
+    let alive = true;
+    setState("loading");
+    cachedMediaUrl(meta.url + (meta.key ?? ""), () => decryptBlob(meta))
+      .then((u) => {
+        if (!alive) return;
+        setUrl(u);
+        setState("ready");
+      })
+      .catch(() => {
+        if (alive) setState("error");
+      });
+    return () => {
+      alive = false;
+    };
+    // Keyed by the message's url+key — stable for the message's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta.url, meta.key]);
+  return [url, state];
+}
+
+/** Encrypted image attachment: decrypt -> render inline, tap = full view. */
+const ImageAttachment: React.FC<{ meta: FileMeta }> = ({ meta }) => {
+  const [url, state] = useDecryptedMedia(meta);
+  const [w, h] = (meta.dim ?? "").split(" ").map((v) => parseInt(v, 10) || 0);
+  const boxW = Math.min(260, 260);
+  const boxH = w > 0 ? Math.round((h / w) * boxW) : 180;
+  if (state === "error") {
+    return (
+      <Box display="flex" alignItems="center" gap={0.5}>
+        <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main" }} />
+        <Typography variant="caption" color="error.main">
+          Couldn't decrypt image
+        </Typography>
+      </Box>
+    );
+  }
+  if (!url) {
+    return (
+      <Box
+        display="flex"
+        alignItems="center"
+        justifyContent="center"
+        sx={{
+          width: boxW,
+          height: state === "loading" ? Math.min(boxH, 180) : undefined,
+          minWidth: 120,
+          minHeight: 60,
+          borderRadius: 1.5,
+          bgcolor: "rgba(128,128,128,0.15)",
+        }}
+      >
+        <CircularProgress size={18} color="inherit" />
+      </Box>
+    );
+  }
+  return (
+    <Box
+      component="img"
+      src={url}
+      alt={meta.fileName || "attachment"}
+      loading="lazy"
+      onClick={(e) => {
+        e.stopPropagation();
+        window.open(url, "_blank");
+      }}
+      sx={{
+        maxWidth: 260,
+        maxHeight: 320,
+        borderRadius: 1.5,
+        display: "block",
+        cursor: "zoom-in",
+        objectFit: "contain",
+      }}
+    />
+  );
+};
+
+/** Encrypted audio (voice note): play/pause + waveform + duration. */
+const VoiceBubble: React.FC<{ meta: FileMeta }> = ({ meta }) => {
+  const [url, state] = useDecryptedMedia(meta);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const bars = meta.waveform && meta.waveform.length > 0
+    ? meta.waveform
+    : new Array(32).fill(0).map((_, i) => 30 + Math.round(40 * Math.abs(Math.sin(i * 1.7))));
+  const durationLabel = meta.duration
+    ? `${Math.min(60, Math.round(meta.duration))}s`
+    : "";
+
+  useEffect(
+    () => () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    },
+    []
+  );
+
+  const toggle = () => {
+    if (!url) return;
+    let a = audioRef.current;
+    if (!a || a.src !== url) {
+      if (a) a.pause();
+      a = new Audio(url);
+      audioRef.current = a;
+      a.onended = () => {
+        setPlaying(false);
+        setProgress(1);
+        if (tickRef.current) clearInterval(tickRef.current);
+        tickRef.current = null;
+      };
+    }
+    if (playing) {
+      a.pause();
+      setPlaying(false);
+      if (tickRef.current) clearInterval(tickRef.current);
+      tickRef.current = null;
+    } else {
+      void a.play().catch(() => undefined);
+      setPlaying(true);
+      tickRef.current = setInterval(() => {
+        const el = audioRef.current;
+        if (el && el.duration > 0) {
+          setProgress(Math.min(1, el.currentTime / el.duration));
+        }
+      }, 150);
+    }
+  };
+
+  if (state === "error") {
+    return (
+      <Box display="flex" alignItems="center" gap={0.5}>
+        <ErrorOutlineIcon sx={{ fontSize: 16, color: "error.main" }} />
+        <Typography variant="caption" color="error.main">
+          Couldn't decrypt voice note
+        </Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box display="flex" alignItems="center" gap={0.75} minWidth={180}>
+      <IconButton
+        size="small"
+        onClick={toggle}
+        disabled={state === "loading"}
+        sx={{
+          bgcolor: "rgba(128,128,128,0.18)",
+          "&:hover": { bgcolor: "rgba(128,128,128,0.28)" },
+        }}
+      >
+        {state === "loading" ? (
+          <CircularProgress size={14} color="inherit" />
+        ) : playing ? (
+          <PauseIcon sx={{ fontSize: 18 }} />
+        ) : (
+          <PlayArrowIcon sx={{ fontSize: 18 }} />
+        )}
+      </IconButton>
+      {/* Waveform: filled through the playhead */}
+      <Box display="flex" alignItems="center" gap="2px" flex={1} height={28}>
+        {bars.slice(0, 60).map((v, i) => {
+          const passed = i / bars.length <= progress - 0.0001;
+          return (
+            <Box
+              key={i}
+              sx={{
+                width: 3,
+                borderRadius: 1.5,
+                height: 4 + Math.round((v / 100) * 20),
+                bgcolor: passed ? "primary.main" : "rgba(128,128,128,0.4)",
+              }}
+            />
+          );
+        })}
+      </Box>
+      {durationLabel && (
+        <Typography variant="caption" color="text.secondary">
+          {durationLabel}
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
+/** Generic encrypted file: decrypt-on-tap, then hand the plaintext to the browser. */
+const FileCard: React.FC<{ meta: FileMeta }> = ({ meta }) => {
+  const [phase, setPhase] = useState<"idle" | "busy" | "error">("idle");
+  const name =
+    meta.fileName ||
+    (meta.url ? decodeURIComponent(meta.url.split("/").pop() || "") : "") ||
+    "file";
+
+  const download = async () => {
+    if (phase !== "idle") return;
+    setPhase("busy");
+    try {
+      const blob = await decryptBlob(meta);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      setPhase("idle");
+    } catch {
+      setPhase("error");
+    }
+  };
+
+  return (
+    <Box
+      display="flex"
+      alignItems="center"
+      gap={1}
+      onClick={(e) => {
+        e.stopPropagation();
+        void download();
+      }}
+      sx={{ cursor: phase === "idle" ? "pointer" : "default", minWidth: 180 }}
+    >
+      <InsertDriveFileOutlinedIcon sx={{ fontSize: 26, color: "text.secondary" }} />
+      <Box flex={1} minWidth={0}>
+        <Typography
+          variant="body2"
+          sx={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: 180,
+          }}
+        >
+          {name}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {phase === "busy"
+            ? "Decrypting…"
+            : phase === "error"
+            ? "Couldn't decrypt — tap to retry"
+            : typeof meta.size === "number" && meta.size > 0
+            ? `${Math.max(1, Math.round(meta.size / 1024))} KB · tap to download`
+            : "tap to download"}
+        </Typography>
+      </Box>
+      {phase === "busy" ? (
+        <CircularProgress size={16} color="inherit" />
+      ) : (
+        <DownloadIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+      )}
+    </Box>
+  );
+};
+
+const Attachment: React.FC<{ msg: DMMessage }> = ({ msg }) => {
+  const meta = msg.file as FileMeta;
+  if (meta.mimeType.startsWith("image/")) return <ImageAttachment meta={meta} />;
+  if (meta.mimeType.startsWith("audio/")) return <VoiceBubble meta={meta} />;
+  return <FileCard meta={meta} />;
 };
 
 interface MessageBubbleProps {
@@ -279,18 +580,22 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             </Box>
           )}
 
-          <Box
-            sx={{
-              color: isMine ? sent.text : "text.primary",
-              wordBreak: "break-word",
-              fontSize: "0.875rem",
-              "& a": {
-                color: isMine ? sent.link : theme.palette.primary.main,
-              },
-            }}
-          >
-            <TextWithImages content={msg.content} tags={msg.tags} />
-          </Box>
+          {msg.file && msg.file.url ? (
+            <Attachment msg={msg} />
+          ) : (
+            <Box
+              sx={{
+                color: isMine ? sent.text : "text.primary",
+                wordBreak: "break-word",
+                fontSize: "0.875rem",
+                "& a": {
+                  color: isMine ? sent.link : theme.palette.primary.main,
+                },
+              }}
+            >
+              <TextWithImages content={msg.content} tags={msg.tags} />
+            </Box>
+          )}
           <Typography
             variant="caption"
             sx={{

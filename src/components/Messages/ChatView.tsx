@@ -61,6 +61,9 @@ const ChatView: React.FC = () => {
     loadOlder,
     loadingMore,
     hasMore,
+    sendFile,
+    notifyTyping,
+    typingPeers,
   } = useDMContext();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user } = useUserContext();
@@ -208,6 +211,20 @@ const ChatView: React.FC = () => {
     trackRelays(tracking);
   }, [recipientPubkey, sendMessage, replyTo, trackRelays]);
 
+  const handleSendFile = useCallback(
+    async (file: File, extra?: { waveform?: number[]; duration?: number }) => {
+      if (!recipientPubkey) throw new Error("No recipient");
+      const tracking = await sendFile(recipientPubkey, file, extra, replyTo?.id);
+      setReplyTo(null);
+      trackRelays(tracking);
+    },
+    [recipientPubkey, sendFile, replyTo, trackRelays]
+  );
+
+  const handleTyping = useCallback(() => {
+    if (recipientPubkey) notifyTyping(recipientPubkey);
+  }, [recipientPubkey, notifyTyping]);
+
   const handleReaction = useCallback(
     async (emoji: string, messageId: string) => {
       if (!recipientPubkey) return;
@@ -275,6 +292,24 @@ const ChatView: React.FC = () => {
           {recipientName}
         </Typography>
       </Box>
+
+      {(recipientPubkey && (() => {
+        const exp = typingPeers.get(recipientPubkey);
+        return exp && exp > Date.now() ? (
+          <Typography
+            variant="caption"
+            sx={{
+              px: 2,
+              pb: 0.5,
+              fontStyle: "italic",
+              color: "text.secondary",
+              display: "block",
+            }}
+          >
+            typing…
+          </Typography>
+        ) : null;
+      })())}
 
       {/* Messages area */}
       <Box
@@ -384,6 +419,8 @@ const ChatView: React.FC = () => {
         }
         onClearReply={() => setReplyTo(null)}
         onSend={handleSend}
+        onSendFile={handleSendFile}
+        onTyping={handleTyping}
       />
 
       {/* Context menu */}

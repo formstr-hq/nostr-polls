@@ -15,9 +15,20 @@ import {
   unwrapGiftWrap,
   wrapAndSendDM,
   wrapAndSendReaction,
+  wrapAndSendFile,
   getConversationId,
   Rumor,
 } from "../nostr/nip17";
+import {
+  FileMeta,
+  parseFileMeta,
+  encryptBlob,
+  uploadToBlossom,
+  measureImageDim,
+} from "../nostr/fileMessage";
+import { sendTypingPing } from "../nostr/typing";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   setLastSeen,
   setMarkAllTs,
@@ -33,6 +44,8 @@ export interface DMMessage {
   content: string;
   created_at: number;
   tags: string[][];
+  /** Attachment metadata for kind-15 file messages (and legacy imeta kind-14). */
+  file?: FileMeta;
 }
 
 export interface DMReaction {
@@ -74,6 +87,15 @@ interface DMContextInterface {
   markAllAsRead: () => void;
   unreadTotal: number;
   loading: boolean;
+  sendFile: (
+    recipientPubkey: string,
+    file: File,
+    extra?: { waveform?: number[]; duration?: number },
+    replyToId?: string
+  ) => Promise<SendTracking>;
+  notifyTyping: (peerPubkey: string) => void;
+  /** peer pubkey -> epoch ms until which their "typing…" state is live. */
+  typingPeers: Map<string, number>;
   /** Fetch the next older window of gift wraps (until-cursor pagination). */
   loadOlder: () => void;
   /** True while an older window is being fetched. */
@@ -99,6 +121,11 @@ const pendingReactions = new Map<string, Record<string, DMReaction[]>>();
 
 /** Initial gift-wrap window per observe: newest N wraps on boot/refresh. */
 const DM_PAGE = 100;
+/**
+ * How long a received typing ping stays visible. The event's NIP-40 expiration
+ * is ~30s (relay shed horizon); the UI cadence should be snappier.
+ */
+const TYPING_VISIBLE_MS = 6000;
 
 /**
  * Merge the already-sorted messages array with a small ascending batch without
@@ -160,6 +187,27 @@ export function DMProvider({ children }: { children: ReactNode }) {
   // exists (a page that yielded zero new wraps flips hasMore off).
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  // Typing indicators (ephemeral kind 20001, best-effort): peer -> expiry (ms).
+  // A 1s tick prunes expired entries so the UI clears on its own.
+  const [typingPeers, setTypingPeers] = useState<Map<string, number>>(
+    new Map()
+  );
+  const typingPeersRef = useRef(typingPeers);
+  typingPeersRef.current = typingPeers;
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = Date.now();
+      const cur = typingPeersRef.current;
+      let changed = false;
+      const next = new Map<string, number>();
+      Array.from(cur.entries()).forEach(([pk, exp]) => {
+        if (exp > now) next.set(pk, exp);
+        else changed = true;
+      });
+      if (changed) setTypingPeers(next);
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
   const seenRumorIds = useRef<Set<string>>(new Set());
   // Gift-wrap event ids already processed — dedup BEFORE decrypt so a re-observe
   // (after worker hydration) doesn't re-decrypt known wraps and, for external
@@ -248,6 +296,13 @@ export function DMProvider({ children }: { children: ReactNode }) {
             content: rumor.content,
             created_at: rumor.created_at,
             tags: rumor.tags,
+            ...(rumor.kind === 15 || rumor.tags.some((t) => t[0] === "imeta")
+              ? {
+                  file:
+                    parseFileMeta(rumor.tags, rumor.kind, rumor.content) ??
+                    undefined,
+                }
+              : {}),
           };
           const list = incomingByConv.get(conversationId);
           // in-batch dedup
@@ -459,9 +514,22 @@ export function DMProvider({ children }: { children: ReactNode }) {
       setLoading(true);
 
       const handle = dataLayer.observe(
-        [{ kinds: [1059], "#p": [myPubkey], limit: DM_PAGE }],
+        [{ kinds: [1059, 20001], "#p": [myPubkey], limit: DM_PAGE }],
         {
           onEvent: async (event: Event) => {
+            // Kind 20001 = ephemeral typing ping: arrives UNWRAPPED (no seal,
+            // no rumor) and never needs decryption. Best-effort signal.
+            if (event.kind === 20001) {
+              const peer = event.pubkey;
+              const expiresAt = event.created_at * 1000 + TYPING_VISIBLE_MS;
+              if ((typingPeersRef.current.get(peer) ?? 0) < expiresAt) {
+                setTypingPeers((prev) => {
+                  if ((prev.get(peer) ?? 0) >= expiresAt) return prev;
+                  return new Map(prev).set(peer, expiresAt);
+                });
+              }
+              return;
+            }
             // Dedup by gift-wrap id before any decryption so a re-observe never
             // re-decrypts (and never re-prompts an external signer for) a wrap
             // we've already handled this session.
@@ -561,7 +629,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
       { kinds: [1059], "#p": [user.pubkey], limit: DM_PAGE },
       { kinds: [1059], "#p": [user.pubkey], until: cursor, limit: DM_PAGE },
     ]);
-  }, [user, addMessages]);
+  }, [user]);
 
   const sendMessage = useCallback(
     async (
@@ -601,6 +669,66 @@ export function DMProvider({ children }: { children: ReactNode }) {
       addMessage(rumor, `local_reaction_${rumor.id}`, user.pubkey);
     },
     [user, addMessage]
+  );
+
+  /**
+   * Encrypt + upload + send a file as a NIP-17 kind 15 message. Bytes are
+   * AES-GCM-encrypted in memory, uploaded to Blossom (kind 24242 auth), and
+   * only the encrypted blob leaves the device. Nothing plaintext touches disk.
+   */
+  const sendFile = useCallback(
+    async (
+      recipientPubkey: string,
+      file: File,
+      extra?: { waveform?: number[]; duration?: number },
+      replyToId?: string
+    ): Promise<SendTracking> => {
+      if (!user) throw new Error("Must be logged in to send files");
+
+      const buf = await file.arrayBuffer();
+      const originalSha = bytesToHex(sha256(new Uint8Array(buf)));
+      const { cipher, key, nonce } = await encryptBlob(buf);
+      const uploaded = await uploadToBlossom(cipher, "application/octet-stream");
+
+      let dim: string | undefined;
+      if (file.type.startsWith("image/")) {
+        dim = (await measureImageDim(file)) ?? undefined;
+      }
+
+      const meta: FileMeta = {
+        url: uploaded.url,
+        mimeType: file.type || "application/octet-stream",
+        alg: "aes-gcm",
+        key,
+        nonce,
+        encryptedSha: uploaded.sha256,
+        originalSha,
+        size: cipher.length,
+        dim,
+        duration: extra?.duration,
+        waveform: extra?.waveform,
+        fileName: file.name,
+      };
+
+      const { rumor, wraps, result } = await wrapAndSendFile(
+        recipientPubkey,
+        meta,
+        user.privateKey,
+        replyToId
+      );
+
+      // Optimistically add — the ingest parser attaches `file` from the tags.
+      addMessage(rumor, `local_${rumor.id}`, user.pubkey);
+      return { rumorId: rumor.id, wraps, result };
+    },
+    [user, addMessage]
+  );
+
+  const notifyTyping = useCallback(
+    (peerPubkey: string) => {
+      sendTypingPing(peerPubkey); // fire-and-forget; pings are best-effort
+    },
+    []
   );
 
   const markAsRead = useCallback(
@@ -659,6 +787,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
       loadOlder,
       loadingMore,
       hasMore,
+      sendFile,
+      notifyTyping,
+      typingPeers,
     }),
     [
       conversations,
@@ -671,6 +802,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
       loadOlder,
       loadingMore,
       hasMore,
+      sendFile,
+      notifyTyping,
+      typingPeers,
     ]
   );
 
