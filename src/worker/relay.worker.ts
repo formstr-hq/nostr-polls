@@ -18,14 +18,17 @@ const channel = selfChannel(self as unknown as {
   onmessage: ((e: MessageEvent) => void) | null;
 });
 
-// Retention: the library default prunes by age (7-day TTL) + hard cap, and only
-// protects kinds 0/3/10002/10000-19999. Gift wraps (kind 1059) are our ONLY
-// persistent DM history — shedding them silently erases offline chats — and the
-// DM read-state watermark (kind 30078) is load-bearing for unread counts. Both
-// are now age/cap-proof; the cap only ever evicts replays of public data.
+// Retention: the library prune is age-TTL + hard cap (50k events total), and
+// protected kinds skip BOTH the TTL sweep and the eviction filter. The 7-day
+// default silently erased gift-wrapped DM history, but fully protecting kind
+// 1059 would also leave a junk-wrap flood with no storage bound — so wraps get
+// a ~1-year TTL via ttlByKind and stay unprotected, i.e. always evictable
+// oldest-first once the store passes the global cap. The DM read-state
+// watermark (kind 30078) stays protected: one tiny event per conversation,
+// load-bearing for unread counts.
 const prunePolicy = defaultPrunePolicy();
-prunePolicy.protectedKinds.add(1059);
 prunePolicy.protectedKinds.add(30078);
+prunePolicy.ttlByKind.set(1059, 365 * 24 * 60 * 60);
 
 const service = new RelayService({
   channel,
