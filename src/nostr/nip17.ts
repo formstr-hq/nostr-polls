@@ -223,7 +223,8 @@ export function createRumor(
 function createGiftWrapLocal(
   senderPrivkey: Uint8Array,
   rumor: Rumor,
-  recipientPubkey: string
+  recipientPubkey: string,
+  wrapExpiryS?: number
 ): Event {
   // Step 1: Create seal (kind 13) - encrypt rumor with sender's key for recipient
   const rumorJson = JSON.stringify(rumor);
@@ -247,10 +248,15 @@ function createGiftWrapLocal(
   const wrapConvKey = nip44.getConversationKey(ephemeralKey, recipientPubkey);
   const encryptedSeal = nip44.encrypt(sealJson, wrapConvKey);
 
+  const wrapTags: string[][] = [["p", recipientPubkey]];
+  if (wrapExpiryS) {
+    wrapTags.push(["expiration", String(Math.floor(Date.now() / 1000) + wrapExpiryS)]);
+  }
+
   const wrapEvent: UnsignedEvent = {
     kind: 1059,
     created_at: randomTimestamp(),
-    tags: [["p", recipientPubkey]],
+    tags: wrapTags,
     content: encryptedSeal,
     pubkey: ephemeralPubkey,
   };
@@ -267,7 +273,8 @@ async function createGiftWrapForSigner(
     nip44Encrypt?: (pk: string, txt: string) => Promise<string>;
   },
   rumor: Rumor,
-  recipientPubkey: string
+  recipientPubkey: string,
+  wrapExpiryS?: number
 ): Promise<Event> {
   if (!signer.nip44Encrypt) {
     throw new Error("Signer does not support NIP-44 encryption");
@@ -297,10 +304,15 @@ async function createGiftWrapForSigner(
   );
   const encryptedSeal = nip44.encrypt(sealJson, conversationKey);
 
+  const wrapTags: string[][] = [["p", recipientPubkey]];
+  if (wrapExpiryS) {
+    wrapTags.push(["expiration", String(Math.floor(Date.now() / 1000) + wrapExpiryS)]);
+  }
+
   const wrapTemplate: UnsignedEvent = {
     kind: 1059,
     created_at: randomTimestamp(),
-    tags: [["p", recipientPubkey]],
+    tags: wrapTags,
     content: encryptedSeal,
     pubkey: ephemeralPubkey,
   };
@@ -329,6 +341,14 @@ function unwrapGiftWrapLocal(
 }
 
 /**
+ * Relay-side NIP-40 TTL for gift wraps of real DM traffic (kind 14/15/7):
+ * NIP-17 recommends wraps expire on relays days-to-months out. The local
+ * cache keeps wraps for a year regardless — relays are transport, local is
+ * the durable record. Ping wraps evaporate far faster (typing.ts).
+ */
+export const NIP17_WRAP_TTL_S = 30 * 24 * 60 * 60;
+
+/**
  * Shared NIP-59 wrap-and-publish core. Takes a ready rumor (kind 14 text,
  * kind 15 file, kind 7 reaction), wraps it to the recipient + the sender on
  * both LocalSigner and external-signer paths, publishes via the worker (which
@@ -346,8 +366,8 @@ async function wrapAndPublishRumor(
 
   if (privateKey) {
     const privkeyBytes = hexToBytes(privateKey);
-    const wrapForRecipient = createGiftWrapLocal(privkeyBytes, rumor, recipientPubkey);
-    const wrapForSender = createGiftWrapLocal(privkeyBytes, rumor, senderPubkey);
+    const wrapForRecipient = createGiftWrapLocal(privkeyBytes, rumor, recipientPubkey, NIP17_WRAP_TTL_S);
+    const wrapForSender = createGiftWrapLocal(privkeyBytes, rumor, senderPubkey, NIP17_WRAP_TTL_S);
     wraps = [wrapForRecipient, wrapForSender];
   } else {
     if (!signer.nip44Encrypt) {
@@ -355,8 +375,8 @@ async function wrapAndPublishRumor(
         "Your signer does not support NIP-44 encryption, which is required for DMs."
       );
     }
-    const recipientWrap = await createGiftWrapForSigner(signer, rumor, recipientPubkey);
-    const senderWrap = await createGiftWrapForSigner(signer, rumor, senderPubkey);
+    const recipientWrap = await createGiftWrapForSigner(signer, rumor, recipientPubkey, NIP17_WRAP_TTL_S);
+    const senderWrap = await createGiftWrapForSigner(signer, rumor, senderPubkey, NIP17_WRAP_TTL_S);
     wraps = [recipientWrap, senderWrap];
   }
 
@@ -445,12 +465,14 @@ export async function wrapAndSendReaction(
     const wrapForRecipient = createGiftWrapLocal(
       privkeyBytes,
       rumor,
-      recipientPubkey
+      recipientPubkey,
+      NIP17_WRAP_TTL_S
     );
     const wrapForSender = createGiftWrapLocal(
       privkeyBytes,
       rumor,
-      senderPubkey
+      senderPubkey,
+      NIP17_WRAP_TTL_S
     );
 
     await dataLayer.publishEvent(wrapForRecipient);
@@ -465,14 +487,16 @@ export async function wrapAndSendReaction(
     const recipientWrap = await createGiftWrapForSigner(
       signer,
       rumor,
-      recipientPubkey
+      recipientPubkey,
+      NIP17_WRAP_TTL_S
     );
     await dataLayer.publishEvent(recipientWrap);
 
     const senderWrap = await createGiftWrapForSigner(
       signer,
       rumor,
-      senderPubkey
+      senderPubkey,
+      NIP17_WRAP_TTL_S
     );
     await dataLayer.publishEvent(senderWrap);
   }
@@ -593,10 +617,11 @@ export async function publishTypingKeyBinding(
 export async function publishLocalSignedWraps(
   signingKey: Uint8Array,
   rumor: Rumor,
-  recipients: string[]
+  recipients: string[],
+  wrapExpiryS?: number
 ): Promise<PublishResult> {
   const wraps = recipients.map((r) =>
-    createGiftWrapLocal(signingKey, rumor, r)
+    createGiftWrapLocal(signingKey, rumor, r, wrapExpiryS)
   );
   const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
   return mergePublishResults(results);

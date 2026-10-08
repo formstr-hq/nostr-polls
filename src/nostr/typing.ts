@@ -135,7 +135,7 @@ export async function sendTypingPing(
     const rumor = createRumor(session.pk, peer, "", undefined, 20001, [
       ["expiration", String(Math.floor(now / 1000) + PING_EXPIRY_S)],
     ]);
-    await publishLocalSignedWraps(session.sk, rumor, [peer]);
+    await publishLocalSignedWraps(session.sk, rumor, [peer], PING_WRAP_TTL_S);
   } catch {
     // Binding refused (signer "no") or publish failed — typing is cosmetic;
     // stay quiet for the session rather than re-prompting every keystroke.
@@ -152,6 +152,13 @@ export async function sendTypingPing(
 
 /** Relay TTL for a presence ping. */
 const PRESENCE_PING_EXPIRY_S = 45;
+
+/**
+ * Wrap-level NIP-40 TTL for ping wraps so relays evaporate them quickly —
+ * the rumor inside expires in seconds; minutes of wrap life covers relay
+ * clock skew without piling metadata up forever.
+ */
+const PING_WRAP_TTL_S = 5 * 60;
 
 function presenceStoreKey(myPk: string): string {
   return "presence:send:" + myPk;
@@ -221,7 +228,7 @@ export async function sendPresencePing(
       ["expiration", String(nowS + PRESENCE_PING_EXPIRY_S)],
       ["t", "presence"],
     ]);
-    await publishLocalSignedWraps(session.sk, rumor, [peer]);
+    await publishLocalSignedWraps(session.sk, rumor, [peer], PING_WRAP_TTL_S);
   } catch {
     // Binding refused or publish failed — presence is cosmetic; stay quiet
     // for the session instead of re-prompting on every tick.
