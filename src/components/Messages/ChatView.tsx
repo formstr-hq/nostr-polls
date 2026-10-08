@@ -1,11 +1,12 @@
 import { copyToClipboard } from "../../utils/common";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Typography,
   Avatar,
   IconButton,
   Modal,
+  CircularProgress,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { useNavigate, useParams } from "react-router-dom";
@@ -16,11 +17,12 @@ import { useDMContext } from "../../hooks/useDMContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { useUserContext } from "../../hooks/useUserContext";
 import { getConversationId, fetchInboxRelays } from "../../nostr/nip17";
+import { isPresenceSendEnabled } from "../../nostr/typing";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { DMMessage, SendTracking } from "../../contexts/dm-context";
 import { dataLayer, type PublishResult } from "@formstr/local-relay";
 import { mergePublishResults } from "../../nostr/nip17";
-import MessageBubble from "./MessageBubble";
+import MessageBubble, { type GroupedReaction } from "./MessageBubble";
 import MessageContextMenu from "./MessageContextMenu";
 import MessageInput from "./MessageInput";
 
@@ -41,18 +43,40 @@ const STATUS_MAP: Record<string, RelayStatus> = {
   failed: "failed",
 };
 
+// Stable empties — keep memoized bubble props referentially stable.
+const EMPTY_MESSAGES: DMMessage[] = [];
+const EMPTY_GROUPED_REACTIONS: Record<string, GroupedReaction> = {};
+const EMPTY_BY_ID = new Map<string, DMMessage>();
+const EMPTY_GROUPED = new Map<string, Record<string, GroupedReaction>>();
+
 
 const ChatView: React.FC = () => {
   const { npub } = useParams<{ npub: string }>();
   const navigate = useNavigate();
-  const { conversations, sendMessage, sendReaction, markAsRead } =
-    useDMContext();
+  const {
+    conversations,
+    sendMessage,
+    sendReaction,
+    markAsRead,
+    loading,
+    loadOlder,
+    loadingMore,
+    hasMore,
+    sendFile,
+    notifyTyping,
+    typingPeers,
+    presencePeers,
+    setPresenceFor,
+  } = useDMContext();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user } = useUserContext();
   const [contextMenuMsg, setContextMenuMsg] = useState<DMMessage | null>(null);
   const [replyTo, setReplyTo] = useState<DMMessage | null>(null);
   const [pickerForMsgId, setPickerForMsgId] = useState<string | null>(null);
   const [sendStatuses, setSendStatuses] = useState<Map<string, MsgSendStatus>>(new Map());
+  // Latest-value mirror so handleRetry stays referentially stable (cheap memo prop).
+  const sendStatusesRef = useRef(sendStatuses);
+  sendStatusesRef.current = sendStatuses;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const theme = useTheme();
 
@@ -71,6 +95,33 @@ const ChatView: React.FC = () => {
     // invalid npub
   }
 
+  // Presence (ping-pong): green dot = this peer's app is reachable (wrapped
+  // ephemeral pings); the dot-button toggles MY opt-in to share back. Off by
+  // default for everyone.
+  const [presenceShared, setPresenceShared] = useState(false);
+  const [, setPresenceTick] = useState(0);
+  useEffect(() => {
+    setPresenceShared(
+      recipientPubkey
+        ? isPresenceSendEnabled(user?.pubkey ?? "", recipientPubkey)
+        : false
+    );
+  }, [recipientPubkey, user?.pubkey]);
+  // Re-render tick so the online dot can expire without a state push.
+  useEffect(() => {
+    if (presencePeers.size === 0) return;
+    const t = setInterval(() => setPresenceTick((x) => x + 1), 15000);
+    return () => clearInterval(t);
+  }, [presencePeers]);
+  const peerOnline =
+    !!recipientPubkey && (presencePeers.get(recipientPubkey) ?? 0) > Date.now();
+  const toggleSharePresence = () => {
+    if (!user || !recipientPubkey) return;
+    const next = !presenceShared;
+    setPresenceFor(recipientPubkey, next);
+    setPresenceShared(next);
+  };
+
   const conversationId =
     user && recipientPubkey
       ? getConversationId(user.pubkey, [recipientPubkey])
@@ -78,6 +129,31 @@ const ChatView: React.FC = () => {
   const conversation = conversationId
     ? conversations.get(conversationId)
     : null;
+
+  // One derive pass per conversation version (was: per message, per render —
+  // O(n²) reply lookups + reaction regrouping inside the render map).
+  const derived = useMemo(() => {
+    if (!conversation) {
+      return { messages: EMPTY_MESSAGES, byId: EMPTY_BY_ID, grouped: EMPTY_GROUPED };
+    }
+    const byId = new Map<string, DMMessage>();
+    for (const m of conversation.messages) byId.set(m.id, m);
+    const grouped = new Map<string, Record<string, GroupedReaction>>();
+    for (const m of conversation.messages) {
+      const list = conversation.reactions?.get(m.id) || [];
+      if (list.length === 0) continue;
+      const acc: Record<string, GroupedReaction> = {};
+      for (const r of list) {
+        if (!acc[r.emoji]) {
+          acc[r.emoji] = { emoji: r.emoji, count: 0, pubkeys: [], tags: r.tags };
+        }
+        acc[r.emoji].count++;
+        acc[r.emoji].pubkeys.push(r.pubkey);
+      }
+      grouped.set(m.id, acc);
+    }
+    return { messages: conversation.messages, byId, grouped };
+  }, [conversation]);
 
   useEffect(() => {
     if (recipientPubkey && !profiles?.get(recipientPubkey)) {
@@ -101,9 +177,21 @@ const ChatView: React.FC = () => {
     }
   }, [conversationId, conversation, markAsRead]);
 
+  // Jump to bottom WITHOUT animation whenever the conversation is opened or
+  // its first messages land; smooth-scroll only for messages that arrive in
+  // an already-open chat (the old code animating the whole history walk on
+  // every open felt broken).
+  const scrollCountRef = useRef(0);
+  const scrollConvRef = useRef<string | null>(null);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [conversation?.messages?.length]);
+    const el = messagesEndRef.current;
+    if (!el) return;
+    const instant =
+      scrollConvRef.current !== conversationId || scrollCountRef.current === 0;
+    scrollConvRef.current = conversationId ?? null;
+    scrollCountRef.current = derived.messages.length;
+    el.scrollIntoView({ behavior: instant ? "auto" : "smooth" });
+  }, [conversationId, derived.messages.length]);
 
   // The worker fans each gift wrap out to the relays it owns and reports the
   // per-relay outcome in the PublishResult. We render that directly — there is
@@ -132,7 +220,7 @@ const ChatView: React.FC = () => {
   }, [applyResult]);
 
   const handleRetry = useCallback(async (rumorId: string, relay?: string) => {
-    const status = sendStatuses.get(rumorId);
+    const status = sendStatusesRef.current.get(rumorId);
     if (!status) return;
 
     const relaysToRetry = relay
@@ -155,7 +243,7 @@ const ChatView: React.FC = () => {
       status.retryWraps.map(w => dataLayer.publishEvent(w))
     );
     applyResult(rumorId, mergePublishResults(results), status.retryWraps, relaysToRetry);
-  }, [sendStatuses, applyResult]);
+  }, [applyResult]);
 
   // Called by MessageInput — throwing here causes MessageInput to restore the draft
   const handleSend = useCallback(async (content: string) => {
@@ -164,6 +252,20 @@ const ChatView: React.FC = () => {
     setReplyTo(null);
     trackRelays(tracking);
   }, [recipientPubkey, sendMessage, replyTo, trackRelays]);
+
+  const handleSendFile = useCallback(
+    async (file: File, extra?: { waveform?: number[]; duration?: number }) => {
+      if (!recipientPubkey) throw new Error("No recipient");
+      const tracking = await sendFile(recipientPubkey, file, extra, replyTo?.id);
+      setReplyTo(null);
+      trackRelays(tracking);
+    },
+    [recipientPubkey, sendFile, replyTo, trackRelays]
+  );
+
+  const handleTyping = useCallback(() => {
+    if (recipientPubkey) notifyTyping(recipientPubkey);
+  }, [recipientPubkey, notifyTyping]);
 
   const handleReaction = useCallback(
     async (emoji: string, messageId: string) => {
@@ -192,7 +294,7 @@ const ChatView: React.FC = () => {
     nip19.npubEncode(recipientPubkey).slice(0, 12) + "...";
   const recipientPicture = recipientProfile?.picture || DEFAULT_IMAGE_URL;
 
-  const messages = conversation?.messages || [];
+  const messages = derived.messages;
 
   return (
     <Box
@@ -230,8 +332,62 @@ const ChatView: React.FC = () => {
           }
         >
           {recipientName}
+          {peerOnline && (
+            <Box
+              component="span"
+              title="online now"
+              sx={{
+                display: "inline-block",
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                bgcolor: "success.main",
+                ml: 0.75,
+                verticalAlign: "middle",
+              }}
+            />
+          )}
         </Typography>
+        <IconButton
+          size="small"
+          onClick={toggleSharePresence}
+          title={
+            presenceShared
+              ? "Sharing your online status — tap to stop"
+              : "Share your online status with this contact"
+          }
+          sx={{ ml: "auto" }}
+        >
+          <Box
+            sx={{
+              width: 12,
+              height: 12,
+              borderRadius: "50%",
+              bgcolor: presenceShared ? "success.main" : "transparent",
+              border: 1.5,
+              borderColor: presenceShared ? "success.main" : "text.disabled",
+            }}
+          />
+        </IconButton>
       </Box>
+
+      {(recipientPubkey && (() => {
+        const exp = typingPeers.get(recipientPubkey);
+        return exp && exp > Date.now() ? (
+          <Typography
+            variant="caption"
+            sx={{
+              px: 2,
+              pb: 0.5,
+              fontStyle: "italic",
+              color: "text.secondary",
+              display: "block",
+            }}
+          >
+            typing…
+          </Typography>
+        ) : null;
+      })())}
 
       {/* Messages area */}
       <Box
@@ -244,40 +400,68 @@ const ChatView: React.FC = () => {
         flexDirection="column"
         gap={1}
       >
-        {messages.length === 0 && (
-          <Box
-            flex={1}
-            display="flex"
-            alignItems="center"
-            justifyContent="center"
-          >
-            <Typography variant="body2" color="text.secondary">
-              No messages yet. Say hello!
+        {conversation && messages.length > 0 && hasMore && (
+          <Box display="flex" justifyContent="center" alignItems="center" py={0.5}>
+            <Typography
+              variant="caption"
+              color="primary"
+              sx={{
+                cursor: loadingMore ? "default" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 0.5,
+                px: 1,
+                py: 0.5,
+              }}
+              onClick={() => {
+                if (!loadingMore) loadOlder();
+              }}
+            >
+              {loadingMore ? (
+                <>
+                  <CircularProgress size={11} color="inherit" />
+                  Loading older…
+                </>
+              ) : (
+                "Load older messages"
+              )}
             </Typography>
           </Box>
         )}
+        {messages.length === 0 &&
+          (loading ? (
+            <Box
+              flex={1}
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              gap={1}
+            >
+              <CircularProgress size={18} color="inherit" />
+              <Typography variant="body2" color="text.secondary">
+                Loading messages…
+              </Typography>
+            </Box>
+          ) : (
+            <Box
+              flex={1}
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+            >
+              <Typography variant="body2" color="text.secondary">
+                No messages yet. Say hello!
+              </Typography>
+            </Box>
+          ))}
         {messages.map((msg) => {
           const isMine = msg.pubkey === user?.pubkey;
-          const msgReactions = conversation?.reactions?.get(msg.id) || [];
-          const groupedReactions = msgReactions.reduce<
-            Record<
-              string,
-              { emoji: string; count: number; pubkeys: string[]; tags?: string[][] }
-            >
-          >((acc, r) => {
-            if (!acc[r.emoji]) {
-              acc[r.emoji] = { emoji: r.emoji, count: 0, pubkeys: [], tags: r.tags };
-            }
-            acc[r.emoji].count++;
-            acc[r.emoji].pubkeys.push(r.pubkey);
-            return acc;
-          }, {});
 
           const replyTag = msg.tags.find(
             (t) => t[0] === "e" && t[3] === "reply"
           );
           const referencedMsg = replyTag
-            ? messages.find((m) => m.id === replyTag[1])
+            ? derived.byId.get(replyTag[1])
             : undefined;
           const referencedMsgSenderName = referencedMsg
             ? referencedMsg.pubkey === user?.pubkey
@@ -290,14 +474,14 @@ const ChatView: React.FC = () => {
               key={msg.id}
               msg={msg}
               isMine={isMine}
-              reactions={groupedReactions}
+              reactions={derived.grouped.get(msg.id) ?? EMPTY_GROUPED_REACTIONS}
               referencedMsg={referencedMsg}
               referencedMsgSenderName={referencedMsgSenderName}
               sendStatus={sendStatuses.get(msg.id)}
               onLongPress={setContextMenuMsg}
               onReact={handleReaction}
               onSwipeReply={setReplyTo}
-              onRetry={(relay) => handleRetry(msg.id, relay)}
+              onRetry={handleRetry}
             />
           );
         })}
@@ -313,6 +497,8 @@ const ChatView: React.FC = () => {
         }
         onClearReply={() => setReplyTo(null)}
         onSend={handleSend}
+        onSendFile={handleSendFile}
+        onTyping={handleTyping}
       />
 
       {/* Context menu */}

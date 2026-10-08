@@ -76,6 +76,7 @@ const KIND_LABELS: Record<number, string> = {
   6: "Reposts",
   7: "Reactions",
   1059: "Gift wraps",
+  21059: "Ephemeral gift wraps",
   1068: "Polls",
   1018: "Poll responses",
   10002: "Relay lists",

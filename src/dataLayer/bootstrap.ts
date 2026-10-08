@@ -22,6 +22,31 @@ import { notifyRelayRefresh, subscribeRelayRefresh, markRelayHydrated } from "./
 
 let started = false;
 
+/** Module handle to the live LocalRelayClient (for nudgeRelaySync). */
+let boundClient: LocalRelayClient | null = null;
+
+/**
+ * Foreground socket-rot recovery: tear down every upstream socket and reopen
+ * the standing sync interests on fresh ones. The SDK only reconnects when it
+ * sees a real close event — a half-open socket (network switch, relay
+ * restart, mobile power-save) just goes silent forever, so live messages stop
+ * arriving. Cheap: interests already live in the worker and replay is
+ * REQ-only over freshly opened sockets.
+ */
+export function nudgeRelaySync(): void {
+  if (!boundClient) return;
+  boundClient.pause();
+  boundClient.resume();
+}
+
+/** Raw relay-worker handle — app-defined frames outside the nostr protocol
+ *  (e.g. the WoT cold-wrap sweep) post straight to the worker. */
+let relayWorker: Worker | null = null;
+/** Post an app-defined frame directly to the relay worker. No-op before boot. */
+export function postRelayWorkerFrame(frame: unknown): void {
+  if (relayWorker) relayWorker.postMessage(frame);
+}
+
 /** Idempotent: spawns the worker + wires the DataLayer once, returns the singleton. */
 export function bootstrapDataLayer(): DataLayer {
   if (started) return getDataLayer();
@@ -30,6 +55,7 @@ export function bootstrapDataLayer(): DataLayer {
   // Webpack 5 emits a same-origin worker chunk for this URL form (proven by the
   // existing mining worker); loads under http(s)/capacitor origins alike.
   const worker = new Worker(new URL("../worker/relay.worker", import.meta.url));
+  relayWorker = worker;
   const baseChannel = workerChannel(worker);
 
   // Wrap the channel to watch the worker boundary for moments when it can newly
@@ -68,6 +94,8 @@ export function bootstrapDataLayer(): DataLayer {
     },
   });
 
+  boundClient = client;
+
   // Base relay set: the upstream sync floor AND the relays that author-LESS
   // interests (DMs/kind-1059, mentions, "global") get their LIVE subscriptions on.
   // Outbox routing per author (kind-10002) happens inside the worker on top of this.
@@ -83,7 +111,8 @@ export function bootstrapDataLayer(): DataLayer {
   // Two ROUTING-POLICY inputs, kept separate (local-relay >= 0.4.0):
   //   - setUserRelays  ← NIP-65 read relays (kind 10002), the floor for feeds and
   //     every author-less scope EXCEPT DMs.
-  //   - setDmRelays    ← NIP-17 DM inbox relays (kind 10050). The kind-1059 stream
+  //   - setDmRelays    ← NIP-17 DM inbox relays (kind 10050). The kind-1059/21059
+  //     stream (DMs + NIP-59 ephemeral pings)
   //     reads from DM relays UNION user relays; other author-less scopes (the feed
   //     firehose, {ids} fetches) never touch the DM inbox relays. Folding 10050
   //     into setUserRelays (the pre-0.4.0 approach) firehosed the user's whole
@@ -114,7 +143,7 @@ export function bootstrapDataLayer(): DataLayer {
             }
             client.setUserRelays(Array.from(readRelays));
           } else if (event.kind === 10050) {
-            // NIP-17 DM inbox relays → dedicated kind-1059 routing.
+            // NIP-17 DM inbox relays → dedicated kind-1059/21059 routing.
             for (const t of event.tags) {
               if (t[0] === "relay" && t[1]) dmRelays.add(t[1]);
             }

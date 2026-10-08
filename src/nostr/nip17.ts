@@ -11,6 +11,7 @@ import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { dataLayer, type PublishResult } from "@formstr/local-relay";
 import { signerManager } from "../singletons/Signer/SignerManager";
+import { buildFileTags, FileMeta } from "./fileMessage";
 
 // A rumor is an unsigned event with an id
 export type Rumor = UnsignedEvent & { id: string };
@@ -187,7 +188,7 @@ function computeRumorId(rumor: UnsignedEvent): string {
 /**
  * Create a rumor (unsigned event). Defaults to kind 14 (DM).
  */
-function createRumor(
+export function createRumor(
   senderPubkey: string,
   recipientPubkey: string,
   content: string,
@@ -217,12 +218,15 @@ function createRumor(
 
 /**
  * Create a gift wrap with a local private key (LocalSigner path).
- * Implements NIP-59: rumor -> seal (kind 13) -> gift wrap (kind 1059).
+ * Implements NIP-59: rumor -> seal (kind 13) -> gift wrap (kind 1059;
+ * kind 21059 — the spec's ephemeral gift wrap — for typing/presence pings).
  */
 function createGiftWrapLocal(
   senderPrivkey: Uint8Array,
   rumor: Rumor,
-  recipientPubkey: string
+  recipientPubkey: string,
+  wrapExpiryS?: number,
+  wrapKind: number = 1059
 ): Event {
   // Step 1: Create seal (kind 13) - encrypt rumor with sender's key for recipient
   const rumorJson = JSON.stringify(rumor);
@@ -238,7 +242,7 @@ function createGiftWrapLocal(
   };
   const seal = finalizeEvent(sealEvent, senderPrivkey);
 
-  // Step 2: Create gift wrap (kind 1059) with ephemeral key
+  // Step 2: Create gift wrap (kind 1059, or 21059 for ephemeral pings)
   const ephemeralKey = generateSecretKey();
   const ephemeralPubkey = getPublicKey(ephemeralKey);
 
@@ -246,10 +250,15 @@ function createGiftWrapLocal(
   const wrapConvKey = nip44.getConversationKey(ephemeralKey, recipientPubkey);
   const encryptedSeal = nip44.encrypt(sealJson, wrapConvKey);
 
+  const wrapTags: string[][] = [["p", recipientPubkey]];
+  if (wrapExpiryS) {
+    wrapTags.push(["expiration", String(Math.floor(Date.now() / 1000) + wrapExpiryS)]);
+  }
+
   const wrapEvent: UnsignedEvent = {
-    kind: 1059,
+    kind: wrapKind,
     created_at: randomTimestamp(),
-    tags: [["p", recipientPubkey]],
+    tags: wrapTags,
     content: encryptedSeal,
     pubkey: ephemeralPubkey,
   };
@@ -266,7 +275,9 @@ async function createGiftWrapForSigner(
     nip44Encrypt?: (pk: string, txt: string) => Promise<string>;
   },
   rumor: Rumor,
-  recipientPubkey: string
+  recipientPubkey: string,
+  wrapExpiryS?: number,
+  wrapKind: number = 1059
 ): Promise<Event> {
   if (!signer.nip44Encrypt) {
     throw new Error("Signer does not support NIP-44 encryption");
@@ -285,7 +296,7 @@ async function createGiftWrapForSigner(
   };
   const seal = await signer.signEvent(sealTemplate);
 
-  // Step 3: Create gift wrap with ephemeral key (kind 1059)
+  // Step 3: Create gift wrap with ephemeral key (kind 1059/21059)
   const ephemeralKey = generateSecretKey();
   const ephemeralPubkey = getPublicKey(ephemeralKey);
 
@@ -296,10 +307,15 @@ async function createGiftWrapForSigner(
   );
   const encryptedSeal = nip44.encrypt(sealJson, conversationKey);
 
+  const wrapTags: string[][] = [["p", recipientPubkey]];
+  if (wrapExpiryS) {
+    wrapTags.push(["expiration", String(Math.floor(Date.now() / 1000) + wrapExpiryS)]);
+  }
+
   const wrapTemplate: UnsignedEvent = {
-    kind: 1059,
+    kind: wrapKind,
     created_at: randomTimestamp(),
-    tags: [["p", recipientPubkey]],
+    tags: wrapTags,
     content: encryptedSeal,
     pubkey: ephemeralPubkey,
   };
@@ -308,7 +324,7 @@ async function createGiftWrapForSigner(
 }
 
 /**
- * Unwrap a gift wrap (kind 1059) locally with a private key.
+ * Unwrap a gift wrap (kind 1059 / ephemeral 21059) locally with a private key.
  */
 function unwrapGiftWrapLocal(
   wrap: Event,
@@ -328,6 +344,54 @@ function unwrapGiftWrapLocal(
 }
 
 /**
+ * Relay-side NIP-40 TTL for gift wraps of real DM traffic (kind 14/15/7):
+ * NIP-17 recommends wraps expire on relays days-to-months out. The local
+ * cache keeps wraps for a year regardless — relays are transport, local is
+ * the durable record. Ping wraps evaporate far faster (typing.ts).
+ */
+export const NIP17_WRAP_TTL_S = 30 * 24 * 60 * 60;
+
+/**
+ * Shared NIP-59 wrap-and-publish core. Takes a ready rumor (kind 14 text,
+ * kind 15 file, kind 7 reaction), wraps it to the recipient + the sender on
+ * both LocalSigner and external-signer paths, publishes via the worker (which
+ * routes each wrap by its #p tag), and merges per-relay outcomes.
+ */
+async function wrapAndPublishRumor(
+  rumor: Rumor,
+  recipientPubkey: string,
+  privateKey?: string
+): Promise<SendResult> {
+  const signer = await signerManager.getSigner();
+  const senderPubkey = await signer.getPublicKey();
+
+  let wraps: Event[];
+
+  if (privateKey) {
+    const privkeyBytes = hexToBytes(privateKey);
+    const wrapForRecipient = createGiftWrapLocal(privkeyBytes, rumor, recipientPubkey, NIP17_WRAP_TTL_S);
+    const wrapForSender = createGiftWrapLocal(privkeyBytes, rumor, senderPubkey, NIP17_WRAP_TTL_S);
+    wraps = [wrapForRecipient, wrapForSender];
+  } else {
+    if (!signer.nip44Encrypt) {
+      throw new Error(
+        "Your signer does not support NIP-44 encryption, which is required for DMs."
+      );
+    }
+    const recipientWrap = await createGiftWrapForSigner(signer, rumor, recipientPubkey, NIP17_WRAP_TTL_S);
+    const senderWrap = await createGiftWrapForSigner(signer, rumor, senderPubkey, NIP17_WRAP_TTL_S);
+    wraps = [recipientWrap, senderWrap];
+  }
+
+  // The worker routes each gift wrap to the recipient's (and sender's) inbox
+  // relays based on its #p tag — the app no longer selects relays. We await the
+  // per-relay outcomes so the UI can show delivery status.
+  const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
+
+  return { rumor, wraps, result: mergePublishResults(results) };
+}
+
+/**
  * Wrap and send a DM using NIP-17 protocol.
  * Handles both LocalSigner (has privateKey) and external signer paths.
  */
@@ -343,30 +407,36 @@ export async function wrapAndSendDM(
   // Create the rumor (unsigned kind 14)
   const rumor = createRumor(senderPubkey, recipientPubkey, content, replyToId);
 
-  let wraps: Event[];
+  return wrapAndPublishRumor(rumor, recipientPubkey, privateKey);
+}
 
-  if (privateKey) {
-    const privkeyBytes = hexToBytes(privateKey);
-    const wrapForRecipient = createGiftWrapLocal(privkeyBytes, rumor, recipientPubkey);
-    const wrapForSender = createGiftWrapLocal(privkeyBytes, rumor, senderPubkey);
-    wraps = [wrapForRecipient, wrapForSender];
-  } else {
-    if (!signer.nip44Encrypt) {
-      throw new Error(
-        "Your signer does not support NIP-44 encryption, which is required for DMs."
-      );
-    }
-    const recipientWrap = await createGiftWrapForSigner(signer, rumor, recipientPubkey);
-    const senderWrap = await createGiftWrapForSigner(signer, rumor, senderPubkey);
-    wraps = [recipientWrap, senderWrap];
-  }
+/**
+ * Wrap and send a file attachment (NIP-17 kind 15) encrypted per NIP-59.
+ * `fileMeta` must already be fully populated: the blob uploaded (encrypted)
+ * to Blossom with `url` + `encryptedSha`, plus `key`/`nonce` and hashes —
+ * see fileMessage.ts.
+ */
+export async function wrapAndSendFile(
+  recipientPubkey: string,
+  fileMeta: FileMeta,
+  privateKey?: string,
+  replyToId?: string
+): Promise<SendResult> {
+  const signer = await signerManager.getSigner();
+  const senderPubkey = await signer.getPublicKey();
 
-  // The worker routes each gift wrap to the recipient's (and sender's) inbox
-  // relays based on its #p tag — the app no longer selects relays. We await the
-  // per-relay outcomes so the UI can show delivery status.
-  const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
+  // Kind 15 rumor: content = the encrypted blob's URL, tags carry the
+  // NIP-94-style decryption contract (file-type/encryption-algorithm/keys/…).
+  const rumor = createRumor(
+    senderPubkey,
+    recipientPubkey,
+    fileMeta.url,
+    replyToId,
+    15,
+    buildFileTags(fileMeta)
+  );
 
-  return { rumor, wraps, result: mergePublishResults(results) };
+  return wrapAndPublishRumor(rumor, recipientPubkey, privateKey);
 }
 
 /**
@@ -398,12 +468,14 @@ export async function wrapAndSendReaction(
     const wrapForRecipient = createGiftWrapLocal(
       privkeyBytes,
       rumor,
-      recipientPubkey
+      recipientPubkey,
+      NIP17_WRAP_TTL_S
     );
     const wrapForSender = createGiftWrapLocal(
       privkeyBytes,
       rumor,
-      senderPubkey
+      senderPubkey,
+      NIP17_WRAP_TTL_S
     );
 
     await dataLayer.publishEvent(wrapForRecipient);
@@ -418,14 +490,16 @@ export async function wrapAndSendReaction(
     const recipientWrap = await createGiftWrapForSigner(
       signer,
       rumor,
-      recipientPubkey
+      recipientPubkey,
+      NIP17_WRAP_TTL_S
     );
     await dataLayer.publishEvent(recipientWrap);
 
     const senderWrap = await createGiftWrapForSigner(
       signer,
       rumor,
-      senderPubkey
+      senderPubkey,
+      NIP17_WRAP_TTL_S
     );
     await dataLayer.publishEvent(senderWrap);
   }
@@ -434,7 +508,7 @@ export async function wrapAndSendReaction(
 }
 
 /**
- * Unwrap a gift wrap (kind 1059) to extract the rumor.
+ * Unwrap a gift wrap (kind 1059 / ephemeral 21059) to extract the rumor.
  * Handles both LocalSigner and external signer paths.
  */
 export async function unwrapGiftWrap(
@@ -474,6 +548,100 @@ export async function unwrapGiftWrap(
     console.error("Failed to unwrap gift wrap:", e);
     return null;
   }
+}
+
+/**
+ * Tag marking a typing-key binding inside a kind-14 rumor:
+ * ["typing-key", <ephemeralPk>, <untilEpochSecs>]. The rumor is sealed by the
+ * sender's REAL key, so the binding authenticates the ephemeral typing key to
+ * the conversation participants (see typing.ts for the full protocol).
+ */
+export const TYPING_KEY_TAG = "typing-key";
+
+export interface TypingBinding {
+  /** The ephemeral key allowed to emit typing pings for the sender. */
+  ephemeralPk: string;
+  /** Epoch seconds after which the binding (and its pings) expire. */
+  until: number;
+}
+
+/** Defensive cap on a binding's horizon — senders ask for ~12h. */
+const MAX_BINDING_HORIZON_S = 24 * 60 * 60;
+
+/**
+ * Parse a typing-key binding rumor; null when this is any other kind-14.
+ * Used on the receive side to route binding DMs away from message storage.
+ */
+export function parseTypingKeyRumor(rumor: Rumor): TypingBinding | null {
+  if (rumor.kind !== 14) return null;
+  let tag: string[] | undefined;
+  for (const t of rumor.tags) {
+    if (t[0] === TYPING_KEY_TAG) {
+      tag = t;
+      break;
+    }
+  }
+  if (!tag || !tag[1] || !tag[2]) return null;
+  if (!/^[0-9a-f]{64}$/.test(tag[1])) return null;
+  const until = parseInt(tag[2], 10);
+  const nowS = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(until) || until <= nowS) return null;
+  return {
+    ephemeralPk: tag[1],
+    until: Math.min(until, nowS + MAX_BINDING_HORIZON_S),
+  };
+}
+
+/**
+ * Publish the typing-key binding DM through the normal NIP-17 pipeline:
+ * kind-14 rumor sealed by the REAL key (silent on local keys; a single
+ * prompt on external signers), wrapped + routed like any other DM.
+ */
+export async function publishTypingKeyBinding(
+  recipientPubkey: string,
+  ephemeralPk: string,
+  until: number,
+  privateKey?: string
+): Promise<void> {
+  const signer = await signerManager.getSigner();
+  const senderPubkey = await signer.getPublicKey();
+  const rumor = createRumor(senderPubkey, recipientPubkey, "", undefined, 14, [
+    [TYPING_KEY_TAG, ephemeralPk, String(until)],
+  ]);
+  await wrapAndPublishRumor(rumor, recipientPubkey, privateKey);
+}
+
+/**
+ * Seal + wrap a rumor signed by a LOCAL (ephemeral) key — no signer prompts.
+ * Used by typing pings (see typing.ts): the seal is signed by `signingKey`
+ * itself; each recipient wrap gets a fresh NIP-59 ephemeral key. Merged
+ * per-relay outcomes returned; typing callers treat sends as best-effort.
+ */
+export async function publishLocalSignedWraps(
+  signingKey: Uint8Array,
+  rumor: Rumor,
+  recipients: string[],
+  wrapExpiryS?: number,
+  wrapKind: number = 1059
+): Promise<PublishResult> {
+  const wraps = recipients.map((r) =>
+    createGiftWrapLocal(signingKey, rumor, r, wrapExpiryS, wrapKind)
+  );
+  const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
+  return mergePublishResults(results);
+}
+
+/**
+ * True for a wrapped presence ping: kind-20001 rumor carrying t="presence".
+ * Distinguished from typing pings so receivers can apply the longer online
+ * window instead of the 6s typing flash.
+ */
+export function isPresencePingRumor(rumor: Rumor): boolean {
+  if (rumor.kind !== 20001) return false;
+  for (const t of rumor.tags) {
+    if (t[0] === "t" && t[1] === "presence") return true;
+  }
+  return false;
 }
 
 /**
