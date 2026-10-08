@@ -52,8 +52,16 @@ const EMPTY_GROUPED = new Map<string, Record<string, GroupedReaction>>();
 const ChatView: React.FC = () => {
   const { npub } = useParams<{ npub: string }>();
   const navigate = useNavigate();
-  const { conversations, sendMessage, sendReaction, markAsRead, loading } =
-    useDMContext();
+  const {
+    conversations,
+    sendMessage,
+    sendReaction,
+    markAsRead,
+    loading,
+    loadOlder,
+    loadingMore,
+    hasMore,
+  } = useDMContext();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user } = useUserContext();
   const [contextMenuMsg, setContextMenuMsg] = useState<DMMessage | null>(null);
@@ -279,6 +287,34 @@ const ChatView: React.FC = () => {
         flexDirection="column"
         gap={1}
       >
+        {conversation && messages.length > 0 && hasMore && (
+          <Box display="flex" justifyContent="center" alignItems="center" py={0.5}>
+            <Typography
+              variant="caption"
+              color="primary"
+              sx={{
+                cursor: loadingMore ? "default" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 0.5,
+                px: 1,
+                py: 0.5,
+              }}
+              onClick={() => {
+                if (!loadingMore) loadOlder();
+              }}
+            >
+              {loadingMore ? (
+                <>
+                  <CircularProgress size={11} color="inherit" />
+                  Loading older…
+                </>
+              ) : (
+                "Load older messages"
+              )}
+            </Typography>
+          </Box>
+        )}
         {messages.length === 0 &&
           (loading ? (
             <Box

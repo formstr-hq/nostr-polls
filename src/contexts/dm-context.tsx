@@ -74,6 +74,12 @@ interface DMContextInterface {
   markAllAsRead: () => void;
   unreadTotal: number;
   loading: boolean;
+  /** Fetch the next older window of gift wraps (until-cursor pagination). */
+  loadOlder: () => void;
+  /** True while an older window is being fetched. */
+  loadingMore: boolean;
+  /** False once a pagination page yielded nothing older. */
+  hasMore: boolean;
 }
 
 export const DMContext = createContext<DMContextInterface | null>(null);
@@ -90,6 +96,9 @@ const REACTION_LEGACY_PREFIX = "dm_reactions_";
  * worker's IndexedDB store, so a real reload re-derives everything.
  */
 const pendingReactions = new Map<string, Record<string, DMReaction[]>>();
+
+/** Initial gift-wrap window per observe: newest N wraps on boot/refresh. */
+const DM_PAGE = 100;
 
 /**
  * Merge the already-sorted messages array with a small ascending batch without
@@ -147,6 +156,10 @@ export function DMProvider({ children }: { children: ReactNode }) {
   );
 
   const [loading, setLoading] = useState(false);
+  // Pagination UI state: an "older" page is in flight, and older history still
+  // exists (a page that yielded zero new wraps flips hasMore off).
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const seenRumorIds = useRef<Set<string>>(new Set());
   // Gift-wrap event ids already processed — dedup BEFORE decrypt so a re-observe
   // (after worker hydration) doesn't re-decrypt known wraps and, for external
@@ -163,6 +176,13 @@ export function DMProvider({ children }: { children: ReactNode }) {
   const decryptQueue = useRef<Promise<void>>(Promise.resolve());
   // If the user rejects a decrypt request, stop asking for the rest of the session
   const decryptionRejected = useRef(false);
+  // Pagination cursor state (until = oldest wrap created_at seen). The head
+  // window stays live beside the cursor window so the live tail keeps flowing —
+  // same pattern as the feed's useEvents pagination.
+  const oldestWrapTsRef = useRef(0);
+  const cursorUntilRef = useRef(0);
+  const pageNewRef = useRef(0);
+  const loadingMoreRef = useRef(false);
 
   /** Recompute `unreadCount` for each conversation against the read-state
    *  watermark. Called once after `loadReadState` resolves so a conversation
@@ -439,7 +459,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
       setLoading(true);
 
       const handle = dataLayer.observe(
-        [{ kinds: [1059], "#p": [myPubkey] }],
+        [{ kinds: [1059], "#p": [myPubkey], limit: DM_PAGE }],
         {
           onEvent: async (event: Event) => {
             // Dedup by gift-wrap id before any decryption so a re-observe never
@@ -447,6 +467,21 @@ export function DMProvider({ children }: { children: ReactNode }) {
             // we've already handled this session.
             if (seenWrapIds.current.has(event.id)) return;
             seenWrapIds.current.add(event.id);
+            // Pagination bookkeeping: track the oldest wrap seen as the cursor;
+            // count first-seen wraps at/below the active cursor to decide whether
+            // an older page actually exists (hasMore).
+            if (
+              oldestWrapTsRef.current === 0 ||
+              event.created_at < oldestWrapTsRef.current
+            ) {
+              oldestWrapTsRef.current = event.created_at;
+            }
+            if (
+              cursorUntilRef.current > 0 &&
+              event.created_at <= cursorUntilRef.current
+            ) {
+              pageNewRef.current++;
+            }
 
             if (privateKey) {
               // Local key: decrypt instantly, no signer prompts
@@ -475,6 +510,13 @@ export function DMProvider({ children }: { children: ReactNode }) {
             }
             flushPending();
             setLoading(false);
+            if (cursorUntilRef.current > 0) {
+              setHasMore(pageNewRef.current > 0);
+              cursorUntilRef.current = 0;
+              pageNewRef.current = 0;
+              loadingMoreRef.current = false;
+              setLoadingMore(false);
+            }
           },
         }
       );
@@ -499,6 +541,27 @@ export function DMProvider({ children }: { children: ReactNode }) {
       subRef.current = null;
     };
   }, [user, addMessages, refresh, applyReadStateToConversations]);
+
+  /**
+   * Widen the DM window by one page: keep the live head beside an until-cursor
+   * window ending at the oldest wrap seen (inclusive — dedup swallows the
+   * overlap). A growing `limit` would re-serve the same newest-N forever once N
+   * passes relay caps, so the cursor is the correct mechanism (same rationale
+   * as the feed's useEvents.loadOlder).
+   */
+  const loadOlder = useCallback(() => {
+    const handle = subRef.current;
+    const cursor = oldestWrapTsRef.current;
+    if (!handle || !user || loadingMoreRef.current || cursor === 0) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    pageNewRef.current = 0;
+    cursorUntilRef.current = cursor;
+    handle.update([
+      { kinds: [1059], "#p": [user.pubkey], limit: DM_PAGE },
+      { kinds: [1059], "#p": [user.pubkey], until: cursor, limit: DM_PAGE },
+    ]);
+  }, [user, addMessages]);
 
   const sendMessage = useCallback(
     async (
@@ -593,6 +656,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
       markAllAsRead,
       unreadTotal,
       loading,
+      loadOlder,
+      loadingMore,
+      hasMore,
     }),
     [
       conversations,
@@ -602,6 +668,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
       markAllAsRead,
       unreadTotal,
       loading,
+      loadOlder,
+      loadingMore,
+      hasMore,
     ]
   );
 
