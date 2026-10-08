@@ -18,7 +18,7 @@
     "@fontsource-variable/comfortaa": "^5.2.8",
     "@fontsource-variable/fredoka": "^5.2.10",
     "@fontsource-variable/raleway": "^5.2.8",
-    "@formstr/local-relay": "^0.6.4",
+    "@formstr/local-relay": "^0.6.5",
     "@formstr/signer": "^0.3.1",
     "@mui/icons-material": "^6.1.2",
     "@mui/material": "^6.1.2",
@@ -48,8 +48,7 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject",
-    "postinstall": "node scripts/patch-sdk-dm-kinds.mjs"
+    "eject": "react-scripts eject"
   },
   "jest": {
     "transform": {
