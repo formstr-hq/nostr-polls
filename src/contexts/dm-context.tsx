@@ -18,6 +18,7 @@ import {
   wrapAndSendReaction,
   wrapAndSendFile,
   getConversationId,
+  parseTypingKeyRumor,
   Rumor,
 } from "../nostr/nip17";
 import {
@@ -27,7 +28,7 @@ import {
   uploadToBlossom,
   measureImageDim,
 } from "../nostr/fileMessage";
-import { sendTypingPing } from "../nostr/typing";
+import { sendTypingPing, resetTypingSessions } from "../nostr/typing";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
@@ -219,6 +220,18 @@ export function DMProvider({ children }: { children: ReactNode }) {
   );
   const typingPeersRef = useRef(typingPeers);
   typingPeersRef.current = typingPeers;
+  // Typing v2 bindings: ephemeralPk -> { realPk, until(s) }. The binding DM is
+  // sealed by the sender's real key, so this map is the trust anchor that lets
+  // wrapped pings attribute themselves to a participant. Session memory only —
+  // senders re-key and re-bind on their next session; nothing persists.
+  const typingKeyBindingsRef = useRef(
+    new Map<string, { realPk: string; until: number }>()
+  );
+  // Wrapped pings that raced ahead of their binding wrap: ephemeralPk ->
+  // held pings, flushed when the binding lands (or dropped on expiry).
+  const pendingTypingRef = useRef(
+    new Map<string, Array<{ expiresAtMs: number; wrapId: string }>>()
+  );
   useEffect(() => {
     const t = setInterval(() => {
       const now = Date.now();
@@ -529,6 +542,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
       decryptionRejected.current = false;
       coldWrapsRef.current.clear();
       followsRef.current.clear();
+      typingKeyBindingsRef.current.clear();
+      pendingTypingRef.current.clear();
+      resetTypingSessions();
     }
 
     // Follow list feeds the cold-wrap warmth check. One query per session,
@@ -609,54 +625,121 @@ export function DMProvider({ children }: { children: ReactNode }) {
       setLoading(true);
 
       const handle = dataLayer.observe(
-        [{ kinds: [1059, 20001], "#p": [myPubkey], limit: DM_PAGE }],
+        [{ kinds: [1059], "#p": [myPubkey], limit: DM_PAGE }],
         {
           onEvent: async (event: Event) => {
-            // Kind 20001 = ephemeral typing ping: arrives UNWRAPPED (no seal,
-            // no rumor) and never needs decryption. Best-effort signal.
-            if (event.kind === 20001) {
-              const peer = event.pubkey;
-              const expiresAt = event.created_at * 1000 + TYPING_VISIBLE_MS;
-              if ((typingPeersRef.current.get(peer) ?? 0) < expiresAt) {
-                setTypingPeers((prev) => {
-                  if ((prev.get(peer) ?? 0) >= expiresAt) return prev;
-                  return new Map(prev).set(peer, expiresAt);
-                });
-              }
-              return;
-            }
             // Dedup by gift-wrap id before any decryption so a re-observe never
             // re-decrypts (and never re-prompts an external signer for) a wrap
             // we've already handled this session.
             if (seenWrapIds.current.has(event.id)) return;
             seenWrapIds.current.add(event.id);
+
+            // Wrapped typing (v2): pings and binding DMs arrive as ordinary
+            // kind-1059 wraps. They are consumed in-memory — applied to typing
+            // state, never stored, counted, or cold-queued — and their wraps
+            // are deleted straight away. Returns true when consumed.
+            const applyTypingState = (peer: string, expiresAtMs: number) => {
+              if ((typingPeersRef.current.get(peer) ?? 0) >= expiresAtMs) return;
+              setTypingPeers((prev) => {
+                if ((prev.get(peer) ?? 0) >= expiresAtMs) return prev;
+                return new Map(prev).set(peer, expiresAtMs);
+              });
+            };
+            const routeOrStore = (rumor: Rumor, wrapId: string): boolean => {
+              const now = Date.now();
+              const expiresAt = rumor.created_at * 1000 + TYPING_VISIBLE_MS;
+              if (rumor.kind === 20001) {
+                // Ping sealed by an ephemeral typing key: accept only with a
+                // live binding, attribute to the bound real pubkey. An expired
+                // ping or dead binding is junk — drop its wrap either way.
+                const binding = typingKeyBindingsRef.current.get(rumor.pubkey);
+                if (binding && binding.until > now / 1000 && expiresAt > now) {
+                  applyTypingState(binding.realPk, expiresAt);
+                  postRelayWorkerFrame({
+                    kind: "app:remove-events",
+                    ids: [wrapId],
+                  });
+                } else if (expiresAt > now && !binding) {
+                  // Binding wrap may still be in flight — hold briefly.
+                  const q = pendingTypingRef.current.get(rumor.pubkey);
+                  if (!q) {
+                    pendingTypingRef.current.set(rumor.pubkey, [
+                      { expiresAtMs: expiresAt, wrapId },
+                    ]);
+                  } else if (q.length < 50) {
+                    q.push({ expiresAtMs: expiresAt, wrapId });
+                  }
+                } else {
+                  postRelayWorkerFrame({
+                    kind: "app:remove-events",
+                    ids: [wrapId],
+                  });
+                }
+                return true;
+              }
+              const bindingMsg = parseTypingKeyRumor(rumor);
+              if (bindingMsg) {
+                // Binding announcement (kind-14, typing-key tag): cache it,
+                // flush pings that raced ahead, delete the wrap so it is
+                // never stored or rendered.
+                typingKeyBindingsRef.current.set(bindingMsg.ephemeralPk, {
+                  realPk: rumor.pubkey,
+                  until: bindingMsg.until,
+                });
+                const dropIds: string[] = [wrapId];
+                const q = pendingTypingRef.current.get(bindingMsg.ephemeralPk);
+                if (q) {
+                  pendingTypingRef.current.delete(bindingMsg.ephemeralPk);
+                  for (const p of q) {
+                    if (p.expiresAtMs > now) {
+                      applyTypingState(rumor.pubkey, p.expiresAtMs);
+                    }
+                    dropIds.push(p.wrapId);
+                  }
+                }
+                postRelayWorkerFrame({
+                  kind: "app:remove-events",
+                  ids: dropIds,
+                });
+                return true;
+              }
+              return false;
+            };
             // Pagination bookkeeping: track the oldest wrap seen as the cursor;
             // count first-seen wraps at/below the active cursor to decide whether
-            // an older page actually exists (hasMore).
-            if (
-              oldestWrapTsRef.current === 0 ||
-              event.created_at < oldestWrapTsRef.current
-            ) {
-              oldestWrapTsRef.current = event.created_at;
-            }
-            if (
-              cursorUntilRef.current > 0 &&
-              event.created_at <= cursorUntilRef.current
-            ) {
-              pageNewRef.current++;
-            }
+            // an older page actually exists (hasMore). Skipped for typing and
+            // binding wraps — they're transient, not part of the window.
+            const trackForPagination = (ev: Event) => {
+              if (
+                oldestWrapTsRef.current === 0 ||
+                ev.created_at < oldestWrapTsRef.current
+              ) {
+                oldestWrapTsRef.current = ev.created_at;
+              }
+              if (
+                cursorUntilRef.current > 0 &&
+                ev.created_at <= cursorUntilRef.current
+              ) {
+                pageNewRef.current++;
+              }
+            };
 
             if (privateKey) {
               // Local key: decrypt instantly, no signer prompts
               const rumor = await unwrapGiftWrap(event, privateKey);
-              if (rumor) pushPending(rumor, event.id);
-              // WoT classification: a null rumor here is a deterministic
-              // local-key failure — unclassifiable junk, queued sender-less
-              // and dropped by the sweep after the grace window.
-              coldWrapsRef.current.set(event.id, {
-                sender: rumor ? rumor.pubkey : null,
-                createdAt: event.created_at,
-              });
+              if (rumor && routeOrStore(rumor, event.id)) {
+                // typing ping / binding announcement — consumed in-memory
+              } else {
+                trackForPagination(event);
+                if (rumor) pushPending(rumor, event.id);
+                // WoT classification: a null rumor here is a deterministic
+                // local-key failure — unclassifiable junk, queued sender-less
+                // and dropped by the sweep after the grace window.
+                coldWrapsRef.current.set(event.id, {
+                  sender: rumor ? rumor.pubkey : null,
+                  createdAt: event.created_at,
+                });
+              }
             } else {
               // External signer (Amber / NIP-07 / NIP-46): queue so only one
               // decrypt request is in-flight at a time — avoids bombarding the
@@ -664,19 +747,22 @@ export function DMProvider({ children }: { children: ReactNode }) {
               decryptQueue.current = decryptQueue.current.then(async () => {
                if (decryptionRejected.current) return;
                  const rumor = await unwrapGiftWrap(event, undefined);
+                if (rumor && routeOrStore(rumor, event.id)) {
+                  // typing ping / binding announcement — consumed in-memory
+                  return;
+                }
+                trackForPagination(event);
                 if (rumor) {
                   pushPending(rumor, event.id);
-                } else {
-                  // null means the signer rejected or failed — stop asking
-                  decryptionRejected.current = true;
-                }
-                if (rumor) {
                   // Classification only — a rejection is ambiguous (user said
                   // no), so failed external unwraps are never queued.
                   coldWrapsRef.current.set(event.id, {
                     sender: rumor.pubkey,
                     createdAt: event.created_at,
                   });
+                } else {
+                  // null means the signer rejected or failed — stop asking
+                  decryptionRejected.current = true;
                 }
               });
             }
@@ -838,9 +924,12 @@ export function DMProvider({ children }: { children: ReactNode }) {
 
   const notifyTyping = useCallback(
     (peerPubkey: string) => {
-      sendTypingPing(peerPubkey); // fire-and-forget; pings are best-effort
+      if (!user) return;
+      // fire-and-forget; pings are best-effort. v2: signer-free after the
+      // once-per-session binding prompt (all-local ephemeral signing).
+      sendTypingPing(peerPubkey, user.pubkey, user.privateKey);
     },
-    []
+    [user]
   );
 
   const markAsRead = useCallback(

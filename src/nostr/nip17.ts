@@ -188,7 +188,7 @@ function computeRumorId(rumor: UnsignedEvent): string {
 /**
  * Create a rumor (unsigned event). Defaults to kind 14 (DM).
  */
-function createRumor(
+export function createRumor(
   senderPubkey: string,
   recipientPubkey: string,
   content: string,
@@ -521,6 +521,85 @@ export async function unwrapGiftWrap(
     console.error("Failed to unwrap gift wrap:", e);
     return null;
   }
+}
+
+/**
+ * Tag marking a typing-key binding inside a kind-14 rumor:
+ * ["typing-key", <ephemeralPk>, <untilEpochSecs>]. The rumor is sealed by the
+ * sender's REAL key, so the binding authenticates the ephemeral typing key to
+ * the conversation participants (see typing.ts for the full protocol).
+ */
+export const TYPING_KEY_TAG = "typing-key";
+
+export interface TypingBinding {
+  /** The ephemeral key allowed to emit typing pings for the sender. */
+  ephemeralPk: string;
+  /** Epoch seconds after which the binding (and its pings) expire. */
+  until: number;
+}
+
+/** Defensive cap on a binding's horizon — senders ask for ~12h. */
+const MAX_BINDING_HORIZON_S = 24 * 60 * 60;
+
+/**
+ * Parse a typing-key binding rumor; null when this is any other kind-14.
+ * Used on the receive side to route binding DMs away from message storage.
+ */
+export function parseTypingKeyRumor(rumor: Rumor): TypingBinding | null {
+  if (rumor.kind !== 14) return null;
+  let tag: string[] | undefined;
+  for (const t of rumor.tags) {
+    if (t[0] === TYPING_KEY_TAG) {
+      tag = t;
+      break;
+    }
+  }
+  if (!tag || !tag[1] || !tag[2]) return null;
+  if (!/^[0-9a-f]{64}$/.test(tag[1])) return null;
+  const until = parseInt(tag[2], 10);
+  const nowS = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(until) || until <= nowS) return null;
+  return {
+    ephemeralPk: tag[1],
+    until: Math.min(until, nowS + MAX_BINDING_HORIZON_S),
+  };
+}
+
+/**
+ * Publish the typing-key binding DM through the normal NIP-17 pipeline:
+ * kind-14 rumor sealed by the REAL key (silent on local keys; a single
+ * prompt on external signers), wrapped + routed like any other DM.
+ */
+export async function publishTypingKeyBinding(
+  recipientPubkey: string,
+  ephemeralPk: string,
+  until: number,
+  privateKey?: string
+): Promise<void> {
+  const signer = await signerManager.getSigner();
+  const senderPubkey = await signer.getPublicKey();
+  const rumor = createRumor(senderPubkey, recipientPubkey, "", undefined, 14, [
+    [TYPING_KEY_TAG, ephemeralPk, String(until)],
+  ]);
+  await wrapAndPublishRumor(rumor, recipientPubkey, privateKey);
+}
+
+/**
+ * Seal + wrap a rumor signed by a LOCAL (ephemeral) key — no signer prompts.
+ * Used by typing pings (see typing.ts): the seal is signed by `signingKey`
+ * itself; each recipient wrap gets a fresh NIP-59 ephemeral key. Merged
+ * per-relay outcomes returned; typing callers treat sends as best-effort.
+ */
+export async function publishLocalSignedWraps(
+  signingKey: Uint8Array,
+  rumor: Rumor,
+  recipients: string[]
+): Promise<PublishResult> {
+  const wraps = recipients.map((r) =>
+    createGiftWrapLocal(signingKey, rumor, r)
+  );
+  const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
+  return mergePublishResults(results);
 }
 
 /**
