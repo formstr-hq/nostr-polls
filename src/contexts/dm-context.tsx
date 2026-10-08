@@ -3,6 +3,7 @@ import React, {
   ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -90,6 +91,33 @@ const REACTION_LEGACY_PREFIX = "dm_reactions_";
  */
 const pendingReactions = new Map<string, Record<string, DMReaction[]>>();
 
+/**
+ * Merge the already-sorted messages array with a small ascending batch without
+ * a full re-sort. During a replay burst the per-message `.sort()` did O(n log n)
+ * work n times (O(n² log n) total); this merge is O(n + k) per conversation.
+ */
+function mergeSortedMessages(
+  existing: DMMessage[],
+  freshSorted: DMMessage[]
+): DMMessage[] {
+  if (existing.length === 0) return freshSorted;
+  if (freshSorted.length === 0) return existing;
+  const out: DMMessage[] = new Array(existing.length + freshSorted.length);
+  let i = 0;
+  let j = 0;
+  let k = 0;
+  while (i < existing.length && j < freshSorted.length) {
+    if (existing[i].created_at <= freshSorted[j].created_at) {
+      out[k++] = existing[i++];
+    } else {
+      out[k++] = freshSorted[j++];
+    }
+  }
+  while (i < existing.length) out[k++] = existing[i++];
+  while (j < freshSorted.length) out[k++] = freshSorted[j++];
+  return out;
+}
+
 /** Purge the legacy localStorage DM caches (giftwrap + reactions) and the
  *  in-flight reaction buffer. Called on logout. */
 function clearLegacyDmCaches(): void {
@@ -159,56 +187,178 @@ export function DMProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const addReactionToConversation = useCallback(
-    (rumor: Rumor, myPubkey: string) => {
-      const pTags = rumor.tags
-        .filter((t) => t[0] === "p")
-        .map((t) => t[1]);
-      const conversationId = getConversationId(rumor.pubkey, pTags);
-      const targetMessageId = rumor.tags.find((t) => t[0] === "e")?.[1];
-      if (!targetMessageId) return;
+  /**
+   * Ingest a batch of decrypted rumors with a single setConversations pass.
+   * The worker delivers gift wraps one EVENT at a time; without batching, each
+   * wrap caused its own render (plus a full re-sort) during the boot replay —
+   * the storm behind "opening a chat lags". One call per tick, one render.
+   */
+  const addMessages = useCallback(
+    (entries: Array<{ rumor: Rumor; wrapId: string }>, myPubkey: string) => {
+      if (entries.length === 0) return;
 
-      const reaction: DMReaction = {
-        emoji: rumor.content,
-        pubkey: rumor.pubkey,
-        tags: rumor.tags.filter((t) => t[0] === "emoji"),
-      };
+      // Dedup outside the updater (same policy as before): one canonical pass
+      // over the batch; unseen rumors split into messages vs reactions.
+      const messageBatch: Array<{ rumor: Rumor; wrapId: string }> = [];
+      const reactionBatch: Rumor[] = [];
+      for (const { rumor, wrapId } of entries) {
+        if (seenRumorIds.current.has(rumor.id)) continue;
+        seenRumorIds.current.add(rumor.id);
+        if (rumor.kind === 7) reactionBatch.push(rumor);
+        else messageBatch.push({ rumor, wrapId });
+      }
+      if (messageBatch.length === 0 && reactionBatch.length === 0) return;
 
-      // If the conversation exists, attach directly; otherwise buffer it so the
-      // conversation (created later from its parent message) picks it up.
       setConversations((prev) => {
-        const existing = prev.get(conversationId);
-        if (!existing) {
-          // Parent message hasn't landed yet — hold here; `addMessage`
-          // (which creates the conversation) drains the buffer.
-          const bucket = pendingReactions.get(conversationId) ?? {};
-          const list = bucket[targetMessageId] ?? [];
+        const next = new Map(prev);
+        let changed = false;
+
+        // --- messages: group by conversation, sorted-merge into each existing
+        // conversation (or create it) in this same pass.
+        const incomingByConv = new Map<string, DMMessage[]>();
+        for (const { rumor, wrapId } of messageBatch) {
+          const pTags = rumor.tags
+            .filter((t) => t[0] === "p")
+            .map((t) => t[1]);
+          const conversationId = getConversationId(rumor.pubkey, pTags);
+          const msg: DMMessage = {
+            id: rumor.id,
+            wrapId,
+            pubkey: rumor.pubkey,
+            content: rumor.content,
+            created_at: rumor.created_at,
+            tags: rumor.tags,
+          };
+          const list = incomingByConv.get(conversationId);
+          // in-batch dedup
+          if (list?.some((m) => m.id === msg.id)) continue;
+          if (list) list.push(msg);
+          else incomingByConv.set(conversationId, [msg]);
+        }
+
+        for (const [conversationId, incoming] of Array.from(incomingByConv)) {
+          incoming.sort((a, b) => a.created_at - b.created_at); // small batch
+          const existing = next.get(conversationId);
+          // Read threshold = the later of this conversation's own lastSeen and
+          // the account-wide "mark all read" watermark (handled inside the
+          // module), so a global mark-all covers messages/conversations that
+          // hadn't loaded when it was clicked.
+          const lastSeen = getLastSeen(myPubkey, conversationId);
+
+          if (existing) {
+            const fresh = incoming.filter(
+              (m) => !existing.messages.some((x) => x.id === m.id)
+            );
+            if (fresh.length === 0) continue;
+            const merged = mergeSortedMessages(existing.messages, fresh);
+            let unreadCount = existing.unreadCount;
+            for (const m of fresh) {
+              if (m.pubkey !== myPubkey && m.created_at > lastSeen) unreadCount++;
+            }
+            next.set(conversationId, {
+              ...existing,
+              messages: merged,
+              lastMessageAt: Math.max(
+                existing.lastMessageAt,
+                merged[merged.length - 1].created_at
+              ),
+              unreadCount,
+            });
+            changed = true;
+          } else {
+            // Reactions that out-raced this conversation's creation (a kind-7
+            // rumor replayed before its parent message) — drain the buffer.
+            const buffered = pendingReactions.get(conversationId) ?? null;
+            if (buffered) pendingReactions.delete(conversationId);
+            let unreadCount = 0;
+            for (const m of incoming) {
+              if (m.pubkey !== myPubkey && m.created_at > lastSeen) unreadCount++;
+            }
+            next.set(conversationId, {
+              id: conversationId,
+              participants: conversationId.split("+"),
+              messages: incoming,
+              lastMessageAt: incoming[incoming.length - 1].created_at,
+              unreadCount,
+              reactions: buffered
+                ? new Map(Object.entries(buffered))
+                : new Map<string, DMReaction[]>(),
+            });
+            changed = true;
+          }
+        }
+
+        // --- reactions: bucketed per conversation -> per target message, then
+        // applied in one pass. Conversations that don't exist yet buffer, as before.
+        const reactionBuckets = new Map<string, Map<string, DMReaction[]>>();
+        for (const rumor of reactionBatch) {
+          const pTags = rumor.tags
+            .filter((t) => t[0] === "p")
+            .map((t) => t[1]);
+          const conversationId = getConversationId(rumor.pubkey, pTags);
+          const targetMessageId = rumor.tags.find((t) => t[0] === "e")?.[1];
+          if (!targetMessageId) continue;
+          const reaction: DMReaction = {
+            emoji: rumor.content,
+            pubkey: rumor.pubkey,
+            tags: rumor.tags.filter((t) => t[0] === "emoji"),
+          };
+          let byMsg = reactionBuckets.get(conversationId);
+          if (!byMsg) {
+            byMsg = new Map();
+            reactionBuckets.set(conversationId, byMsg);
+          }
+          const list = byMsg.get(targetMessageId) ?? [];
           if (
-            !list.some(
+            list.some(
               (r) => r.pubkey === reaction.pubkey && r.emoji === reaction.emoji
             )
           ) {
-            list.push(reaction);
-            bucket[targetMessageId] = list;
-            pendingReactions.set(conversationId, bucket);
+            continue;
           }
-          return prev;
+          list.push(reaction);
+          byMsg.set(targetMessageId, list);
         }
 
-        const reactionsMap = new Map(existing.reactions);
-        const existing_reactions = reactionsMap.get(targetMessageId) || [];
-        // Dedup
-        if (
-          existing_reactions.some(
-            (r) => r.pubkey === reaction.pubkey && r.emoji === reaction.emoji
-          )
-        ) {
-          return prev;
+        for (const [conversationId, byMsg] of Array.from(reactionBuckets)) {
+          const existing = next.get(conversationId);
+          if (!existing) {
+            // Parent message hasn't landed yet — hold here; a later addMessages
+            // call (which creates the conversation) drains the buffer.
+            const bucket = pendingReactions.get(conversationId) ?? {};
+            for (const [targetMessageId, list] of Array.from(byMsg)) {
+              const cur = bucket[targetMessageId] ?? [];
+              for (const r of list) {
+                if (
+                  !cur.some((x) => x.pubkey === r.pubkey && x.emoji === r.emoji)
+                ) {
+                  cur.push(r);
+                }
+              }
+              bucket[targetMessageId] = cur;
+            }
+            pendingReactions.set(conversationId, bucket);
+            continue;
+          }
+          const reactionsMap = new Map(existing.reactions);
+          for (const [targetMessageId, list] of Array.from(byMsg)) {
+            const mergedList = [...(reactionsMap.get(targetMessageId) ?? [])];
+            for (const r of list) {
+              if (
+                !mergedList.some(
+                  (x) => x.pubkey === r.pubkey && x.emoji === r.emoji
+                )
+              ) {
+                mergedList.push(r);
+              }
+            }
+            reactionsMap.set(targetMessageId, mergedList);
+          }
+          next.set(conversationId, { ...existing, reactions: reactionsMap });
+          changed = true;
         }
-        reactionsMap.set(targetMessageId, [...existing_reactions, reaction]);
-        const next = new Map(prev);
-        next.set(conversationId, { ...existing, reactions: reactionsMap });
-        return next;
+
+        return changed ? next : prev;
       });
     },
     []
@@ -216,78 +366,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
 
   const addMessage = useCallback(
     (rumor: Rumor, wrapId: string, myPubkey: string) => {
-      // Dedup by rumor.id
-      if (seenRumorIds.current.has(rumor.id)) return;
-      seenRumorIds.current.add(rumor.id);
-
-      // Handle kind 7 reaction rumors
-      if (rumor.kind === 7) {
-        addReactionToConversation(rumor, myPubkey);
-        return;
-      }
-
-      const pTags = rumor.tags
-        .filter((t) => t[0] === "p")
-        .map((t) => t[1]);
-      const conversationId = getConversationId(rumor.pubkey, pTags);
-      const participants = conversationId.split("+");
-
-      const msg: DMMessage = {
-        id: rumor.id,
-        wrapId,
-        pubkey: rumor.pubkey,
-        content: rumor.content,
-        created_at: rumor.created_at,
-        tags: rumor.tags,
-      };
-
-      // Reactions that out-raced this conversation's creation (a kind-7 rumor
-      // replayed before its parent message) — drain them now.
-      const buffered = pendingReactions.get(conversationId) ?? null;
-      if (buffered) pendingReactions.delete(conversationId);
-      const initialReactions: Map<string, DMReaction[]> | null = buffered
-        ? new Map(Object.entries(buffered))
-        : null;
-
-      setConversations((prev) => {
-        const next = new Map(prev);
-        const existing = next.get(conversationId);
-        // Read threshold = the later of this conversation's own lastSeen and
-        // the account-wide "mark all read" watermark (handled inside the
-        // module), so a global mark-all covers messages/conversations that
-        // hadn't loaded when it was clicked.
-        const lastSeen = getLastSeen(myPubkey, conversationId);
-
-        if (existing) {
-          if (existing.messages.some((m) => m.id === rumor.id)) return prev;
-
-          const updatedMessages = [...existing.messages, msg].sort(
-            (a, b) => a.created_at - b.created_at
-          );
-          const isUnread =
-            rumor.pubkey !== myPubkey && rumor.created_at > lastSeen;
-          next.set(conversationId, {
-            ...existing,
-            messages: updatedMessages,
-            lastMessageAt: Math.max(existing.lastMessageAt, rumor.created_at),
-            unreadCount: existing.unreadCount + (isUnread ? 1 : 0),
-          });
-        } else {
-          const isUnread =
-            rumor.pubkey !== myPubkey && rumor.created_at > lastSeen;
-          next.set(conversationId, {
-            id: conversationId,
-            participants,
-            messages: [msg],
-            lastMessageAt: rumor.created_at,
-            unreadCount: isUnread ? 1 : 0,
-            reactions: initialReactions ?? new Map<string, DMReaction[]>(),
-          });
-        }
-        return next;
-      });
+      addMessages([{ rumor, wrapId }], myPubkey);
     },
-    [addReactionToConversation]
+    [addMessages]
   );
 
   // Subscribe to incoming gift wraps
@@ -335,6 +416,25 @@ export function DMProvider({ children }: { children: ReactNode }) {
       decryptionRejected.current = false;
     }
 
+    // Batch the ingest path: accumulate decrypted rumors and flush them into
+    // state at most once per 50 ms, so a replay burst costs one render per
+    // tick instead of one per wrap.
+    let pendingBatch: Array<{ rumor: Rumor; wrapId: string }> = [];
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const flushPending = () => {
+      flushTimer = null;
+      if (pendingBatch.length === 0) return;
+      const batch = pendingBatch;
+      pendingBatch = [];
+      addMessages(batch, myPubkey);
+    };
+
+    const pushPending = (rumor: Rumor, wrapId: string) => {
+      pendingBatch.push({ rumor, wrapId });
+      if (!flushTimer) flushTimer = setTimeout(flushPending, 50);
+    };
+
     const startSubscription = async () => {
       setLoading(true);
 
@@ -351,7 +451,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
             if (privateKey) {
               // Local key: decrypt instantly, no signer prompts
               const rumor = await unwrapGiftWrap(event, privateKey);
-              if (rumor) addMessage(rumor, event.id, myPubkey);
+              if (rumor) pushPending(rumor, event.id);
             } else {
               // External signer (Amber / NIP-07 / NIP-46): queue so only one
               // decrypt request is in-flight at a time — avoids bombarding the
@@ -360,7 +460,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
                if (decryptionRejected.current) return;
                  const rumor = await unwrapGiftWrap(event, undefined);
                 if (rumor) {
-                  addMessage(rumor, event.id, myPubkey);
+                  pushPending(rumor, event.id);
                 } else {
                   // null means the signer rejected or failed — stop asking
                   decryptionRejected.current = true;
@@ -369,6 +469,11 @@ export function DMProvider({ children }: { children: ReactNode }) {
             }
           },
           onEose: () => {
+            if (flushTimer) {
+              clearTimeout(flushTimer);
+              flushTimer = null;
+            }
+            flushPending();
             setLoading(false);
           },
         }
@@ -383,10 +488,17 @@ export function DMProvider({ children }: { children: ReactNode }) {
     // ids) is reset at the top of the effect on an account switch, and on logout
     // by the `!user` branch. This lets a refresh-driven re-observe keep state.
     return () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      // Flush stragglers into state before teardown — the flush closes over
+      // the account the batch belongs to.
+      flushPending();
       subRef.current?.unobserve();
       subRef.current = null;
     };
-  }, [user, addMessage, refresh, applyReadStateToConversations]);
+  }, [user, addMessages, refresh, applyReadStateToConversations]);
 
   const sendMessage = useCallback(
     async (
@@ -463,16 +575,35 @@ export function DMProvider({ children }: { children: ReactNode }) {
     });
   }, [user]);
 
-  const unreadTotal = Array.from(conversations.values()).reduce(
-    (sum, c) => sum + c.unreadCount,
-    0
+  const unreadTotal = useMemo(
+    () =>
+      Array.from(conversations.values()).reduce(
+        (sum, c) => sum + c.unreadCount,
+        0
+      ),
+    [conversations]
   );
 
-  return (
-    <DMContext.Provider
-      value={{ conversations, sendMessage, sendReaction, markAsRead, markAllAsRead, unreadTotal, loading }}
-    >
-      {children}
-    </DMContext.Provider>
+  const ctxValue = useMemo(
+    () => ({
+      conversations,
+      sendMessage,
+      sendReaction,
+      markAsRead,
+      markAllAsRead,
+      unreadTotal,
+      loading,
+    }),
+    [
+      conversations,
+      sendMessage,
+      sendReaction,
+      markAsRead,
+      markAllAsRead,
+      unreadTotal,
+      loading,
+    ]
   );
+
+  return <DMContext.Provider value={ctxValue}>{children}</DMContext.Provider>;
 }

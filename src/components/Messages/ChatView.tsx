@@ -1,11 +1,12 @@
 import { copyToClipboard } from "../../utils/common";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Typography,
   Avatar,
   IconButton,
   Modal,
+  CircularProgress,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { useNavigate, useParams } from "react-router-dom";
@@ -20,7 +21,7 @@ import { DEFAULT_IMAGE_URL } from "../../utils/constants";
 import { DMMessage, SendTracking } from "../../contexts/dm-context";
 import { dataLayer, type PublishResult } from "@formstr/local-relay";
 import { mergePublishResults } from "../../nostr/nip17";
-import MessageBubble from "./MessageBubble";
+import MessageBubble, { type GroupedReaction } from "./MessageBubble";
 import MessageContextMenu from "./MessageContextMenu";
 import MessageInput from "./MessageInput";
 
@@ -41,11 +42,17 @@ const STATUS_MAP: Record<string, RelayStatus> = {
   failed: "failed",
 };
 
+// Stable empties — keep memoized bubble props referentially stable.
+const EMPTY_MESSAGES: DMMessage[] = [];
+const EMPTY_GROUPED_REACTIONS: Record<string, GroupedReaction> = {};
+const EMPTY_BY_ID = new Map<string, DMMessage>();
+const EMPTY_GROUPED = new Map<string, Record<string, GroupedReaction>>();
+
 
 const ChatView: React.FC = () => {
   const { npub } = useParams<{ npub: string }>();
   const navigate = useNavigate();
-  const { conversations, sendMessage, sendReaction, markAsRead } =
+  const { conversations, sendMessage, sendReaction, markAsRead, loading } =
     useDMContext();
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const { user } = useUserContext();
@@ -53,6 +60,9 @@ const ChatView: React.FC = () => {
   const [replyTo, setReplyTo] = useState<DMMessage | null>(null);
   const [pickerForMsgId, setPickerForMsgId] = useState<string | null>(null);
   const [sendStatuses, setSendStatuses] = useState<Map<string, MsgSendStatus>>(new Map());
+  // Latest-value mirror so handleRetry stays referentially stable (cheap memo prop).
+  const sendStatusesRef = useRef(sendStatuses);
+  sendStatusesRef.current = sendStatuses;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const theme = useTheme();
 
@@ -78,6 +88,31 @@ const ChatView: React.FC = () => {
   const conversation = conversationId
     ? conversations.get(conversationId)
     : null;
+
+  // One derive pass per conversation version (was: per message, per render —
+  // O(n²) reply lookups + reaction regrouping inside the render map).
+  const derived = useMemo(() => {
+    if (!conversation) {
+      return { messages: EMPTY_MESSAGES, byId: EMPTY_BY_ID, grouped: EMPTY_GROUPED };
+    }
+    const byId = new Map<string, DMMessage>();
+    for (const m of conversation.messages) byId.set(m.id, m);
+    const grouped = new Map<string, Record<string, GroupedReaction>>();
+    for (const m of conversation.messages) {
+      const list = conversation.reactions?.get(m.id) || [];
+      if (list.length === 0) continue;
+      const acc: Record<string, GroupedReaction> = {};
+      for (const r of list) {
+        if (!acc[r.emoji]) {
+          acc[r.emoji] = { emoji: r.emoji, count: 0, pubkeys: [], tags: r.tags };
+        }
+        acc[r.emoji].count++;
+        acc[r.emoji].pubkeys.push(r.pubkey);
+      }
+      grouped.set(m.id, acc);
+    }
+    return { messages: conversation.messages, byId, grouped };
+  }, [conversation]);
 
   useEffect(() => {
     if (recipientPubkey && !profiles?.get(recipientPubkey)) {
@@ -132,7 +167,7 @@ const ChatView: React.FC = () => {
   }, [applyResult]);
 
   const handleRetry = useCallback(async (rumorId: string, relay?: string) => {
-    const status = sendStatuses.get(rumorId);
+    const status = sendStatusesRef.current.get(rumorId);
     if (!status) return;
 
     const relaysToRetry = relay
@@ -155,7 +190,7 @@ const ChatView: React.FC = () => {
       status.retryWraps.map(w => dataLayer.publishEvent(w))
     );
     applyResult(rumorId, mergePublishResults(results), status.retryWraps, relaysToRetry);
-  }, [sendStatuses, applyResult]);
+  }, [applyResult]);
 
   // Called by MessageInput — throwing here causes MessageInput to restore the draft
   const handleSend = useCallback(async (content: string) => {
@@ -192,7 +227,7 @@ const ChatView: React.FC = () => {
     nip19.npubEncode(recipientPubkey).slice(0, 12) + "...";
   const recipientPicture = recipientProfile?.picture || DEFAULT_IMAGE_URL;
 
-  const messages = conversation?.messages || [];
+  const messages = derived.messages;
 
   return (
     <Box
@@ -244,40 +279,40 @@ const ChatView: React.FC = () => {
         flexDirection="column"
         gap={1}
       >
-        {messages.length === 0 && (
-          <Box
-            flex={1}
-            display="flex"
-            alignItems="center"
-            justifyContent="center"
-          >
-            <Typography variant="body2" color="text.secondary">
-              No messages yet. Say hello!
-            </Typography>
-          </Box>
-        )}
+        {messages.length === 0 &&
+          (loading ? (
+            <Box
+              flex={1}
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              gap={1}
+            >
+              <CircularProgress size={18} color="inherit" />
+              <Typography variant="body2" color="text.secondary">
+                Loading messages…
+              </Typography>
+            </Box>
+          ) : (
+            <Box
+              flex={1}
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+            >
+              <Typography variant="body2" color="text.secondary">
+                No messages yet. Say hello!
+              </Typography>
+            </Box>
+          ))}
         {messages.map((msg) => {
           const isMine = msg.pubkey === user?.pubkey;
-          const msgReactions = conversation?.reactions?.get(msg.id) || [];
-          const groupedReactions = msgReactions.reduce<
-            Record<
-              string,
-              { emoji: string; count: number; pubkeys: string[]; tags?: string[][] }
-            >
-          >((acc, r) => {
-            if (!acc[r.emoji]) {
-              acc[r.emoji] = { emoji: r.emoji, count: 0, pubkeys: [], tags: r.tags };
-            }
-            acc[r.emoji].count++;
-            acc[r.emoji].pubkeys.push(r.pubkey);
-            return acc;
-          }, {});
 
           const replyTag = msg.tags.find(
             (t) => t[0] === "e" && t[3] === "reply"
           );
           const referencedMsg = replyTag
-            ? messages.find((m) => m.id === replyTag[1])
+            ? derived.byId.get(replyTag[1])
             : undefined;
           const referencedMsgSenderName = referencedMsg
             ? referencedMsg.pubkey === user?.pubkey
@@ -290,14 +325,14 @@ const ChatView: React.FC = () => {
               key={msg.id}
               msg={msg}
               isMine={isMine}
-              reactions={groupedReactions}
+              reactions={derived.grouped.get(msg.id) ?? EMPTY_GROUPED_REACTIONS}
               referencedMsg={referencedMsg}
               referencedMsgSenderName={referencedMsgSenderName}
               sendStatus={sendStatuses.get(msg.id)}
               onLongPress={setContextMenuMsg}
               onReact={handleReaction}
               onSwipeReply={setReplyTo}
-              onRetry={(relay) => handleRetry(msg.id, relay)}
+              onRetry={handleRetry}
             />
           );
         })}

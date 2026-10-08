@@ -12,7 +12,7 @@ import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 
 const SWIPE_THRESHOLD = 64;
 
-interface GroupedReaction {
+export interface GroupedReaction {
   emoji: string;
   count: number;
   pubkeys: string[];
@@ -52,7 +52,7 @@ interface MessageBubbleProps {
   onLongPress: (msg: DMMessage) => void;
   onReact: (emoji: string, msgId: string) => void;
   onSwipeReply: (msg: DMMessage) => void;
-  onRetry?: (relay?: string) => void;
+  onRetry?: (rumorId: string, relay?: string) => void;
 }
 
 // Renders an emoji or a custom emoji shortcode like :name:
@@ -354,7 +354,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <Typography
                     variant="caption"
                     color="primary"
-                    onClick={() => onRetry()}
+                    onClick={() => onRetry(msg.id)}
                     sx={{ fontSize: "0.7rem", cursor: "pointer", textDecoration: "underline" }}
                   >
                     Retry
@@ -387,7 +387,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             latencyMs: sendStatus.latencies[relay],
           }))}
           onRetry={onRetry ? async (relay?: string) => {
-            onRetry(relay);
+            onRetry(msg.id, relay);
             return Object.entries(sendStatus.relays).map(([relay, status]) => ({
               relay,
               status,
@@ -401,4 +401,4 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   );
 };
 
-export default MessageBubble;
+export default React.memo(MessageBubble);

@@ -30,9 +30,24 @@ const ConversationList: React.FC = () => {
   const { user } = useUserContext();
   const navigate = useNavigate();
 
-  const sorted = Array.from(conversations.values()).sort(
-    (a, b) => b.lastMessageAt - a.lastMessageAt
+  const sorted = React.useMemo(
+    () =>
+      Array.from(conversations.values()).sort(
+        (a, b) => b.lastMessageAt - a.lastMessageAt
+      ),
+    [conversations]
   );
+
+  // Profile fetches are side effects — they don't belong in the render body
+  // (which can run many times over). Collect missing participants per state
+  // change and fetch them in an effect instead.
+  React.useEffect(() => {
+    for (const conv of sorted) {
+      for (const p of conv.participants) {
+        if (!profiles?.get(p)) fetchUserProfileThrottled(p);
+      }
+    }
+  }, [sorted, profiles, fetchUserProfileThrottled]);
 
   const getOtherParticipant = (participants: string[]): string | null => {
     if (!user) return participants[0] || null;
@@ -42,7 +57,6 @@ const ConversationList: React.FC = () => {
   const getProfileName = (pubkey: string): string => {
     const profile = profiles?.get(pubkey);
     if (!profile) {
-      fetchUserProfileThrottled(pubkey);
       return nip19.npubEncode(pubkey).slice(0, 12) + "...";
     }
     return profile.display_name || profile.name || nip19.npubEncode(pubkey).slice(0, 12) + "...";
@@ -51,7 +65,6 @@ const ConversationList: React.FC = () => {
   const getProfilePicture = (pubkey: string): string => {
     const profile = profiles?.get(pubkey);
     if (!profile) {
-      fetchUserProfileThrottled(pubkey);
       return DEFAULT_IMAGE_URL;
     }
     return profile.picture || DEFAULT_IMAGE_URL;
