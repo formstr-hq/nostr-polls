@@ -218,13 +218,15 @@ export function createRumor(
 
 /**
  * Create a gift wrap with a local private key (LocalSigner path).
- * Implements NIP-59: rumor -> seal (kind 13) -> gift wrap (kind 1059).
+ * Implements NIP-59: rumor -> seal (kind 13) -> gift wrap (kind 1059;
+ * kind 21059 — the spec's ephemeral gift wrap — for typing/presence pings).
  */
 function createGiftWrapLocal(
   senderPrivkey: Uint8Array,
   rumor: Rumor,
   recipientPubkey: string,
-  wrapExpiryS?: number
+  wrapExpiryS?: number,
+  wrapKind: number = 1059
 ): Event {
   // Step 1: Create seal (kind 13) - encrypt rumor with sender's key for recipient
   const rumorJson = JSON.stringify(rumor);
@@ -240,7 +242,7 @@ function createGiftWrapLocal(
   };
   const seal = finalizeEvent(sealEvent, senderPrivkey);
 
-  // Step 2: Create gift wrap (kind 1059) with ephemeral key
+  // Step 2: Create gift wrap (kind 1059, or 21059 for ephemeral pings)
   const ephemeralKey = generateSecretKey();
   const ephemeralPubkey = getPublicKey(ephemeralKey);
 
@@ -254,7 +256,7 @@ function createGiftWrapLocal(
   }
 
   const wrapEvent: UnsignedEvent = {
-    kind: 1059,
+    kind: wrapKind,
     created_at: randomTimestamp(),
     tags: wrapTags,
     content: encryptedSeal,
@@ -274,7 +276,8 @@ async function createGiftWrapForSigner(
   },
   rumor: Rumor,
   recipientPubkey: string,
-  wrapExpiryS?: number
+  wrapExpiryS?: number,
+  wrapKind: number = 1059
 ): Promise<Event> {
   if (!signer.nip44Encrypt) {
     throw new Error("Signer does not support NIP-44 encryption");
@@ -293,7 +296,7 @@ async function createGiftWrapForSigner(
   };
   const seal = await signer.signEvent(sealTemplate);
 
-  // Step 3: Create gift wrap with ephemeral key (kind 1059)
+  // Step 3: Create gift wrap with ephemeral key (kind 1059/21059)
   const ephemeralKey = generateSecretKey();
   const ephemeralPubkey = getPublicKey(ephemeralKey);
 
@@ -310,7 +313,7 @@ async function createGiftWrapForSigner(
   }
 
   const wrapTemplate: UnsignedEvent = {
-    kind: 1059,
+    kind: wrapKind,
     created_at: randomTimestamp(),
     tags: wrapTags,
     content: encryptedSeal,
@@ -321,7 +324,7 @@ async function createGiftWrapForSigner(
 }
 
 /**
- * Unwrap a gift wrap (kind 1059) locally with a private key.
+ * Unwrap a gift wrap (kind 1059 / ephemeral 21059) locally with a private key.
  */
 function unwrapGiftWrapLocal(
   wrap: Event,
@@ -505,7 +508,7 @@ export async function wrapAndSendReaction(
 }
 
 /**
- * Unwrap a gift wrap (kind 1059) to extract the rumor.
+ * Unwrap a gift wrap (kind 1059 / ephemeral 21059) to extract the rumor.
  * Handles both LocalSigner and external signer paths.
  */
 export async function unwrapGiftWrap(
@@ -618,10 +621,11 @@ export async function publishLocalSignedWraps(
   signingKey: Uint8Array,
   rumor: Rumor,
   recipients: string[],
-  wrapExpiryS?: number
+  wrapExpiryS?: number,
+  wrapKind: number = 1059
 ): Promise<PublishResult> {
   const wraps = recipients.map((r) =>
-    createGiftWrapLocal(signingKey, rumor, r, wrapExpiryS)
+    createGiftWrapLocal(signingKey, rumor, r, wrapExpiryS, wrapKind)
   );
   const results = await Promise.all(wraps.map((w) => dataLayer.publishEvent(w)));
   return mergePublishResults(results);

@@ -59,6 +59,9 @@ const channel: Channel = {
 const prunePolicy = defaultPrunePolicy();
 prunePolicy.protectedKinds.add(30078);
 prunePolicy.ttlByKind.set(1059, 365 * 24 * 60 * 60);
+// NIP-59 ephemeral gift wraps (pings): minutes locally, mirroring the relay-
+// side MUST-NOT-STORE semantics. Consumed pings are deleted on arrival anyway.
+prunePolicy.ttlByKind.set(21059, 10 * 60);
 
 service = new RelayService({
   channel,

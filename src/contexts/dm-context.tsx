@@ -691,7 +691,12 @@ export function DMProvider({ children }: { children: ReactNode }) {
       setLoading(true);
 
       const handle = dataLayer.observe(
-        [{ kinds: [1059], "#p": [myPubkey], limit: DM_PAGE }],
+        [
+          { kinds: [1059], "#p": [myPubkey], limit: DM_PAGE },
+          // NIP-59 ephemeral gift wraps (typing/presence pings): live-only —
+          // spec-compliant relays never store them, so no pagination filter.
+          { kinds: [21059], "#p": [myPubkey], limit: DM_PAGE },
+        ],
         {
           onEvent: async (event: Event) => {
             // Dedup by gift-wrap id before any decryption so a re-observe never
@@ -700,8 +705,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
             if (seenWrapIds.current.has(event.id)) return;
             seenWrapIds.current.add(event.id);
 
-            // Wrapped typing (v2): pings and binding DMs arrive as ordinary
-            // kind-1059 wraps. They are consumed in-memory — applied to typing
+            // Wrapped typing (v2): pings arrive as NIP-59 kind-21059 ephemeral
+            // wraps, binding DMs as ordinary kind-1059 wraps. They are consumed
+            // in-memory — applied to typing
             // state, never stored, counted, or cold-queued — and their wraps
             // are deleted straight away. Returns true when consumed.
             const applyTypingState = (peer: string, expiresAtMs: number) => {
@@ -914,6 +920,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
     handle.update([
       { kinds: [1059], "#p": [user.pubkey], limit: DM_PAGE },
       { kinds: [1059], "#p": [user.pubkey], until: cursor, limit: DM_PAGE },
+      { kinds: [21059], "#p": [user.pubkey], limit: DM_PAGE },
     ]);
   }, [user]);
 

@@ -111,7 +111,8 @@ export function bootstrapDataLayer(): DataLayer {
   // Two ROUTING-POLICY inputs, kept separate (local-relay >= 0.4.0):
   //   - setUserRelays  ← NIP-65 read relays (kind 10002), the floor for feeds and
   //     every author-less scope EXCEPT DMs.
-  //   - setDmRelays    ← NIP-17 DM inbox relays (kind 10050). The kind-1059 stream
+  //   - setDmRelays    ← NIP-17 DM inbox relays (kind 10050). The kind-1059/21059
+  //     stream (DMs + NIP-59 ephemeral pings)
   //     reads from DM relays UNION user relays; other author-less scopes (the feed
   //     firehose, {ids} fetches) never touch the DM inbox relays. Folding 10050
   //     into setUserRelays (the pre-0.4.0 approach) firehosed the user's whole
@@ -142,7 +143,7 @@ export function bootstrapDataLayer(): DataLayer {
             }
             client.setUserRelays(Array.from(readRelays));
           } else if (event.kind === 10050) {
-            // NIP-17 DM inbox relays → dedicated kind-1059 routing.
+            // NIP-17 DM inbox relays → dedicated kind-1059/21059 routing.
             for (const t of event.tags) {
               if (t[0] === "relay" && t[1]) dmRelays.add(t[1]);
             }
