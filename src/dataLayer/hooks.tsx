@@ -34,6 +34,23 @@ export function useRelayRefresh(): number {
   return React.useSyncExternalStore(subscribeRelayRefresh, getRelayRefresh);
 }
 
+/**
+ * Reactive read of "has the worker finished hydrating its IndexedDB cache?".
+ *
+ * Feeds hold their FIRST interest until this flips true. An interest declared
+ * before hydration replays an empty store and EOSEs on it — the worker serves
+ * cache first, so that first REQ is wasted, and the real data only lands on a
+ * second pass. Waiting means the initial REQ is served from the hydrated cache
+ * and paints immediately.
+ *
+ * The counter is only a re-render trigger; the flag itself lives in
+ * `relayRefresh` and is bumped in lockstep with it.
+ */
+export function useRelayHydrated(): boolean {
+  React.useSyncExternalStore(subscribeRelayRefresh, getRelayRefresh, getRelayRefresh);
+  return isRelayHydrated();
+}
+
 const PAGE = 100; // window grows by this many events per "load older"
 
 interface DataLayerContextValue {
@@ -99,6 +116,8 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
   // Re-declare the interest when the worker can newly serve cached data, so a
   // feed that EOSE'd before hydration repaints from the now-populated store.
   const refresh = useRelayRefresh();
+  // ...and hold the very first interest until the cache is actually there.
+  const hydrated = useRelayHydrated();
 
   const [items, setItems] = React.useState<Event[]>([]);
   const [newCount, setNewCount] = React.useState(0);
@@ -117,6 +136,12 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
   const scopeKey = JSON.stringify(scope);
   const follows = user.follows?.join(",");
   const wot = user.webOfTrust ? user.webOfTrust.size : 0;
+  // Identity of the *data request*, distinct from `refresh`: a change here means
+  // a genuinely different feed, whose accumulators must be discarded. Keeping
+  // the two apart is what stops a post-hydration re-declaration from blanking a
+  // feed it is about to refill.
+  const scopeId = `${kindsKey}|${scopeKey}|${follows ?? ""}|${wot}|${feedRootsOnly}`;
+  const lastScopeIdRef = React.useRef<string | null>(null);
 
   const scheduledRef = React.useRef(false);
 
@@ -144,21 +169,36 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
   }, [recompute]);
 
   React.useEffect(() => {
-    // Reset accumulators for the new scope.
-    allRef.current = new Map();
-    pendingRef.current = new Map();
-    eosedRef.current = false;
-    topRef.current = 0;
-    oldestRef.current = 0;
-    setItems([]);
-    setNewCount(0);
-    setLoading(true);
+    // A hydration refresh re-runs this effect, but it is NOT a new feed: the
+    // store merely became readable. Wiping state on it blanks a feed we are
+    // about to refill — the "cached notes flash then vanish" that made cold
+    // start feel empty. Reset only when the request identity itself changed.
+    const isNewScope = lastScopeIdRef.current !== scopeId;
+    lastScopeIdRef.current = scopeId;
+
+    if (isNewScope) {
+      // Reset accumulators for the new scope.
+      allRef.current = new Map();
+      pendingRef.current = new Map();
+      eosedRef.current = false;
+      topRef.current = 0;
+      oldestRef.current = 0;
+      setItems([]);
+      setNewCount(0);
+      setLoading(true);
+    }
 
     if (!scopeHasInput(scope, user)) {
       setLoading(false);
       handleRef.current = null;
       return; // nothing to show (e.g. logged out / empty follows)
     }
+
+    // Hold the FIRST interest until the worker has hydrated its cache. Declaring
+    // before that replays an empty store and EOSEs on it, so the head request is
+    // wasted and cached notes only paint on a second pass. `hydrated` is a dep,
+    // so this re-runs the instant it flips.
+    if (!hydrated) return;
 
     const onEvent = (e: Event) => {
       allRef.current.set(e.id, e);
@@ -183,10 +223,10 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
       onEose: () => {
         eosedRef.current = true;
         recompute();
-        // A pre-hydration EOSE means the store was still loading, not actually
-        // empty — stay in `loading` (the `refresh` dep re-runs this effect once
-        // hydration completes) instead of flashing an empty/failed state.
-        if (isRelayHydrated()) setLoading(false);
+        // We only ever observe after `hydrated`, so this EOSE is a real replay:
+        // the store is as populated as it is going to be. A genuinely empty
+        // store must still leave `loading` (empty state, not a stuck spinner).
+        setLoading(false);
       },
     });
     handleRef.current = handle;
@@ -196,7 +236,7 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
       handleRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataLayer, kindsKey, scopeKey, follows, wot, feedRootsOnly, refresh]);
+  }, [dataLayer, scopeId, hydrated, refresh]);
 
   const showNew = React.useCallback(() => {
     pendingRef.current = new Map(); // events are already in allRef; just stop withholding

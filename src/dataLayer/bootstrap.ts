@@ -22,6 +22,13 @@ import { notifyRelayRefresh, subscribeRelayRefresh, markRelayHydrated } from "./
 
 let started = false;
 
+/**
+ * Backstop for a worker that never reports hydration (e.g. a failed boot).
+ * Feeds now hold their first interest until hydration settles, so without this
+ * a broken worker would leave them empty indefinitely.
+ */
+const HYDRATION_FALLBACK_MS = 5_000;
+
 /** Idempotent: spawns the worker + wires the DataLayer once, returns the singleton. */
 export function bootstrapDataLayer(): DataLayer {
   if (started) return getDataLayer();
@@ -38,6 +45,18 @@ export function bootstrapDataLayer(): DataLayer {
   // it) and a repeat `ready` (a worker restart that dropped its in-memory
   // interests). Both bump the refresh signal so the hooks re-declare. Unknown
   // frames are passed straight through to the client, which ignores them.
+  //
+  // Settlement is idempotent and backstopped by a timer, because feeds now hold
+  // their first interest until it happens (HYDRATION_FALLBACK_MS).
+  let hydrationSettled = false;
+  const settleHydration = () => {
+    if (hydrationSettled) return;
+    hydrationSettled = true;
+    markRelayHydrated();
+    notifyRelayRefresh();
+  };
+  const hydrationFallback = setTimeout(settleHydration, HYDRATION_FALLBACK_MS);
+
   let readyCount = 0;
   const channel: Channel = {
     post: (m) => baseChannel.post(m),
@@ -46,6 +65,11 @@ export function bootstrapDataLayer(): DataLayer {
       baseChannel.onMessage((m) => {
         const kind = (m as { kind?: string } | null)?.kind;
         if (kind === "hydrated") {
+          clearTimeout(hydrationFallback);
+          // Always re-declare, even if the fallback already fired: a slow
+          // hydration that lost the race still needs the feeds re-run against
+          // the now-complete cache.
+          hydrationSettled = true;
           markRelayHydrated();
           notifyRelayRefresh();
         } else if (kind === "ready") {

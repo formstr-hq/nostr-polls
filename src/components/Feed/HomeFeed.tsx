@@ -9,7 +9,7 @@ import { safeSetItem } from "../../utils/localStorage";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import UnifiedFeed from "./UnifiedFeed";
 import { Notes } from "../Notes";
 import PollResponseForm from "../PollResponse/PollResponseForm";
@@ -85,6 +85,9 @@ const HomeFeed: React.FC = () => {
   const { setItems, clearItems } = useSubNav();
   const { registerRefresh } = useFeedActions();
   const relayRefresh = useRelayRefresh();
+  // Hold the first fetch until the worker has hydrated its cache, so the head
+  // request is served from it instead of an empty store.
+  const hydrated = useRelayHydrated();
 
   const [source, setSource] = useState<Source>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -110,6 +113,9 @@ const HomeFeed: React.FC = () => {
   // Newest created_at we know about (displayed or pending) — the cutoff for
   // polling so we only ask relays for things we haven't seen.
   const newestRef = useRef(0);
+  // Which source the current accumulators belong to. A `relayRefresh` bump is
+  // not a source change (see the load effect below).
+  const lastSourceRef = useRef<string | null>(null);
 
   const bumpNewest = (ts: number) => {
     if (ts > newestRef.current) newestRef.current = ts;
@@ -192,6 +198,36 @@ const HomeFeed: React.FC = () => {
         { kinds: FEED_KINDS, authors, limit: BATCH_SIZE, until },
       ];
 
+      const mergeIntoFeed = (incoming: Event[]) => {
+        setEvents((prev) => {
+          const map = new Map<string, Event>();
+          for (const e of prev) map.set(dedupeKey(e), e);
+          for (const e of incoming) {
+            const k = dedupeKey(e);
+            const existing = map.get(k);
+            if (!existing || e.created_at > existing.created_at) map.set(k, e);
+          }
+          return Array.from(map.values()).sort((a, b) => b.created_at - a.created_at);
+        });
+      };
+
+      // Paint the in-flight batch as it streams rather than only at the quiet
+      // window. On a warm start the whole cache replays in one burst, and waiting
+      // for that burst to go quiet is why the feed sat on a spinner with the data
+      // already in hand. Coalesced per microtask so a large replay is one commit.
+      let paintScheduled = false;
+      const schedulePaint = () => {
+        if (paintScheduled || settled) return;
+        paintScheduled = true;
+        Promise.resolve().then(() => {
+          paintScheduled = false;
+          if (settled) return;
+          mergeIntoFeed(displayBatch);
+          setInitialLoadDone(true);
+          setLoading(false);
+        });
+      };
+
       const finalize = () => {
         if (settled) return;
         settled = true;
@@ -202,17 +238,7 @@ const HomeFeed: React.FC = () => {
           // An empty older page means we've reached the end of the stream.
           if (mode === "more" && displayBatch.length === 0) setExhausted(true);
           if (oldestTs) cursorRef.current = oldestTs - 1;
-
-          setEvents((prev) => {
-            const map = new Map<string, Event>();
-            for (const e of prev) map.set(dedupeKey(e), e);
-            for (const e of displayBatch) {
-              const k = dedupeKey(e);
-              const existing = map.get(k);
-              if (!existing || e.created_at > existing.created_at) map.set(k, e);
-            }
-            return Array.from(map.values()).sort((a, b) => b.created_at - a.created_at);
-          });
+          mergeIntoFeed(displayBatch);
         }
 
         setInitialLoadDone(true);
@@ -253,6 +279,7 @@ const HomeFeed: React.FC = () => {
             displayedRef.current.add(key);
             displayBatch.push(event);
             if (!oldestTs || event.created_at < oldestTs) oldestTs = event.created_at;
+            schedulePaint();
           }
           scheduleCommit();
         },
@@ -403,19 +430,33 @@ const HomeFeed: React.FC = () => {
   // (which shifts the list and causes the user to skip posts).
   useEffect(() => {
     safeSetItem(STORAGE_KEY, source);
-    cursorRef.current = undefined;
-    pendingRef.current.clear();
-    setPendingCount(0);
 
-    const cached = hydrateFromCache();
-    displayedRef.current = new Set(cached.map(dedupeKey));
-    newestRef.current = cached[0]?.created_at ?? 0;
-    setEvents(cached);
-    setExhausted(false);
-    setInitialLoadDone(cached.length > 0);
+    // A `relayRefresh` bump means the cache became readable — not that the feed
+    // changed. Resetting on it blanked a feed that was about to be refilled, so
+    // only a real source change throws the accumulators away.
+    const isNewSource = lastSourceRef.current !== source;
+    lastSourceRef.current = source;
+
+    if (isNewSource) {
+      cursorRef.current = undefined;
+      pendingRef.current.clear();
+      setPendingCount(0);
+
+      const cached = hydrateFromCache();
+      displayedRef.current = new Set(cached.map(dedupeKey));
+      newestRef.current = cached[0]?.created_at ?? 0;
+      setEvents(cached);
+      setExhausted(false);
+      setInitialLoadDone(cached.length > 0);
+    }
+
+    // Wait for hydration before the first request, so it replays the cache
+    // instead of hitting an empty store and fetching everything again.
+    if (!hydrated) return;
+
     fetchBatch("initial");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, relays, relayRefresh]);
+  }, [source, relays, hydrated, relayRefresh]);
 
   // The user's follows / web-of-trust resolve asynchronously after login, so on
   // a cold start the initial fetch above often runs with an empty author set and
@@ -431,9 +472,12 @@ const HomeFeed: React.FC = () => {
   const prevHadAuthorsRef = useRef(false);
   useEffect(() => {
     const had = prevHadAuthorsRef.current;
+    // Authors only mean something once the cache is readable — before that the
+    // load effect above is still gated on hydration.
+    if (!hydrated) return;
     prevHadAuthorsRef.current = hasAuthors;
     if (!had && hasAuthors) fetchBatch("initial");
-  }, [hasAuthors, fetchBatch]);
+  }, [hasAuthors, fetchBatch, hydrated]);
 
   // Poll for newer items every 60s once we have a baseline; they buffer into
   // the "+N new" prompt.
