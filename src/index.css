@@ -29,5 +29,9 @@ code {
 }
 
 body {
-  padding-bottom: env(safe-area-inset-bottom); /* optional for bottom navs/floating buttons */
+  /* The app is edge-to-edge now, so the gesture/nav bar inset has to be reserved
+     here. box-sizing matters: with the default content-box, height:100% + padding
+     overflows the viewport and the padding gets clipped away by overflow:hidden. */
+  box-sizing: border-box;
+  padding-bottom: env(safe-area-inset-bottom);
 }
