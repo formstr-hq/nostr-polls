@@ -20,10 +20,24 @@ export interface ColorPreset {
 /** OLED-friendly pure black used as the dark background for every preset. */
 export const OLED_BLACK = '#000000';
 
+/**
+ * Platform UI font. Native apps render in the system face; the display presets
+ * below are opt-in. Kept first in FONT_PRESETS so it is both the first-run
+ * default and the `getFontPreset` fallback.
+ */
+export const SYSTEM_FONT_ID = 'system';
+export const SYSTEM_FONT_FAMILY =
+  'system-ui, -apple-system, "Roboto", "Helvetica Neue", Arial, sans-serif';
+
 /** Neutral light background used for custom themes (matches the warm-grey presets). */
 export const DEFAULT_LIGHT_BG = '#f5f4f1';
 
 export const FONT_PRESETS: FontPreset[] = [
+  {
+    id: SYSTEM_FONT_ID,
+    name: 'System',
+    fontFamily: SYSTEM_FONT_FAMILY,
+  },
   {
     id: 'shantell',
     name: 'Pollerama',

@@ -289,18 +289,29 @@ function AppContent() {
 
 const App: React.FC = () => {
   // ⚡ Capacitor status bar setup
+  //
+  // Edge-to-edge: the app draws under the system bars and pads its own chrome via
+  // env(safe-area-inset-*) (see .header-safe-area + the body rule in index.css).
+  // Insetting the WebView here (overlay:false) is what made the app read as a web
+  // page in a frame rather than a native app.
   useEffect(() => {
-    const setupStatusBar = async () => {
+    const apply = async (dark: boolean) => {
       try {
-        // Make sure the content starts below the status bar
-        await StatusBar.setOverlaysWebView({ overlay: false });
-        await StatusBar.setStyle({ style: Style.Dark });
+        await StatusBar.setOverlaysWebView({ overlay: true });
+        // Style.Dark = light icons (for dark backgrounds); Style.Light = dark icons.
+        await StatusBar.setStyle({ style: dark ? Style.Dark : Style.Light });
       } catch (e) {
         console.warn("StatusBar plugin error:", e);
       }
     };
 
-    setupStatusBar();
+    // The theme defaults to the system scheme (ThemeProvider modeStorageKey with
+    // no explicit mode), so the media query tracks what the app is actually showing.
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    apply(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => apply(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
   }, []);
 
   // Tell the worker the app returned to the foreground. The worker owns the
