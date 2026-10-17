@@ -1,3 +1,10 @@
+# 1.18.0
+
+- Opens straight to content: the feed now paints from the on-device cache the moment the app starts, instead of showing a loading screen while that same cache sat unread on disk. Every feed benefits — notes, polls, articles, movies, topics, bookmarks, follow packs, profile tabs and direct messages.
+- Edge to edge: the app now draws under the status and navigation bars, so the header sits at the very top of the screen and content uses the full display — more like a native app than a page in a frame.
+- Cleaner feed: notes are full-bleed now, separated by a hairline instead of being wrapped in bordered cards. Less frame, more content.
+- New default font: "System" uses your device's own font, which reads much more at home on Android. The display fonts (Pollerama, Fredoka, Comfortaa, Raleway) are all still there in Appearance settings if you liked them.
+
 # 1.17.0
 
 - Monero zaps (NIP-A3): add your Monero address in Edit Profile and others can zap you XMR — the zap dialog shows a Sats/Monero toggle whenever the recipient has a Monero address, with XMR presets, custom decimal amounts, and a QR code that opens your wallet (Monerujo etc.) with the amount pre-filled. Payment addresses are published as NIP-A3 payto targets (kind 10133), so other NIP-A3 clients can read them too.
