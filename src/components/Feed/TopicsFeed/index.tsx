@@ -16,7 +16,7 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
-import { useRelayRefresh } from "../../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../../dataLayer/hooks";
 import { isRelayHydrated } from "../../../dataLayer/relayRefresh";
 import { Virtuoso } from "react-virtuoso";
 import TopicCard from "./TopicsCard";
@@ -44,6 +44,9 @@ const TopicsFeed: React.FC = () => {
 
   const { relays } = useRelays();
   const relayRefresh = useRelayRefresh();
+  // Wait for the worker's cache before the first request, so topic feeds replay
+  // cached events instead of EOSE-ing on an empty store.
+  const hydrated = useRelayHydrated();
   const { myTopics } = useListContext();
   const navigate = useNavigate();
   const { tag } = useParams();
@@ -108,6 +111,8 @@ const TopicsFeed: React.FC = () => {
     };
   }, []);
   useEffect(() => {
+    // Wait for the worker's cache before subscribing (see the load effect below).
+    if (!hydrated) return;
     if (tagsMap.size === 0 || relays.length === 0) return;
     const filter: Filter = {
       kinds: [30300],
@@ -130,10 +135,11 @@ const TopicsFeed: React.FC = () => {
     });
 
     return () => sub.unobserve();
-  }, [relays, tagsMap, relayRefresh]);
+  }, [relays, tagsMap, hydrated, relayRefresh]);
 
   useEffect(() => {
     // If a specific tag is selected or no relays, don't fetch topics
+    if (!hydrated) return; // wait for the cache before the first request
     if (tag || relays.length === 0) return;
 
     setLoading(true);
@@ -203,7 +209,7 @@ const TopicsFeed: React.FC = () => {
       subsRef.current.forEach((s) => s.unobserve());
       subsRef.current = [];
     };
-  }, [tag, relays, refreshKey, relayRefresh]); // refreshKey forces a re-fetch on manual refresh
+  }, [tag, relays, hydrated, refreshKey, relayRefresh]); // refreshKey forces a re-fetch on manual refresh
 
   const handleRefresh = useCallback(() => {
     if (activeTab === "interests") {

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import { isRelayHydrated } from "../../dataLayer/relayRefresh";
 import PollResponseForm from "../PollResponse/PollResponseForm";
 import UnifiedFeed from "../Feed/UnifiedFeed";
@@ -19,6 +19,9 @@ const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, scrollContainerRe
   const [polls, setPolls] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const relayRefresh = useRelayRefresh();
+  // Wait for the worker's cache before the first request, so it replays cached
+  // polls instead of EOSE-ing on an empty store and re-fetching everything.
+  const hydrated = useRelayHydrated();
 
   const fetchPolls = useCallback(() => {
     if (!pubkey) return;
@@ -54,15 +57,16 @@ const UserPollsFeed: React.FC<UserPollsFeedProps> = ({ pubkey, scrollContainerRe
       handle.unobserve();
       clearTimeout(timeout);
     };
-    // relayRefresh isn't read in the body — it's a dependency purely to force
-    // a fresh fetchPolls identity (and re-run below) once hydration completes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pubkey, relayRefresh]);
+  }, [pubkey]);
 
+  // Hold the first request until hydration, then fetch. `relayRefresh` stays a
+  // dep so a worker restart (which drops its in-memory interests) also refetches.
   useEffect(() => {
+    if (!hydrated) return;
     const cleanup = fetchPolls();
     return cleanup;
-  }, [fetchPolls]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchPolls, hydrated, relayRefresh]);
 
   return (
     <UnifiedFeed

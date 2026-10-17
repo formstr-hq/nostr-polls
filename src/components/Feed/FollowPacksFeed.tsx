@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Button, CircularProgress, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useListContext } from "../../hooks/useListContext";
 import { useSubNav } from "../../contexts/SubNavContext";
@@ -20,6 +20,9 @@ const FollowPacksFeed: React.FC = () => {
   const { lists, bookmarkedPackKeys } = useListContext();
   const { setItems, clearItems } = useSubNav();
   const relayRefresh = useRelayRefresh();
+  // Wait for the worker's cache before the first request, so it replays cached
+  // packs instead of EOSE-ing on an empty store and re-fetching everything.
+  const hydrated = useRelayHydrated();
 
   const savedSource = (localStorage.getItem(STORAGE_KEY) as Source) || "global";
   const [source, setSource] = useState<Source>(savedSource);
@@ -131,9 +134,10 @@ const FollowPacksFeed: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!hydrated) return; // wait for the cache before the first request
     if (source !== "bookmarked") fetchBatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, relayRefresh]);
+  }, [source, hydrated, relayRefresh]);
 
   const displayPacks = source === "bookmarked" ? bookmarkedPacks : packs;
   const isLoading = source === "bookmarked" ? false : loading;

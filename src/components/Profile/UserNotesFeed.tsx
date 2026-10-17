@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography, Tabs, Tab } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import { isRelayHydrated } from "../../dataLayer/relayRefresh";
 import { Notes } from "../Notes";
 import UnifiedFeed from "../Feed/UnifiedFeed";
@@ -26,6 +26,9 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
   const [loading, setLoading] = useState(true);
   const [subTab, setSubTab] = useState(0);
   const relayRefresh = useRelayRefresh();
+  // Wait for the worker's cache before the first request, so it replays cached
+  // notes instead of EOSE-ing on an empty store and re-fetching everything.
+  const hydrated = useRelayHydrated();
 
   const fetchNotes = useCallback(() => {
     if (!pubkey) return;
@@ -61,15 +64,16 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
       handle.unobserve();
       clearTimeout(timeout);
     };
-    // relayRefresh isn't read in the body — it's a dependency purely to force
-    // a fresh fetchNotes identity (and re-run below) once hydration completes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pubkey, relayRefresh]);
+  }, [pubkey]);
 
+  // Hold the first request until hydration, then fetch. `relayRefresh` stays a
+  // dep so a worker restart (which drops its in-memory interests) also refetches.
   useEffect(() => {
+    if (!hydrated) return;
     const cleanup = fetchNotes();
     return cleanup;
-  }, [fetchNotes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchNotes, hydrated, relayRefresh]);
 
   const posts = useMemo(() => notes.filter((n) => !isReply(n)), [notes]);
   const conversations = useMemo(() => notes.filter(isReply), [notes]);

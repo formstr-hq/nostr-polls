@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Event, Filter, nip19 } from "nostr-tools";
 import { Box, Button, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { useListContext } from "../../hooks/useListContext";
@@ -131,6 +131,9 @@ const BookmarksFeed: React.FC = () => {
   const { fetchUserProfileThrottled, profiles } = useAppContext();
   const { bookmarkedEventRefs, bookmarkedPackKeys, lists } = useListContext();
   const relayRefresh = useRelayRefresh();
+  // Wait for the worker's cache before the first request, so it replays cached
+  // packs instead of EOSE-ing on an empty store and re-fetching everything.
+  const hydrated = useRelayHydrated();
 
   const [items, setItems] = useState<BookmarkItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -218,9 +221,12 @@ const BookmarksFeed: React.FC = () => {
   }, [refList, bookmarkedPacks, fetchUserProfileThrottled]);
 
   useEffect(() => {
+    // Wait for the worker's cache before resolving, so the first pass replays
+    // cached bookmarks instead of EOSE-ing on an empty store.
+    if (!hydrated) return;
     if (user) resolve();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolve, relayRefresh]);
+  }, [resolve, hydrated, relayRefresh]);
 
   if (!user) {
     return (

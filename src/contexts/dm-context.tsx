@@ -9,7 +9,7 @@ import React, {
 import { Event } from "nostr-tools";
 import { useUserContext } from "../hooks/useUserContext";
 import { dataLayer, type ObserveHandle, type PublishResult } from "@formstr/local-relay";
-import { useRelayRefresh } from "../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../dataLayer/hooks";
 import {
   unwrapGiftWrap,
   wrapAndSendDM,
@@ -131,6 +131,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
   // Bumps once the worker has hydrated its store (or restarted); we re-observe
   // so cached gift wraps that the boot-time subscription EOSE'd past get decrypted.
   const refresh = useRelayRefresh();
+  // Subscribe only once the worker's cache is readable — before hydration the DM
+  // stream would EOSE on an empty store and need a re-run to find the wraps.
+  const hydrated = useRelayHydrated();
   // Serialise external-signer decryption so the user only sees one prompt at a time
   const decryptQueue = useRef<Promise<void>>(Promise.resolve());
   // If the user rejects a decrypt request, stop asking for the rest of the session
@@ -307,6 +310,9 @@ export function DMProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // Wait for the worker's cache before subscribing/decrypting.
+    if (!hydrated) return;
+
     const myPubkey = user.pubkey;
     const privateKey = user.privateKey;
 
@@ -386,7 +392,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
       subRef.current?.unobserve();
       subRef.current = null;
     };
-  }, [user, addMessage, refresh, applyReadStateToConversations]);
+  }, [user, addMessage, hydrated, refresh, applyReadStateToConversations]);
 
   const sendMessage = useCallback(
     async (

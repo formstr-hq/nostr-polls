@@ -13,7 +13,7 @@ import { useNavigate } from "react-router-dom";
 import { dataLayer } from "@formstr/local-relay";
 import { EventPointer } from "nostr-tools/lib/types/nip19";
 import PollResponseForm from "../PollResponse/PollResponseForm";
-import { useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import {
   MAX_NOTE_DEPTH,
   NoteDepthContext,
@@ -36,6 +36,9 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
   // Re-attempt resolution once the worker hydrates its store, so a reference that
   // missed on a cold cache resolves without the user tapping Retry.
   const refresh = useRelayRefresh();
+  // A read before hydration would replay an empty store, clear the note, then
+  // need a re-run to find it — wait for the cache instead.
+  const hydrated = useRelayHydrated();
   const depth = useNoteDepth();
   const navigate = useNavigate();
 
@@ -46,6 +49,7 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
   const openInOwnView = () => navigate(`/note/${neventId}`);
 
   useEffect(() => {
+    if (!hydrated) return; // wait for the cache before reading
     setLoading(true);
     setEvent(null);
 
@@ -92,7 +96,7 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
       clearTimeout(timer);
       handle.unobserve();
     };
-  }, [neventId, retryCount, refresh]);
+  }, [neventId, retryCount, hydrated, refresh]);
 
   const handleRetry = () => {
     setRetryCount((c) => c + 1);
