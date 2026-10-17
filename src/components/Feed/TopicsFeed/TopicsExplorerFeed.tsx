@@ -26,7 +26,7 @@ import UnifiedFeed from "../UnifiedFeed";
 import OverlappingAvatars from "../../../components/Common/OverlappingAvatars";
 import { signEvent } from "../../../nostr";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayRefresh } from "../../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../../dataLayer/hooks";
 import { useMetadata } from "../../../hooks/MetadataProvider";
 import { selectBestMetadataEvent } from "../../../utils/utils";
 import {
@@ -48,6 +48,9 @@ const TopicExplorer: React.FC = () => {
     useListContext();
   const navigate = useNavigate();
   const relayRefresh = useRelayRefresh();
+  // Wait for the worker's cache before the first request, so this replays cached
+  // topic events instead of EOSE-ing on an empty store.
+  const hydrated = useRelayHydrated();
 
   const [tabValue, setTabValue] = useState<0 | 1>(0);
   const [feedMode, setFeedMode] = useState<
@@ -253,6 +256,7 @@ const TopicExplorer: React.FC = () => {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (!hydrated) return; // wait for the cache before the first request
     if (!tag || relays.length === 0) return;
 
     subRef.current?.close();
@@ -350,7 +354,7 @@ const TopicExplorer: React.FC = () => {
         subRef.current.close();
       }
     };
-  }, [tag, relays, relayRefresh]);
+  }, [tag, relays, hydrated, relayRefresh]);
 
   const sortedEvents = useMemo(() => {
     const base = tabValue === 0 ? notesEvents : pollsEvents;

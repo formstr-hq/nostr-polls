@@ -13,7 +13,7 @@ import OverlappingAvatars from "../Common/OverlappingAvatars";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { safeSetItem } from "../../utils/localStorage";
-import { useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import { isRelayHydrated } from "../../dataLayer/relayRefresh";
 
 // Minimal closer shape the feed tracks. The worker owns relays/chunking, so the
@@ -94,6 +94,12 @@ export const PollFeed = () => {
   // Ref so handleIncomingEvent can read the current value without a stale closure
   const loadingInitialRef = useRef(true);
   const relayRefresh = useRelayRefresh();
+  // Hold the first fetch until the worker has hydrated its cache, so it replays
+  // cached polls instead of hitting an empty store and re-fetching everything.
+  const hydrated = useRelayHydrated();
+  // Which source the current accumulators belong to — a `relayRefresh` bump is
+  // not a source change (see the load effect below).
+  const lastSourceRef = useRef<string | null>(null);
 
   const { user } = useUserContext();
   const { requestReportCheck, requestUserReportCheck } = useReports();
@@ -384,16 +390,27 @@ export const PollFeed = () => {
   }, [combinedEvents, requestReportCheck, requestUserReportCheck]);
 
   useEffect(() => {
+    // Reset only on a real source change. A `relayRefresh` bump just means the
+    // cache became readable; wiping here blanked the feed right before refilling.
+    const isNewSource = lastSourceRef.current !== eventSource;
+    lastSourceRef.current = eventSource;
+
+    if (isNewSource) {
+      setPollEvents([]);
+      setRepostEvents([]);
+      setPendingPollEvents([]);
+      setLoadingInitial(true);
+    }
+
+    // Wait for hydration before the first request, so it replays the cache.
+    if (!hydrated) return;
+
     if (feedSubscription) feedSubscription.unsubscribe();
-    setPollEvents([]);
-    setRepostEvents([]);
-    setPendingPollEvents([]);
-    setLoadingInitial(true);
     const closer = fetchInitialPolls();
     setFeedSubscription(closer);
     return () => closer?.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventSource, relayRefresh]);
+  }, [eventSource, hydrated, relayRefresh]);
 
   useEffect(() => {
     let closer: FeedSub | undefined;

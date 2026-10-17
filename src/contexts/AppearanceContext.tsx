@@ -1,6 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
-  FONT_PRESETS,
   COLOR_PRESETS,
   ColorPreset,
   getFontPreset,
@@ -9,6 +8,7 @@ import {
   CUSTOM_PRESET_ID,
   DEFAULT_CUSTOM_PRIMARY,
   DEFAULT_CUSTOM_SECONDARY,
+  SYSTEM_FONT_ID,
 } from '../styles/themes';
 
 interface CustomColors {
@@ -43,9 +43,11 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   const [fontPresetId, setFontPresetId] = useState(() => {
     const stored = localStorage.getItem('pollerama:fontPreset');
     if (stored) return stored;
-    const random = FONT_PRESETS[Math.floor(Math.random() * FONT_PRESETS.length)].id;
-    localStorage.setItem('pollerama:fontPreset', random);
-    return random;
+    // Default to the platform font. The display presets (Shantell/Fredoka/…)
+    // are still selectable in Settings — they're just no longer picked at random
+    // for a brand-new install, which is what made the app read as a web page.
+    localStorage.setItem('pollerama:fontPreset', SYSTEM_FONT_ID);
+    return SYSTEM_FONT_ID;
   });
   const [colorPresetId, setColorPresetId] = useState(() => {
     const stored = localStorage.getItem('pollerama:colorPreset');

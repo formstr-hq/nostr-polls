@@ -13,7 +13,7 @@ import { useAppContext } from "../hooks/useAppContext";
 import { User } from "./user-context";
 import { dataLayer } from "@formstr/local-relay";
 import { collectOnce } from "../dataLayer/collect";
-import { useRelayRefresh } from "../dataLayer/hooks";
+import { useRelayHydrated, useRelayRefresh } from "../dataLayer/hooks";
 import { readCachedContacts, writeCachedContacts } from "../nostr/contactsCache";
 import { signerManager } from "../singletons/Signer/SignerManager";
 import {
@@ -215,6 +215,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
   // author-less feeds (polls, DMs, notifications) keep working. Re-running the
   // fetch effect on this signal re-observes against the populated store.
   const relayRefresh = useRelayRefresh();
+  // Wait for the worker's cache before the one-shot list/contact/bookmark reads,
+  // so they resolve against the populated store on the first pass.
+  const hydrated = useRelayHydrated();
   const wotInFlightRef = useRef(false);
   const wotAttemptedRef = useRef(false);
   // Dedicated worker that does the heavy kind-3 aggregation + serialization off
@@ -1135,6 +1138,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
+    // Wait for the worker's cache so these one-shot reads resolve on the first
+    // pass instead of EOSE-ing cold and retrying after hydration.
+    if (!hydrated) return;
     if (user) {
       if (!lists) fetchLists();
       // Always keep a standing kind-3 subscription open to revalidate the
@@ -1155,7 +1161,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
     // a kind-3/list/bookmark read that EOSE'd on a cold store retries against the
     // populated one — the guards above keep it to only what's still missing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lists, myTopics, user, relayRefresh]);
+  }, [lists, myTopics, user, hydrated, relayRefresh]);
 
   // Warm profile cache with followed pubkeys
   useEffect(() => {

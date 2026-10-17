@@ -443,12 +443,21 @@ export const Notes: React.FC<NotesProps> = ({
         </Card>
       ) : (
         <Card
-          variant="outlined"
+          elevation={0}
           className="poll-response-form"
           sx={{
-            m: 1,
+            // Full-bleed and borderless: a feed item separates from the next by a
+            // hairline, not by a four-sided box floating on the page. The previous
+            // `variant="outlined"` + `m: 1` is what made notes read as cards.
+            m: 0,
+            border: 0,
+            borderRadius: 0,
+            borderBottom: 1,
+            borderColor: "divider",
+            bgcolor: "transparent",
+            boxShadow: "none",
             opacity: hidden ? 0.5 : 1,
-            pointerEvents: hidden ? "auto" : "auto",
+            pointerEvents: "auto",
           }}
           onContextMenu={handleContextMenu}
         >
@@ -701,7 +710,17 @@ export const Notes: React.FC<NotesProps> = ({
             </Box>
           </Collapse>
 
-          <Card variant="outlined" sx={{ position: "relative", overflow: "hidden" }}>
+          <Card
+            elevation={0}
+            sx={{
+              position: "relative",
+              overflow: "hidden",
+              border: 0,
+              borderRadius: 0,
+              bgcolor: "transparent",
+              boxShadow: "none",
+            }}
+          >
             <CardContent
               ref={contentRef}
               sx={{
