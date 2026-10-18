@@ -2,20 +2,30 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Box,
   Button,
+  ButtonBase,
   Stack,
   Collapse,
   Typography,
   Chip,
-  CircularProgress,
-  IconButton,
-  Tooltip,
   LinearProgress,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import AddPhotoIcon from "@mui/icons-material/AddPhotoAlternateRounded";
+import AlternateEmailIcon from "@mui/icons-material/AlternateEmailRounded";
+import TagIcon from "@mui/icons-material/TagRounded";
+import LockIcon from "@mui/icons-material/LockRounded";
+import {
+  ComposerDock,
+  ComposerLabel,
+  ComposerSlab,
+  DockTool,
+  WhoLine,
+  insertAtCursor,
+} from "./ComposerParts";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import dayjs, { Dayjs } from "dayjs";
-import AttachFileIcon from "@mui/icons-material/AttachFile";
 import TimerOutlinedIcon from "@mui/icons-material/TimerOutlined";
 import { useNotification } from "../../contexts/notification-context";
 import { useUserContext } from "../../hooks/useUserContext";
@@ -39,7 +49,7 @@ import { PostEnhancementDialog } from "./PostEnhancementDialog";
 import { aiService } from "../../services/ai-service";
 import { useAppContext } from "../../hooks/useAppContext";
 import { uploadToBlossom, getBlossomServer } from "../../services/blossomService";
-import { copyToClipboard, extractHashtags, calculateTimeAgo } from "../../utils/common";
+import { copyToClipboard, extractHashtags } from "../../utils/common";
 import { getAppBaseUrl } from "../../utils/platform";
 import { AudienceMenu, Audience } from "./AudienceMenu";
 import {
@@ -53,6 +63,13 @@ import { NoteDraft, newDraftId } from "./draftModel";
 import { useDraftAutosave } from "../../hooks/useDraftAutosave";
 
 const UPLOAD_PLACEHOLDER = "[uploading…]";
+
+const EXPIRY_PRESETS = [
+  { label: "1h", seconds: 3600 },
+  { label: "6h", seconds: 21600 },
+  { label: "24h", seconds: 86400 },
+  { label: "7d", seconds: 604800 },
+];
 
 const NoteTemplateForm: React.FC<{
   eventContent: string;
@@ -341,141 +358,40 @@ const NoteTemplateForm: React.FC<{
     showNotification("Suggestions applied!", "success");
   };
 
+  const hasExpiry = !!(expiresInSeconds || customExpiryDate);
+  const expiryLabel = customExpiryDate
+    ? customExpiryDate.format("MMM D, HH:mm")
+    : EXPIRY_PRESETS.find((p) => p.seconds === expiresInSeconds)?.label;
+  const insertText = (text: string) =>
+    insertAtCursor(textAreaRef.current, eventContentRef.current, text, setEventContent);
+
   return (
     <form onSubmit={handleSubmit}>
-      <Stack spacing={4}>
-        <Box>
-          {/* Toolbar: attach file + expiration */}
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5, flexWrap: "wrap" }}>
-            <Tooltip title="Attach image or video (Blossom)">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading || isSubmitting}
-                  sx={{
-                    border: "1px solid",
-                    borderColor: "primary.main",
-                    borderRadius: "50%",
-                    color: "primary.main",
-                  }}
-                >
-                  {isUploading ? (
-                    <CircularProgress size={18} />
-                  ) : (
-                    <AttachFileIcon fontSize="small" />
-                  )}
-                </IconButton>
-              </span>
-            </Tooltip>
-
-            <EmojiPickerButton
-              onSelect={insertEmoji}
-              disabled={isSubmitting}
-              tooltip="Insert emoji"
-              placement="bottom-start"
-              iconButtonSx={{
-                border: "1px solid",
-                borderColor: "primary.main",
-                borderRadius: "50%",
-                color: "primary.main",
-              }}
-            />
-
-            {/* Expiration toggle */}
-            <Tooltip title={showExpiry ? "Hide expiration" : "Set expiration (NIP-40)"}>
-              <IconButton
-                size="small"
-                onClick={() => {
-                  setShowExpiry((v) => !v);
-                  if (showExpiry) {
-                    setExpiresInSeconds(null);
-                    setCustomExpiryDate(null);
-                  }
-                }}
-                sx={{
-                  border: "1px solid",
-                  borderColor: (expiresInSeconds || customExpiryDate) ? "warning.main" : "primary.main",
-                  borderRadius: "50%",
-                  color: (expiresInSeconds || customExpiryDate) ? "warning.main" : "primary.main",
-                }}
-              >
-                <TimerOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-
-            {showExpiry && (
-              <>
-                {[
-                  { label: "1h", seconds: 3600 },
-                  { label: "6h", seconds: 21600 },
-                  { label: "24h", seconds: 86400 },
-                  { label: "7d", seconds: 604800 },
-                ].map(({ label, seconds }) => (
-                  <Chip
-                    key={label}
-                    label={label}
-                    size="small"
-                    variant={expiresInSeconds === seconds ? "filled" : "outlined"}
-                    color={expiresInSeconds === seconds ? "warning" : "default"}
-                    onClick={() => {
-                      setCustomExpiryDate(null);
-                      setExpiresInSeconds(expiresInSeconds === seconds ? null : seconds);
-                    }}
-                    sx={{ height: 22, fontSize: "0.7rem" }}
-                  />
-                ))}
-                <LocalizationProvider dateAdapter={AdapterDayjs}>
-                  <DateTimePicker
-                    value={customExpiryDate}
-                    onChange={(val) => {
-                      setCustomExpiryDate(val);
-                      if (val) setExpiresInSeconds(null);
-                    }}
-                    minDateTime={dayjs().add(1, "minute")}
-                    slotProps={{
-                      textField: {
-                        size: "small",
-                        placeholder: "custom",
-                        sx: {
-                          width: 175,
-                          "& .MuiInputBase-root": { height: 24, fontSize: "0.75rem" },
-                          "& .MuiOutlinedInput-notchedOutline": {
-                            borderColor: customExpiryDate ? "warning.main" : undefined,
-                          },
-                        },
-                      },
-                    }}
-                  />
-                </LocalizationProvider>
-              </>
-            )}
-          </Box>
-
-          {/* Upload progress bar */}
-          {isUploading && <LinearProgress sx={{ mb: 0.5, borderRadius: 1 }} />}
-
-          {/* Drag-and-drop zone wrapping the textarea */}
-          <Box
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            sx={{
-              position: "relative",
-              outline: isDragOver ? "2px dashed" : "none",
-              outlineColor: "primary.main",
-              borderRadius: 1,
-            }}
-          >
+      <Stack spacing={1.25}>
+        {/* Editor slab — drag-and-drop zone wraps the whole thing */}
+        <ComposerSlab
+          sx={{
+            position: "relative",
+            outline: isDragOver ? "2px dashed" : "none",
+            outlineColor: "secondary.main",
+          }}
+        >
+          <Box onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+            <WhoLine autosaveStatus={autosaveStatus} savedAt={draftSavedAt} />
             <MentionTextArea
-              label="Note Content"
+              label="Note content"
+              bare
+              fontSize={19}
+              minRows={5}
+              maxRows={16}
               value={eventContent}
               onChange={setEventContent}
               required
-              placeholder="Share your thoughts. Use @mentions and #hashtags."
+              placeholder="What's on your mind? Use @mentions and #hashtags."
               onFilePaste={(file, cursorPos) => uploadFile(file, cursorPos)}
               inputRef={textAreaRef}
             />
+            {isUploading && <LinearProgress color="secondary" sx={{ mt: 1, borderRadius: 1 }} />}
             {isDragOver && (
               <Box
                 sx={{
@@ -485,16 +401,68 @@ const NoteTemplateForm: React.FC<{
                   alignItems: "center",
                   justifyContent: "center",
                   bgcolor: "action.hover",
-                  borderRadius: 1,
+                  borderRadius: "26px",
                   pointerEvents: "none",
                 }}
               >
-                <Typography variant="body2" color="primary">
+                <Typography variant="body2" color="secondary">
                   Drop to upload
                 </Typography>
               </Box>
             )}
           </Box>
+
+          {/* Audience + expiry chips */}
+          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center", mt: 1.5 }}>
+            <AudienceMenu value={audience} onChange={setAudience} disabled={isSubmitting} />
+            {hasExpiry && (
+              <Chip
+                icon={<TimerOutlinedIcon />}
+                label={`Disappears ${customExpiryDate ? "at " : "in "}${expiryLabel}`}
+                color="warning"
+                variant="outlined"
+                onClick={() => setShowExpiry(true)}
+                onDelete={() => {
+                  setExpiresInSeconds(null);
+                  setCustomExpiryDate(null);
+                }}
+              />
+            )}
+          </Box>
+          {audience.kind === "private" && (
+            <Typography variant="caption" color="warning.main" sx={{ display: "block", mt: 1 }}>
+              You'll get a share link. Save it — we don't store the key, so losing the link means losing access.
+            </Typography>
+          )}
+
+          {topics.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <ComposerLabel>Topics</ComposerLabel>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {topics.map((topic, index) => (
+                  <Chip
+                    key={index}
+                    label={`#${topic}`}
+                    size="small"
+                    sx={{
+                      bgcolor: (t) => alpha(t.palette.secondary.main, 0.12),
+                      color: "secondary.main",
+                      opacity: audience.kind === "private" ? 0.4 : 1,
+                    }}
+                  />
+                ))}
+              </Stack>
+              {audience.kind === "private" && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                  Hashtags stay in your post but aren't published as topic tags.
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2 }}>
+            Paste or drag & drop images and videos to attach.
+          </Typography>
 
           {/* Hidden file input */}
           <input
@@ -504,118 +472,126 @@ const NoteTemplateForm: React.FC<{
             style={{ display: "none" }}
             onChange={handleFileSelect}
           />
-        </Box>
+        </ComposerSlab>
 
-        {topics.length > 0 && (
-          <Box>
-            <Typography variant="subtitle1" gutterBottom>
-              Topics
-            </Typography>
-            <Stack direction="row" spacing={1} flexWrap="wrap">
-              {topics.map((topic, index) => (
-                <Chip
-                  key={index}
-                  label={`#${topic}`}
-                  color="secondary"
-                  variant="outlined"
-                  sx={{ opacity: audience.kind === "private" ? 0.4 : 1 }}
-                />
-              ))}
-            </Stack>
-            {audience.kind === "private" && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-                Hashtags stay in your post but aren't published as topic tags.
-              </Typography>
-            )}
-          </Box>
-        )}
-
-        <Box sx={{ pt: 2 }}>
-          <Box display="flex" flexDirection="column" gap={2}>
-            {aiSettings.model && (
-              <Button
-                variant="contained"
-                color="secondary"
-                startIcon={
-                  isEnhancing ? (
-                    <CircularProgress size={20} />
-                  ) : (
-                    <AutoFixHighIcon />
-                  )
-                }
-                onClick={(e) => {
-                  e.preventDefault();
-                  handleProofread();
-                }}
-                disabled={isEnhancing || isSubmitting}
-                fullWidth
-                sx={{
-                  bgcolor: 'secondary.main',
-                  color: 'secondary.contrastText',
-                  '&:hover': {
-                    bgcolor: 'secondary.dark',
-                  },
-                }}
-              >
-                {isEnhancing ? "Proofreading..." : "Proofread with AI"}
+        {/* Disappearing note (NIP-40) */}
+        <Collapse in={showExpiry} unmountOnExit>
+          <ComposerSlab>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <ComposerLabel>Disappearing note</ComposerLabel>
+              <Button size="small" onClick={() => setShowExpiry(false)}>
+                Done
               </Button>
-            )}
-
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-              <AudienceMenu
-                value={audience}
-                onChange={setAudience}
-                disabled={isSubmitting}
-              />
-              {audience.kind === "private" && (
-                <Typography variant="caption" color="text.secondary">
-                  You'll get a share link. Save it — we don't store the key, so losing the link means losing access.
-                </Typography>
-              )}
             </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+              Relays that support NIP-40 delete the note after this time.
+            </Typography>
+            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, mb: 1.5 }}>
+              {EXPIRY_PRESETS.map(({ label, seconds }) => {
+                const on = expiresInSeconds === seconds && !customExpiryDate;
+                return (
+                  <ButtonBase
+                    key={label}
+                    onClick={() => {
+                      setCustomExpiryDate(null);
+                      setExpiresInSeconds(on ? null : seconds);
+                    }}
+                    aria-pressed={on}
+                    sx={{
+                      height: 52,
+                      borderRadius: "16px",
+                      fontFamily: "inherit",
+                      fontWeight: 800,
+                      fontSize: 16,
+                      bgcolor: on ? "cb.block" : "cb.inner",
+                      color: on ? "cb.onBlock" : "text.primary",
+                    }}
+                  >
+                    {label}
+                  </ButtonBase>
+                );
+              })}
+            </Box>
+            <LocalizationProvider dateAdapter={AdapterDayjs}>
+              <DateTimePicker
+                label="Custom date & time"
+                value={customExpiryDate}
+                onChange={(val) => {
+                  setCustomExpiryDate(val);
+                  if (val) setExpiresInSeconds(null);
+                }}
+                minDateTime={dayjs().add(1, "minute")}
+                slotProps={{ textField: { fullWidth: true, size: "small" } }}
+              />
+            </LocalizationProvider>
+          </ComposerSlab>
+        </Collapse>
 
-            <Button type="submit" variant="contained" disabled={isSubmitting}>
-              {isSubmitting
-                ? audience.kind === "private"
-                  ? "Encrypting & publishing..."
-                  : "Creating Note..."
-                : audience.kind === "private"
-                ? "Create Private Note"
-                : "Create Note"}
-            </Button>
+        <Collapse in={showPreview} unmountOnExit>
+          <ComposerSlab>
+            <ComposerLabel>Preview</ComposerLabel>
+            <NotePreview noteEvent={previewEvent} />
+          </ComposerSlab>
+        </Collapse>
 
-            {(autosaveStatus === "pending" || autosaveStatus === "saving") && (
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
-                Saving draft…
-              </Typography>
-            )}
-            {autosaveStatus === "saved" && draftSavedAt && (
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
-                Draft saved · {calculateTimeAgo(Math.floor(draftSavedAt / 1000))}
-              </Typography>
-            )}
-
-            <Button
-              variant="outlined"
-              startIcon={
-                showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />
-              }
-              onClick={(e) => {
-                e.preventDefault();
-                setShowPreview(!showPreview);
-              }}
-              fullWidth
-            >
-              {showPreview ? "Hide Preview" : "Show Preview"}
-            </Button>
-
-            <Collapse in={showPreview}>
-              <Box mt={1}>
-                <NotePreview noteEvent={previewEvent} />
-              </Box>
-            </Collapse>
-          </Box>
-        </Box>
+        <ComposerDock
+          submitting={isSubmitting}
+          disabled={!eventContent.trim()}
+          submitLabel={
+            audience.kind === "private" ? (
+              <>
+                <LockIcon sx={{ fontSize: 18 }} /> Post
+              </>
+            ) : (
+              "Post"
+            )
+          }
+          tools={
+            <>
+              <DockTool
+                title="Attach image or video (Blossom)"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isSubmitting}
+                busy={isUploading}
+              >
+                <AddPhotoIcon />
+              </DockTool>
+              <EmojiPickerButton
+                onSelect={insertEmoji}
+                disabled={isSubmitting}
+                tooltip="Insert emoji"
+                placement="top-start"
+                iconButtonSx={{ width: 42, height: 42, color: "rgba(255,255,255,0.85)" }}
+              />
+              <DockTool title="Mention someone" onClick={() => insertText("@")}>
+                <AlternateEmailIcon />
+              </DockTool>
+              <DockTool title="Add a hashtag" onClick={() => insertText("#")}>
+                <TagIcon />
+              </DockTool>
+              <DockTool
+                title={hasExpiry ? "Edit expiration" : "Set expiration (NIP-40)"}
+                onClick={() => setShowExpiry((v) => !v)}
+                warn={hasExpiry}
+                active={showExpiry}
+              >
+                <TimerOutlinedIcon />
+              </DockTool>
+              {aiSettings.model && (
+                <DockTool title="Proofread with AI" onClick={handleProofread} busy={isEnhancing} disabled={isSubmitting}>
+                  <AutoFixHighIcon />
+                </DockTool>
+              )}
+              <DockTool
+                title={showPreview ? "Hide preview" : "Show preview"}
+                onClick={() => setShowPreview((v) => !v)}
+                active={showPreview}
+              >
+                {showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />}
+              </DockTool>
+            </>
+          }
+        />
       </Stack>
 
       <PostEnhancementDialog

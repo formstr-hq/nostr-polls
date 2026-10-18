@@ -1,33 +1,37 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   Box,
-  Button,
+  ButtonBase,
   Stack,
   TextField,
   Typography,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Collapse,
   Chip,
-  CircularProgress,
-  IconButton,
-  Tooltip,
   LinearProgress,
 } from "@mui/material";
-import AttachFileIcon from "@mui/icons-material/AttachFile";
 import MentionTextArea, { extractMentionTags } from "./MentionTextArea";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
-import Grid from "@mui/material/Grid2";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers";
 import dayjs from "dayjs";
 import RadioButtonCheckedIcon from "@mui/icons-material/RadioButtonChecked";
 import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
-import OptionsCard from "./OptionsCard";
+import OptionsCard, { duplicateOf } from "./OptionsCard";
+import { alpha } from "@mui/material/styles";
+import AddPhotoIcon from "@mui/icons-material/AddPhotoAlternateRounded";
+import AlternateEmailIcon from "@mui/icons-material/AlternateEmailRounded";
+import TagIcon from "@mui/icons-material/TagRounded";
+import EmojiPickerButton from "../Common/EmojiPickerButton";
+import {
+  ComposerDock,
+  ComposerLabel,
+  ComposerSlab,
+  DockTool,
+  WhoLine,
+  insertAtCursor,
+} from "./ComposerParts";
 import { Option } from "../../interfaces";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { useNotification } from "../../contexts/notification-context";
@@ -42,7 +46,7 @@ import { Event, nip19 } from "nostr-tools";
 import { dataLayer } from "@formstr/local-relay";
 import { PublishDiagnosticModal } from "../Common/PublishDiagnosticModal";
 import { usePublishDiagnostic } from "../../hooks/usePublishDiagnostic";
-import { extractHashtags, calculateTimeAgo } from "../../utils/common";
+import { extractHashtags } from "../../utils/common";
 import { uploadToBlossom, getBlossomServer } from "../../services/blossomService";
 import { useDrafts } from "../../contexts/drafts-context";
 import { PollDraft, newDraftId } from "./draftModel";
@@ -67,18 +71,46 @@ const pollOptions = [
     value: "singlechoice",
     icon: <RadioButtonCheckedIcon fontSize="small" />,
     label: "Single Choice Poll",
+    short: "Single",
   },
   {
     value: "multiplechoice",
     icon: <CheckBoxIcon fontSize="small" />,
     label: "Multiple Choice Poll",
+    short: "Multiple",
   },
   {
     value: "rankedchoice",
     icon: <FormatListNumberedIcon fontSize="small" />,
     label: "Ranked Choice Poll",
+    short: "Ranked",
     disabled: true,
   },
+];
+
+// One tap fills the options; plain pre-filled labels, no protocol change.
+const POLL_TEMPLATES = [
+  { name: "Yes / No", emoji: "👍", options: ["Yes", "No"] },
+  { name: "Rate it", emoji: "⭐", options: ["⭐", "⭐⭐", "⭐⭐⭐", "⭐⭐⭐⭐", "⭐⭐⭐⭐⭐"] },
+  { name: "This or that", emoji: "🆚", options: ["This", "That"] },
+  { name: "Emoji scale", emoji: "😍", options: ["😍", "🙂", "😐", "🙁", "😡"] },
+];
+
+// Quick "voting ends" presets (seconds from now); null = never.
+const DURATION_PRESETS: { label: string; seconds: number | null }[] = [
+  { label: "1h", seconds: 3600 },
+  { label: "1d", seconds: 86400 },
+  { label: "3d", seconds: 3 * 86400 },
+  { label: "1w", seconds: 7 * 86400 },
+  { label: "∞", seconds: null },
+];
+
+// Proof-of-work levels for the PoW tag voters must satisfy.
+const POW_PRESETS = [
+  { label: "Off", bits: 0, hint: "instant" },
+  { label: "Low", bits: 16, hint: "~1 sec" },
+  { label: "Medium", bits: 20, hint: "~10 sec" },
+  { label: "High", bits: 24, hint: "~1 min" },
 ];
 
 const PollTemplateForm: React.FC<{
@@ -111,6 +143,7 @@ const PollTemplateForm: React.FC<{
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadingOptionIndex, setUploadingOptionIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const questionRef = useRef<HTMLTextAreaElement | null>(null);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
   const pendingOptionIndexRef = useRef<number | null>(null);
   const eventContentRef = useRef(eventContent);
@@ -236,6 +269,10 @@ const PollTemplateForm: React.FC<{
         showNotification(NOTIFICATION_MESSAGES.EMPTY_POLL_OPTIONS, "error");
         return;
       }
+      if (options.some((_, i) => duplicateOf(options, i) >= 0)) {
+        showNotification("Two options are the same — edit or remove one.", "error");
+        return;
+      }
 
       // If quoting another event, embed its nevent reference in the content
       let finalContent = eventContent;
@@ -296,10 +333,6 @@ const PollTemplateForm: React.FC<{
     publishPollEvent(user?.privateKey);
   };
 
-  const handleChange = (event: any) => {
-    setPollType(event.target.value);
-  };
-
   const previewEvent: Partial<Event> = {
     content: eventContent,
     tags: [
@@ -311,56 +344,37 @@ const PollTemplateForm: React.FC<{
     ],
   };
 
+  const allOptionsEmpty = options.every((o) => o[1].trim() === "");
+  const applyTemplate = (labels: string[]) =>
+    setOptions(labels.map((label) => [generateOptionId(), label] as Option));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const insertText = (text: string) =>
+    insertAtCursor(questionRef.current, eventContentRef.current, text, setEventContent);
+
   return (
     <form onSubmit={handleSubmit}>
-      <Stack spacing={4}>
-        <Box>
-          {/* Toolbar: attach file */}
-          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
-            <Tooltip title="Attach image or video (Blossom)">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading || isSubmitting}
-                  sx={{
-                    border: "1px solid",
-                    borderColor: "primary.main",
-                    borderRadius: "50%",
-                    color: "primary.main",
-                  }}
-                >
-                  {isUploading ? <CircularProgress size={18} /> : <AttachFileIcon fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Typography variant="caption" color="text.secondary">
-              Paste or drag &amp; drop images/videos to attach
-            </Typography>
-          </Box>
-
-          {isUploading && <LinearProgress sx={{ mb: 0.5, borderRadius: 1 }} />}
-
-          {/* Drag-and-drop zone */}
-          <Box
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            sx={{
-              position: "relative",
-              outline: isDragOver ? "2px dashed" : "none",
-              outlineColor: "primary.main",
-              borderRadius: 1,
-            }}
-          >
+      <Stack spacing={1.25}>
+        {/* Question slab — drag-and-drop zone */}
+        <ComposerSlab
+          sx={{ position: "relative", outline: isDragOver ? "2px dashed" : "none", outlineColor: "secondary.main" }}
+        >
+          <Box onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+            <WhoLine autosaveStatus={autosaveStatus} savedAt={draftSavedAt} />
             <MentionTextArea
-              label="Poll Question"
+              label="Poll question"
+              bare
+              fontSize={21}
+              fontWeight={700}
+              minRows={2}
+              maxRows={10}
               value={eventContent}
               onChange={setEventContent}
               required
-              placeholder="Ask a question. Use @mentions and #hashtags."
+              placeholder="Ask a question…"
               onFilePaste={(file, cursorPos) => uploadQuestionFile(file, cursorPos)}
+              inputRef={questionRef}
             />
+            {isUploading && <LinearProgress color="secondary" sx={{ mt: 1, borderRadius: 1 }} />}
             {isDragOver && (
               <Box
                 sx={{
@@ -370,15 +384,26 @@ const PollTemplateForm: React.FC<{
                   alignItems: "center",
                   justifyContent: "center",
                   bgcolor: "action.hover",
-                  borderRadius: 1,
+                  borderRadius: "26px",
                   pointerEvents: "none",
                 }}
               >
-                <Typography variant="body2" color="primary">Drop to upload</Typography>
+                <Typography variant="body2" color="secondary">Drop to upload</Typography>
               </Box>
             )}
           </Box>
-
+          {topics.length > 0 && (
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+              {topics.map((topic, index) => (
+                <Chip
+                  key={index}
+                  label={`#${topic}`}
+                  size="small"
+                  sx={{ bgcolor: (t) => alpha(t.palette.secondary.main, 0.12), color: "secondary.main" }}
+                />
+              ))}
+            </Stack>
+          )}
           {/* Hidden file input for question */}
           <input
             ref={fileInputRef}
@@ -391,7 +416,6 @@ const PollTemplateForm: React.FC<{
               e.target.value = "";
             }}
           />
-
           {/* Hidden file input for options */}
           <input
             ref={optionFileInputRef}
@@ -406,30 +430,10 @@ const PollTemplateForm: React.FC<{
               e.target.value = "";
             }}
           />
-        </Box>
+        </ComposerSlab>
 
-        {topics.length > 0 && (
-          <Box>
-            <Typography variant="subtitle1" gutterBottom>
-              Topics
-            </Typography>
-            <Stack direction="row" spacing={1} flexWrap="wrap">
-              {topics.map((topic, index) => (
-                <Chip
-                  key={index}
-                  label={`#${topic}`}
-                  color="secondary"
-                  variant="outlined"
-                />
-              ))}
-            </Stack>
-          </Box>
-        )}
-
-        <Box>
-          <Typography variant="h6" sx={{ mb: 2 }}>
-            Poll Options
-          </Typography>
+        <ComposerSlab>
+          <ComposerLabel>Options</ComposerLabel>
           <OptionsCard
             onAddOption={addOption}
             onRemoveOption={removeOption}
@@ -442,117 +446,201 @@ const PollTemplateForm: React.FC<{
             }}
             uploadingIndex={uploadingOptionIndex}
           />
-        </Box>
+          {allOptionsEmpty && (
+            <Box sx={{ mt: 2 }}>
+              <ComposerLabel>Or start from a template</ComposerLabel>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {POLL_TEMPLATES.map((tpl) => (
+                  <Chip
+                    key={tpl.name}
+                    label={`${tpl.emoji} ${tpl.name}`}
+                    onClick={() => applyTemplate(tpl.options)}
+                    sx={{ bgcolor: "cb.inner", fontWeight: 700 }}
+                  />
+                ))}
+              </Stack>
+            </Box>
+          )}
+        </ComposerSlab>
 
-        <Box>
-          <Typography variant="h6" sx={{ mb: 3 }}>
-            Poll Settings
-          </Typography>
-          <Grid container spacing={3}>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <FormControl fullWidth>
-                <InputLabel id="poll-type-label">Poll Type</InputLabel>
-                <Select
-                  labelId="poll-type-label"
-                  id="poll-type-select"
-                  value={pollType}
-                  label="Poll Type"
-                  onChange={handleChange}
+        {/* Settings */}
+        <ComposerSlab>
+          <ComposerLabel>Answer type</ComposerLabel>
+          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1 }}>
+            {pollOptions.map((option) => {
+              const on = pollType === option.value;
+              return (
+                <ButtonBase
+                  key={option.value}
+                  disabled={option.disabled}
+                  onClick={() => setPollType(option.value)}
+                  aria-pressed={on}
+                  sx={{
+                    flexDirection: "column",
+                    gap: 0.5,
+                    py: 1.25,
+                    px: 0.5,
+                    borderRadius: "16px",
+                    fontFamily: "inherit",
+                    fontWeight: 700,
+                    fontSize: 13,
+                    bgcolor: on ? "cb.poll" : "cb.inner",
+                    color: on ? "cb.onPoll" : "text.primary",
+                    opacity: option.disabled ? 0.45 : 1,
+                  }}
                 >
-                  {pollOptions.map((option) => (
-                    <MenuItem
-                      key={option.value}
-                      value={option.value}
-                      disabled={option.disabled}
-                    >
-                      <Stack direction="row" spacing={1.5} alignItems="center">
-                        {option.icon}
-                        <Typography>{option.label}</Typography>
-                      </Stack>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <LocalizationProvider dateAdapter={AdapterDayjs}>
-                <DateTimePicker
-                  label="Poll Expiration (Optional)"
-                  disablePast
-                  value={expiration ? dayjs.unix(expiration) : null}
-                  onChange={(value: dayjs.Dayjs | null) => {
-                    if (!value) return;
-                    if (value?.isBefore(now)) {
-                      showNotification(
-                        NOTIFICATION_MESSAGES.PAST_DATE_ERROR,
-                        "error"
-                      );
-                      setExpiration(null);
-                      return;
-                    } else if (value.isValid()) {
-                      setExpiration(value.unix());
-                    }
-                  }}
-                  slotProps={{
-                    textField: {
-                      fullWidth: true,
-                    },
-                  }}
-                />
-              </LocalizationProvider>
-            </Grid>
-          </Grid>
-        </Box>
-
-        <Box>
-          <Typography variant="h6" sx={{ mb: 3 }}>
-            Advanced Settings
-          </Typography>
-          <TextField
-            type="number"
-            label="Proof of Work Difficulty (Optional)"
-            placeholder="Enter difficulty level"
-            value={poW || ""}
-            onChange={(e) => setPoW(Number(e.target.value))}
-            fullWidth
-          />
-        </Box>
-
-        <Box sx={{ pt: 2 }}>
-          <Box display="flex" flexDirection="column" gap={2}>
-            <Button type="submit" variant="contained" disabled={isSubmitting}>
-              {isSubmitting ? "Creating Poll..." : "Create Poll"}
-            </Button>
-            {(autosaveStatus === "pending" || autosaveStatus === "saving") && (
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
-                Saving draft…
-              </Typography>
-            )}
-            {autosaveStatus === "saved" && draftSavedAt && (
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: "center" }}>
-                Draft saved · {calculateTimeAgo(Math.floor(draftSavedAt / 1000))}
-              </Typography>
-            )}
-            <Button
-              variant="outlined"
-              startIcon={
-                showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />
-              }
-              onClick={(e) => {
-                e.preventDefault();
-                setShowPreview(!showPreview);
-              }}
-              fullWidth
-            >
-              {showPreview ? "Hide Preview" : "Show Preview"}
-            </Button>
-            <Collapse in={showPreview}>
-              <Box mt={1}>
-                <PollPreview pollEvent={previewEvent} />
-              </Box>
-            </Collapse>
+                  {option.icon}
+                  {option.short}
+                  {option.disabled && (
+                    <Typography component="span" sx={{ fontSize: 10.5, fontWeight: 700, opacity: 0.8 }}>
+                      Coming soon
+                    </Typography>
+                  )}
+                </ButtonBase>
+              );
+            })}
           </Box>
-        </Box>
+
+          <Box sx={{ mt: 2.5 }}>
+            <ComposerLabel>Voting ends</ComposerLabel>
+            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 1, mb: 1.25 }}>
+              {DURATION_PRESETS.map(({ label, seconds }) => {
+                const target = seconds === null ? null : nowSec + seconds;
+                const on =
+                  seconds === null
+                    ? expiration === null
+                    : expiration !== null && Math.abs(expiration - (target as number)) < 90;
+                return (
+                  <ButtonBase
+                    key={label}
+                    aria-pressed={on}
+                    onClick={() => setExpiration(target)}
+                    sx={{
+                      height: 44,
+                      borderRadius: "14px",
+                      fontFamily: "inherit",
+                      fontWeight: 800,
+                      fontSize: 14,
+                      bgcolor: on ? "cb.poll" : "cb.inner",
+                      color: on ? "cb.onPoll" : "text.primary",
+                    }}
+                  >
+                    {label}
+                  </ButtonBase>
+                );
+              })}
+            </Box>
+            <LocalizationProvider dateAdapter={AdapterDayjs}>
+              <DateTimePicker
+                label="Ends at"
+                disablePast
+                value={expiration ? dayjs.unix(expiration) : null}
+                onChange={(value: dayjs.Dayjs | null) => {
+                  if (!value) return;
+                  if (value?.isBefore(now)) {
+                    showNotification(
+                      NOTIFICATION_MESSAGES.PAST_DATE_ERROR,
+                      "error"
+                    );
+                    setExpiration(null);
+                    return;
+                  } else if (value.isValid()) {
+                    setExpiration(value.unix());
+                  }
+                }}
+                slotProps={{ textField: { fullWidth: true, size: "small" } }}
+              />
+            </LocalizationProvider>
+          </Box>
+
+          <Box sx={{ mt: 2.5 }}>
+            <ComposerLabel>Spam protection</ComposerLabel>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: -0.5, mb: 1.25 }}>
+              Each vote must include a proof-of-work. Higher levels make voters wait longer.
+            </Typography>
+            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, mb: 1.25 }}>
+              {POW_PRESETS.map(({ label, bits, hint }) => {
+                const on = (poW ?? 0) === bits;
+                return (
+                  <ButtonBase
+                    key={label}
+                    aria-pressed={on}
+                    onClick={() => setPoW(bits || null)}
+                    sx={{
+                      flexDirection: "column",
+                      height: 52,
+                      borderRadius: "14px",
+                      fontFamily: "inherit",
+                      fontWeight: 800,
+                      fontSize: 14,
+                      bgcolor: on ? "cb.poll" : "cb.inner",
+                      color: on ? "cb.onPoll" : "text.primary",
+                    }}
+                  >
+                    {label}
+                    <Typography component="span" sx={{ fontSize: 10.5, fontWeight: 600, opacity: 0.75 }}>
+                      {hint}
+                    </Typography>
+                  </ButtonBase>
+                );
+              })}
+            </Box>
+            <TextField
+              type="number"
+              size="small"
+              label="Difficulty (bits)"
+              value={poW || ""}
+              onChange={(e) => setPoW(Number(e.target.value) || null)}
+              fullWidth
+            />
+          </Box>
+        </ComposerSlab>
+
+        <Collapse in={showPreview} unmountOnExit>
+          <ComposerSlab>
+            <ComposerLabel>Preview</ComposerLabel>
+            <PollPreview pollEvent={previewEvent} />
+          </ComposerSlab>
+        </Collapse>
+
+        <ComposerDock
+          poll
+          submitting={isSubmitting}
+          disabled={!eventContent.trim() || options.some((o, i) => duplicateOf(options, i) >= 0)}
+          submitLabel="Post"
+          tools={
+            <>
+              <DockTool
+                title="Attach image or video (Blossom)"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isSubmitting}
+                busy={isUploading}
+              >
+                <AddPhotoIcon />
+              </DockTool>
+              <EmojiPickerButton
+                onSelect={(emoji) => insertText(emoji)}
+                disabled={isSubmitting}
+                tooltip="Insert emoji"
+                placement="top-start"
+                iconButtonSx={{ width: 42, height: 42, color: "rgba(255,255,255,0.85)" }}
+              />
+              <DockTool title="Mention someone" onClick={() => insertText("@")}>
+                <AlternateEmailIcon />
+              </DockTool>
+              <DockTool title="Add a hashtag" onClick={() => insertText("#")}>
+                <TagIcon />
+              </DockTool>
+              <DockTool
+                title={showPreview ? "Hide preview" : "Show preview"}
+                onClick={() => setShowPreview((v) => !v)}
+                active={showPreview}
+              >
+                {showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />}
+              </DockTool>
+            </>
+          }
+        />
       </Stack>
       {publishResult && (
         <PublishDiagnosticModal

@@ -89,3 +89,9 @@ export function dockKey(pathname: string): string | null {
   if (feed === "bookmarks") return "saved";
   return feed;
 }
+
+/** Poll contexts paint the block with the poll color (multi-color palettes). */
+export function isPollLocation(pathname: string, search = ""): boolean {
+  if (/^\/(feeds\/polls|respond|result)(\/|$)/.test(pathname)) return true;
+  return pathname === "/create" && new URLSearchParams(search).get("type") === "poll";
+}

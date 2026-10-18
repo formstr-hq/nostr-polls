@@ -9,7 +9,7 @@ import { NotificationBell } from "./NotificationBell";
 import { useDMContext } from "../../hooks/useDMContext";
 import { SearchModal } from "../Search/SearchModal";
 import { useSubNav } from "../../contexts/SubNavContext";
-import { routeInfo } from "../Shell/navConfig";
+import { isPollLocation, routeInfo } from "../Shell/navConfig";
 
 /**
  * Color Block header: a solid block of the theme color with a rounded bottom. It
@@ -22,9 +22,13 @@ const Header: React.FC = () => {
   const { unreadTotal } = useDMContext();
   const { items: subNavItems } = useSubNav();
   const [searchOpen, setSearchOpen] = useState(false);
-  const info = routeInfo(location.pathname);
-  const onFeed = location.pathname.startsWith("/feeds");
-  const showPills = onFeed && subNavItems.length > 0;
+  const info = {
+    ...routeInfo(location.pathname),
+    poll: isPollLocation(location.pathname, location.search),
+  };
+  // Pages publish pills via SubNavContext (feeds: sub-feeds; composer: Note/Poll)
+  // and clear them on unmount.
+  const showPills = subNavItems.length > 0;
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {

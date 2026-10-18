@@ -93,6 +93,7 @@ import { SettingsScreen } from "./components/Settings/SettingsScreen";
 import DraftsList from "./components/Drafts/DraftsList";
 import NavDock, { DOCK_CLEARANCE } from "./components/Shell/NavDock";
 import ExploreHub from "./components/Shell/ExploreHub";
+import { isPollLocation } from "./components/Shell/navConfig";
 
 declare global {
   interface Window {
@@ -184,7 +185,7 @@ function AppContent() {
       <Box
         className="header-safe-area"
         sx={(t) => {
-          const c = isPollRoute(location.pathname) ? t.palette.cb.poll : t.palette.cb.block;
+          const c = isPollLocation(location.pathname, location.search) ? t.palette.cb.poll : t.palette.cb.block;
           // Only the status-bar inset is painted, so the header's rounded bottom
           // corners show the page behind them.
           return {
@@ -415,10 +416,6 @@ const App: React.FC = () => {
 // Standalone pages need their own overflow-y:auto container because the global
 // layout locks html/body overflow so Virtuoso can be the sole scroller on feeds.
 // paddingBottom reserves space for the floating mobile nav dock.
-function isPollRoute(pathname: string) {
-  return /^\/(feeds\/polls|respond|result)(\/|$)/.test(pathname);
-}
-
 function ScrollPage({ children }: { children: React.ReactNode }) {
   return (
     <Box sx={{ height: "100%", overflowY: "auto", pb: { xs: `${DOCK_CLEARANCE}px`, md: 0 } }}>
