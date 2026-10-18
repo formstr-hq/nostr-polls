@@ -42,6 +42,8 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import dayjs from "dayjs";
 import { useMiningWorker } from "../../hooks/useMiningWorker";
 import PollTimer from "./PollTimer";
+import { SlabContext, slabSx, useInsideSlab } from "../Common/SlabContext";
+import PollIcon from "@mui/icons-material/PollRounded";
 import { FeedbackMenu } from "../FeedbackMenu";
 import { useNotification } from "../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
@@ -78,7 +80,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
   const isSmall = useMediaQuery(theme.breakpoints.down("sm"));
   const isMedium = useMediaQuery(theme.breakpoints.between("sm", "md"));
   const maxContentHeight = isSmall ? 400 : isMedium ? 500 : 600;
-  const primaryColor = theme.palette.primary.main;
+  const insideSlab = useInsideSlab();
 
   const [responses, setResponses] = useState<string[]>(
     userResponse?.tags.filter((t) => t[0] === "response")?.map((t) => t[1]) || []
@@ -342,7 +344,8 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     setIsDetailsOpen(false);
   };
 
-  const subtleGradient = `linear-gradient(to bottom, ${alpha(theme.palette.background.paper ?? "#fff", 0)}, ${alpha(primaryColor, 0.55)} 100%)`;
+  const fadeTo = insideSlab ? theme.palette.cb.inner : theme.palette.cb.slab;
+  const subtleGradient = `linear-gradient(to bottom, ${alpha(fadeTo, 0)}, ${fadeTo} 85%)`;
 
   const wotEventReporters = getWoTReporters(pollEvent.id);
   const wotAuthorReporters = getWoTReporters(pollEvent.pubkey);
@@ -397,9 +400,9 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
 
   return (
     <div>
-      <Card variant="elevation" className="poll-response-form" sx={{ mx: { xs: 0, sm: 1 }, my: 1 }}>
+      <Card variant="elevation" className="poll-response-form" sx={slabSx(insideSlab)}>
         <form onSubmit={handleSubmitResponse}>
-          <Card variant="outlined">
+          <Card variant="outlined" sx={{ border: 0, bgcolor: "transparent", borderRadius: 0 }}>
             <CardHeader
               avatar={
                 <Avatar
@@ -425,7 +428,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                     "&:hover .profile-name": { textDecoration: "underline" },
                   }}
                 >
-                  <Typography className="profile-name">
+                  <Typography className="profile-name" sx={{ fontWeight: 700, fontSize: 15 }}>
                     {profiles?.get(pollEvent.pubkey)?.name ||
                       profiles?.get(pollEvent.pubkey)?.username ||
                       profiles?.get(pollEvent.pubkey)?.nip05 ||
@@ -442,10 +445,30 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
               }
               subheader={calculateTimeAgo(pollEvent.created_at)}
               action={
-                <Box sx={{ display: "flex", alignItems: "center" }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                   {user && !user.follows?.includes(pollEvent.pubkey) && (
                     <Button size="small" onClick={addToContacts}>Follow</Button>
                   )}
+                  {/* Content-type tag in the poll color (multi-color palettes give polls their own). */}
+                  <Box
+                    component="span"
+                    sx={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                      height: 24,
+                      px: 1,
+                      borderRadius: "8px",
+                      bgcolor: "cb.poll",
+                      color: "cb.onPoll",
+                      fontSize: 11.5,
+                      fontWeight: 800,
+                      letterSpacing: "0.03em",
+                    }}
+                  >
+                    <PollIcon sx={{ fontSize: 14 }} />
+                    POLL
+                  </Box>
                   <IconButton
                     onClick={(e) => {
                       setIsDetailsOpen(!isDetailsOpen);
@@ -561,8 +584,14 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                   flexDirection: "column",
                 }}
               >
-                <Typography variant="body1" sx={{ mb: 1 }}>
-                  <TextWithImages content={label} tags={pollEvent.tags} />
+                <Typography
+                  variant="body1"
+                  component="div"
+                  sx={{ mb: 1, fontSize: 18, fontWeight: 700, letterSpacing: "-0.015em", lineHeight: 1.35 }}
+                >
+                  <SlabContext.Provider value={true}>
+                    <TextWithImages content={label} tags={pollEvent.tags} />
+                  </SlabContext.Provider>
                 </Typography>
 
                 <div style={{ display: "flex", flexDirection: "column", marginBottom: 8 }}>
@@ -626,7 +655,11 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                 }}
               >
                 {displaySubmit() ? (
-                  <Button type="submit" variant="contained" color="primary">
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    sx={{ bgcolor: "cb.poll", color: "cb.onPoll", "&:hover": { bgcolor: "cb.poll" } }}
+                  >
                     {userResponse || hasSubmitted ? "Update Vote" : "Submit Response"}
                   </Button>
                 ) : (
@@ -638,10 +671,10 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                   )}
                   <Button
                     onClick={() => setShowResults((v) => !v)}
-                    color="secondary"
                     variant="contained"
+                    sx={{ bgcolor: "cb.inner", color: "text.primary", "&:hover": { bgcolor: "cb.inner" } }}
                   >
-                    {showResults ? "hide results" : "results"}
+                    {showResults ? "Hide results" : "Results"}
                   </Button>
                 </div>
               </div>

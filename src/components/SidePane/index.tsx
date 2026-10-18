@@ -25,6 +25,8 @@ import { SvgIconComponent } from "@mui/icons-material";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { safeSetItem } from "../../utils/localStorage";
+import { sectionIndex } from "../Shell/navConfig";
+import { sectionColorFrom } from "../Shell/useSectionColor";
 
 // Static sub-item definitions — used for the mobile popup regardless of which
 // feed is currently mounted. Active state is read from localStorage so we can
@@ -115,7 +117,10 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [menuFeed, setMenuFeed] = useState<string | null>(null);
 
-  const currentFeed = location.pathname.split("/")[2] || "polls";
+  // Only feed routes highlight a sidebar item.
+  const currentFeed = location.pathname.startsWith("/feeds")
+    ? location.pathname.split("/")[2] || "polls"
+    : "";
 
   // Get the currently-active sub-key for any feed (from localStorage)
   const getActiveSub = (feedValue: string): string => {
@@ -162,116 +167,18 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
     setMenuFeed(null);
   };
 
-  // ── Mobile: narrow icon sidebar with icons at the bottom ─────────────────
-  if (!isDesktop) {
-    return (
-      <>
-        <Box
-          sx={{
-            width: open ? 52 : 0,
-            flexShrink: 0,
-            height: "100%",
-            borderRight: open ? `1px solid ${theme.palette.divider}` : "none",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            py: 1,
-            overflowX: "hidden",
-            overflowY: "auto",
-            transition: "width 0.2s ease",
-          }}
-        >
-          {/* Spacer pushes icons to the bottom */}
-          <Box sx={{ flex: 1 }} />
-
-          {feedOptions.map(({ value, label, Icon }) => {
-            const active = currentFeed === value;
-            return (
-              <Tooltip key={value} title={label} placement="right">
-                <IconButton
-                  onClick={(e) => handleFeedClick(e, value)}
-                  size="small"
-                  sx={{
-                    mb: 0.5,
-                    color: active ? "primary.main" : "text.secondary",
-                    bgcolor: active
-                      ? alpha(theme.palette.primary.main, 0.12)
-                      : "transparent",
-                    borderRadius: 2,
-                    "&:hover": {
-                      bgcolor: active
-                        ? alpha(theme.palette.primary.main, 0.18)
-                        : alpha(theme.palette.text.primary, 0.06),
-                    },
-                  }}
-                >
-                  <Icon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            );
-          })}
-
-          {/* Close button — pinned to bottom */}
-          <Tooltip title="Hide sidebar" placement="right">
-            <IconButton size="small" onClick={onToggle} sx={{ mt: 0.5 }}>
-              <ChevronLeftIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-
-        {/* Sub-items popup — anchored to the right of the icon */}
-        <Menu
-          anchorEl={menuAnchor}
-          open={Boolean(menuAnchor)}
-          onClose={() => { setMenuAnchor(null); setMenuFeed(null); }}
-          anchorOrigin={{ vertical: "center", horizontal: "right" }}
-          transformOrigin={{ vertical: "center", horizontal: "left" }}
-          slotProps={{ paper: { sx: { minWidth: 180 } } }}
-        >
-          {menuFeed &&
-            (MOBILE_SUB_ITEMS[menuFeed] || []).map((item) => {
-              const contextItem =
-                menuFeed === currentFeed
-                  ? subNavItems.find((s) => s.key === item.key)
-                  : undefined;
-              const isActive = contextItem
-                ? contextItem.active
-                : getActiveSub(menuFeed) === item.key;
-              const isDisabled = contextItem ? !!contextItem.disabled : false;
-
-              return (
-                <MenuItem
-                  key={item.key}
-                  selected={isActive}
-                  disabled={isDisabled}
-                  onClick={() => handleMobileSubItemClick(item.key)}
-                  sx={{
-                    fontSize: "0.875rem",
-                    "&.Mui-selected": {
-                      color: "secondary.main",
-                      fontWeight: 600,
-                      bgcolor: (t) => alpha(t.palette.secondary.main, 0.1),
-                    },
-                  }}
-                >
-                  {item.label}
-                </MenuItem>
-              );
-            })}
-        </Menu>
-      </>
-    );
-  }
-
+  // Mobile navigation is the floating NavDock (components/Shell); the sub-feed
+  // pills live in the block header.
+  if (!isDesktop) return null;
   // ── Desktop: left sidebar ─────────────────────────────────────────────────
   return (
     <>
       <Box
         sx={{
-          width: open ? 200 : 0,
+          width: open ? 212 : 0,
           flexShrink: 0,
           height: "100%",
-          borderRight: open ? `1px solid ${theme.palette.divider}` : "none",
+          borderRight: "none",
           display: "flex",
           flexDirection: "column",
           py: 1,
@@ -282,6 +189,7 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
       >
         {feedOptions.map(({ value, label, Icon }) => {
           const active = currentFeed === value;
+          const itemColor = sectionColorFrom(theme.palette.cb, sectionIndex(`/feeds/${value}`));
 
           return (
             <React.Fragment key={value}>
@@ -294,16 +202,15 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
                   px: 2,
                   py: 1.25,
                   mx: 0.75,
-                  borderRadius: 2,
+                  borderRadius: "16px",
                   cursor: "pointer",
-                  color: active ? "primary.main" : "text.secondary",
-                  bgcolor: active
-                    ? alpha(theme.palette.primary.main, 0.12)
-                    : "transparent",
-                  fontWeight: active ? 700 : 400,
+                  // Each feed wears its own palette color when active.
+                  color: active ? itemColor.on : "text.secondary",
+                  background: active ? itemColor.fill : "transparent",
+                  fontWeight: active ? 800 : 500,
                   "&:hover": {
-                    bgcolor: active
-                      ? alpha(theme.palette.primary.main, 0.18)
+                    background: active
+                      ? itemColor.fill
                       : alpha(theme.palette.text.primary, 0.06),
                   },
                   transition: "background-color 0.15s, color 0.15s",
@@ -311,7 +218,7 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
               >
                 <Icon
                   fontSize="small"
-                  sx={{ color: active ? "primary.main" : "text.secondary" }}
+                  sx={{ color: "inherit" }}
                 />
                 <Box
                   component="span"
@@ -325,8 +232,8 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
                 </Box>
               </Box>
 
-              {/* Desktop: inline sub-nav items below the active feed */}
-              {active && subNavItems.length > 0 && (
+              {/* Sub-feeds are pills in the block header now. */}
+              {false && active && subNavItems.length > 0 && (
                 <Box sx={{ mb: 0.5 }}>
                   {subNavItems.map((item) => (
                     <Box

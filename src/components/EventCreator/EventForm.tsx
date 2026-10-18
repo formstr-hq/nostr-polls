@@ -1,15 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Container, Box, Card, Tabs, Tab, Button, Badge } from "@mui/material";
-import EditNoteIcon from "@mui/icons-material/EditNote";
-import PollIcon from "@mui/icons-material/Poll";
-import DescriptionIcon from "@mui/icons-material/Description";
+import { Box, Chip } from "@mui/material";
+import DescriptionIcon from "@mui/icons-material/DescriptionRounded";
+import { useSubNav } from "../../contexts/SubNavContext";
 import NoteTemplateForm from "./NoteTemplateForm";
 import PollTemplateForm from "./PollTemplateForm";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useDrafts } from "../../contexts/drafts-context";
 
 const EventForm = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const draftId = searchParams.get("draftId");
   const initialTab = searchParams.get("type") === "poll" ? 1 : 0;
   const initialHashtag = searchParams.get("hashtag");
@@ -42,48 +41,53 @@ const EventForm = () => {
   const noteDraft = draft?.kind === "note" ? draft : undefined;
   const draftCount = drafts?.size ?? 0;
 
+  // Note / Poll live as pills in the block header (SubNavContext), like sub-feeds.
+  // The tab is mirrored to ?type= so the header can paint itself in the poll color.
+  const { setItems, clearItems } = useSubNav();
+  useEffect(() => {
+    const select = (index: number) => {
+      setTabIndex(index);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (index === 1) next.set("type", "poll");
+          else next.delete("type");
+          return next;
+        },
+        { replace: true }
+      );
+    };
+    setItems([
+      { key: "note", label: "Note", active: tabIndex === 0, onClick: () => select(0) },
+      { key: "poll", label: "Poll", active: tabIndex === 1, onClick: () => select(1) },
+    ]);
+  }, [tabIndex, setItems, setSearchParams]);
+  useEffect(() => () => clearItems(), [clearItems]);
+
   return (
-    <Container maxWidth="md" sx={{ py: 3 }}>
-      <Card elevation={2} sx={{ p: 3 }}>
-        <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
-          <Button
-            size="small"
-            color="inherit"
-            startIcon={
-              <Badge badgeContent={draftCount} color="primary" invisible={draftCount === 0}>
-                <DescriptionIcon fontSize="small" />
-              </Badge>
-            }
-            onClick={() => navigate("/drafts")}
-          >
-            Drafts
-          </Button>
-        </Box>
-        <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}>
-          <Tabs
-            value={tabIndex}
-            onChange={(_, newValue) => setTabIndex(newValue)}
-            variant="fullWidth"
-          >
-            <Tab icon={<EditNoteIcon />} label="Note" iconPosition="start" />
-            <Tab icon={<PollIcon />} label="Poll" iconPosition="start" />
-          </Tabs>
-        </Box>
-        {tabIndex === 0 ? (
-          <NoteTemplateForm
-            eventContent={eventContent}
-            setEventContent={setEventContent}
-            initialDraft={noteDraft}
-          />
-        ) : (
-          <PollTemplateForm
-            eventContent={eventContent}
-            setEventContent={setEventContent}
-            initialDraft={pollDraft}
-          />
-        )}
-      </Card>
-    </Container>
+    <Box sx={{ maxWidth: 760, mx: "auto", px: { xs: 1.25, sm: 2 }, pt: 1.5, pb: 2 }}>
+      <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
+        <Chip
+          icon={<DescriptionIcon />}
+          label={draftCount > 0 ? `Drafts · ${draftCount}` : "Drafts"}
+          onClick={() => navigate("/drafts")}
+          sx={{ bgcolor: "cb.slab", fontWeight: 700 }}
+        />
+      </Box>
+      {tabIndex === 0 ? (
+        <NoteTemplateForm
+          eventContent={eventContent}
+          setEventContent={setEventContent}
+          initialDraft={noteDraft}
+        />
+      ) : (
+        <PollTemplateForm
+          eventContent={eventContent}
+          setEventContent={setEventContent}
+          initialDraft={pollDraft}
+        />
+      )}
+    </Box>
   );
 };
 

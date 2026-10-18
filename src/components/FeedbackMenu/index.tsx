@@ -91,12 +91,20 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
   return (
     <Card
       variant={isNested ? "outlined" : "elevation"}
-      elevation={isNested ? 0 : 1}
+      elevation={0}
+      sx={{
+        // Sits inside the item's slab: flat, transparent, muted icons.
+        bgcolor: "transparent",
+        border: 0,
+        borderRadius: 0,
+        color: "text.secondary",
+        "& .MuiIconButton-root": { color: "inherit" },
+      }}
     >
       <CardContent
         sx={{
           "&:last-child": { pb: isNested ? 1 : 1.5 },
-          pt: isNested ? 1 : 1.5,
+          pt: isNested ? 1 : 0.5,
           px: isNested ? 1.5 : 2,
         }}
       >

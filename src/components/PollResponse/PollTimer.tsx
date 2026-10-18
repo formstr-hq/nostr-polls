@@ -35,7 +35,7 @@ const PollTimer: React.FC<PollTimerProps> = ({ pollExpiration }) => {
 
   const renderExpirationMessage = () => {
     if (isPollConcluded) {
-      return `Closed at: ${dayjs.unix(Number(pollExpiration)).format("YYYY-MM-DD HH:mm")}`;
+      return `Closed · ${dayjs.unix(Number(pollExpiration)).format("MMM D, HH:mm")}`;
     }
 
     if (timeRemaining !== null) {
@@ -47,17 +47,22 @@ const PollTimer: React.FC<PollTimerProps> = ({ pollExpiration }) => {
           (timeRemaining % (1000 * 60 * 60)) / (1000 * 60)
         );
         const secondsLeft = Math.floor((timeRemaining % (1000 * 60)) / 1000);
-        return `Expires in: ${hoursLeft} hours, ${minutesLeft} minutes, and ${secondsLeft} seconds`;
+        if (hoursLeft >= 1) return `${hoursLeft}h ${minutesLeft}m left`;
+        return `${minutesLeft}m ${secondsLeft}s left`;
       } else {
         const daysLeft = Math.floor(timeRemaining / (1000 * 60 * 60 * 24));
-        return `${daysLeft} days left to end`;
+        return `${daysLeft} days left`;
       }
     }
 
     return null;
   };
 
-  return <Typography variant="caption" color="text.secondary">{renderExpirationMessage()}</Typography>;
+  return (
+    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+      {renderExpirationMessage()}
+    </Typography>
+  );
 };
 
 export default PollTimer;

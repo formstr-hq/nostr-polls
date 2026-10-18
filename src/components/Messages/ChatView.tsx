@@ -1,13 +1,12 @@
 import { copyToClipboard } from "../../utils/common";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Typography,
   Avatar,
-  IconButton,
   Modal,
 } from "@mui/material";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import { useHeaderTitle } from "../../contexts/HeaderTitleContext";
 import { useNavigate, useParams } from "react-router-dom";
 import { nip19, Event as NostrEvent } from "nostr-tools";
 import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
@@ -177,6 +176,33 @@ const ChatView: React.FC = () => {
     [recipientPubkey, sendReaction],
   );
 
+  // The contact is what's in focus, so it goes in the block header.
+  const headerProfile = recipientPubkey ? profiles?.get(recipientPubkey) : undefined;
+  const headerName = recipientPubkey
+    ? headerProfile?.display_name ||
+      headerProfile?.name ||
+      nip19.npubEncode(recipientPubkey).slice(0, 12) + "..."
+    : "";
+  const headerPicture = headerProfile?.picture || DEFAULT_IMAGE_URL;
+  const headerTitle = useMemo(
+    () =>
+      recipientPubkey ? (
+        <Box
+          role="button"
+          tabIndex={0}
+          onClick={() => navigate(`/profile/${nip19.npubEncode(recipientPubkey)}`)}
+          sx={{ display: "flex", alignItems: "center", gap: 1.25, cursor: "pointer", minWidth: 0 }}
+        >
+          <Avatar src={headerPicture} sx={{ width: 36, height: 36, boxShadow: "0 0 0 2px currentColor" }} />
+          <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {headerName}
+          </Box>
+        </Box>
+      ) : null,
+    [recipientPubkey, headerName, headerPicture, navigate]
+  );
+  useHeaderTitle(headerTitle);
+
   if (!recipientPubkey) {
     return (
       <Box maxWidth={800} mx="auto" px={2} py={4}>
@@ -190,7 +216,6 @@ const ChatView: React.FC = () => {
     recipientProfile?.display_name ||
     recipientProfile?.name ||
     nip19.npubEncode(recipientPubkey).slice(0, 12) + "...";
-  const recipientPicture = recipientProfile?.picture || DEFAULT_IMAGE_URL;
 
   const messages = conversation?.messages || [];
 
@@ -203,36 +228,6 @@ const ChatView: React.FC = () => {
       height="100%"
       minHeight={0}
     >
-      {/* Top bar */}
-      <Box
-        display="flex"
-        alignItems="center"
-        gap={1}
-        px={2}
-        py={1}
-        sx={{ borderBottom: 1, borderColor: "divider" }}
-      >
-        <IconButton onClick={() => navigate("/messages")} size="small">
-          <ArrowBackIcon />
-        </IconButton>
-        <Avatar
-          src={recipientPicture}
-          sx={{ width: 36, height: 36, cursor: "pointer" }}
-          onClick={() =>
-            navigate(`/profile/${nip19.npubEncode(recipientPubkey!)}`)
-          }
-        />
-        <Typography
-          variant="subtitle1"
-          sx={{ cursor: "pointer" }}
-          onClick={() =>
-            navigate(`/profile/${nip19.npubEncode(recipientPubkey!)}`)
-          }
-        >
-          {recipientName}
-        </Typography>
-      </Box>
-
       {/* Messages area */}
       <Box
         flex={1}

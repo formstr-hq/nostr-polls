@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Badge, SpeedDial, SpeedDialAction, SpeedDialIcon } from "@mui/material";
+import { Badge, Box, SpeedDial, SpeedDialAction, SpeedDialIcon, useMediaQuery, useTheme } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -10,6 +10,9 @@ import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useNotification } from "../../contexts/notification-context";
 import { DraggableCorner } from "../Common/DraggableCorner";
 import { useDrafts } from "../../contexts/drafts-context";
+import { DOCK_BOTTOM, DOCK_FAB_SIZE } from "../Shell/NavDock";
+import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
+import { useSectionColor } from "../Shell/useSectionColor";
 
 interface CreateFABProps {
   extraActions?: {
@@ -28,6 +31,10 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   const { showNotification } = useNotification();
   const { drafts } = useDrafts();
   const draftCount = drafts?.size ?? 0;
+  const theme = useTheme();
+  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
+  const section = useSectionColor();
+  const immersiveHidden = useImmersiveHidden();
 
   const handleCreate = () => {
     setOpen(false);
@@ -70,31 +77,23 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
 
 
   const actionSx = {
-    border: (theme: any) => `2px solid ${theme.palette.secondary.main}`,
+    bgcolor: "cb.slab",
+    color: "text.primary",
+    border: "none",
   };
 
   const hasNewItems = newItemCount > 0;
 
-  return (
-    <DraggableCorner
-      storageKey="pollerama:createFabCorner"
-      defaultCorner="br"
-      offset={{ x: 24, y: 24 }}
-      zIndex={1000}
-      disableIdle={hasNewItems}
-      handle=".MuiSpeedDial-fab"
-    >
-      {(corner) => (
+  const renderDial = (corner: string) => (
         <SpeedDial
           ariaLabel="Feed actions"
           direction={corner.startsWith("t") ? "down" : "up"}
-          // The app's primary floating action carries the secondary accent — the
-          // most visible place the theme's secondary color shows up.
-          FabProps={{ color: "secondary" }}
+          // Create is the block color everywhere (Color Block).
+          FabProps={{ color: "primary" }}
           sx={{
             "& .MuiSpeedDial-fab": {
               position: "relative",
-              border: (theme: any) => `2px solid ${theme.palette.secondary.main}`,
+              borderRadius: "22px",
             },
             // Notification dot anchored to the FAB itself (not the dial root,
             // whose actions area would push it off the button).
@@ -188,7 +187,48 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
             sx={actionSx}
           />
         </SpeedDial>
-      )}
+);
+
+  // Mobile: the dial sits in the nav dock's Create slot (bottom-right), styled as
+  // a rounded square in the block color.
+  if (!isDesktop) {
+    return (
+      <Box
+        sx={{
+          position: "fixed",
+          right: 14,
+          bottom: `calc(${DOCK_BOTTOM + 1}px + env(safe-area-inset-bottom))`,
+          zIndex: 1150,
+          // Leaves with the nav dock during immersive scrolling.
+          transform: immersiveHidden && !open ? "translateY(calc(100% + 40px))" : "none",
+          opacity: immersiveHidden && !open ? 0 : 1,
+          transition: "transform .28s cubic-bezier(.2,0,0,1), opacity .2s ease",
+          "& .MuiSpeedDial-fab": {
+            width: DOCK_FAB_SIZE,
+            height: DOCK_FAB_SIZE,
+            borderRadius: "22px",
+            border: "none !important",
+            background: section.fill,
+            color: section.on,
+            "&:hover": { background: section.fill },
+          },
+        }}
+      >
+        {renderDial("br")}
+      </Box>
+    );
+  }
+
+  return (
+    <DraggableCorner
+      storageKey="pollerama:createFabCorner"
+      defaultCorner="br"
+      offset={{ x: 24, y: 24 }}
+      zIndex={1000}
+      disableIdle={hasNewItems}
+      handle=".MuiSpeedDial-fab"
+    >
+      {(corner) => renderDial(corner)}
     </DraggableCorner>
   );
 };

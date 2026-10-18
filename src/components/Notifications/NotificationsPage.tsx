@@ -1,3 +1,4 @@
+import { slabListSx } from "../Common/SlabContext";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Box,
@@ -9,13 +10,11 @@ import {
   Avatar,
   AvatarGroup,
   Divider,
-  IconButton,
   Dialog,
   DialogTitle,
   DialogContent,
   Skeleton,
 } from "@mui/material";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { useNavigate } from "react-router-dom";
 import { Event, nip19 } from "nostr-tools";
 import { useNostrNotifications } from "../../contexts/nostr-notification-context";
@@ -313,30 +312,10 @@ const NotificationsPage: React.FC = () => {
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", overflowX: "hidden" }}>
-      {/* Header bar */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          px: 1,
-          py: 1,
-          borderBottom: "1px solid",
-          borderColor: "divider",
-          flexShrink: 0,
-        }}
-      >
-        <IconButton onClick={() => navigate(-1)} edge="start">
-          <ArrowBackIcon />
-        </IconButton>
-        <Typography variant="h6" sx={{ ml: 1 }}>
-          Notifications
-        </Typography>
-      </Box>
-
       {/* List */}
       <Box sx={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
         {rows.length === 0 && isLoading ? (
-          <List disablePadding>
+          <List disablePadding sx={slabListSx}>
             {Array.from({ length: 6 }).map((_, i) => (
               <React.Fragment key={i}>
                 <ListItem alignItems="flex-start">
@@ -364,7 +343,7 @@ const NotificationsPage: React.FC = () => {
             </Typography>
           </Box>
         ) : (
-          <List disablePadding>
+          <List disablePadding sx={slabListSx}>
             {rows.map((row) => {
               if (row.kind === "group") {
                 const ts = dayjs.unix(row.ts).fromNow();

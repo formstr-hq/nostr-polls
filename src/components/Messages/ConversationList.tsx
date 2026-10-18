@@ -1,3 +1,4 @@
+import { slabListSx } from "../Common/SlabContext";
 import React from "react";
 import {
   Box,
@@ -73,14 +74,9 @@ const ConversationList: React.FC = () => {
   }
 
   return (
-    <Box maxWidth={800} mx="auto" px={2} py={2}>
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={2}
-      >
-        <Typography variant="h5">Messages</Typography>
+    <Box maxWidth={800} mx="auto" px={{ xs: 0, sm: 2 }} py={1.25}>
+      {/* The block header shows the title; actions sit on the page. */}
+      <Box display="flex" justifyContent="flex-end" alignItems="center" px={1.25}>
         <Box display="flex" gap={1}>
           {unreadTotal > 0 && (
             <Button
@@ -116,7 +112,7 @@ const ConversationList: React.FC = () => {
           </Button>
         </Box>
       ) : (
-        <List disablePadding>
+        <List disablePadding sx={slabListSx}>
           {sorted.map((conv) => {
             const otherPubkey = getOtherParticipant(conv.participants);
             if (!otherPubkey) return null;
@@ -135,8 +131,8 @@ const ConversationList: React.FC = () => {
                 }
                 sx={{
                   cursor: "pointer",
-                  borderRadius: 2,
-                  mb: 0.5,
+                  py: 1.25,
+                  "& + &": { borderTop: 1, borderColor: "divider" },
                   "&:hover": {
                     backgroundColor: "action.hover",
                   },
@@ -145,15 +141,15 @@ const ConversationList: React.FC = () => {
                 <ListItemAvatar>
                   <Badge
                     badgeContent={conv.unreadCount}
-                    color="primary"
+                    color="secondary"
                     invisible={conv.unreadCount === 0}
                   >
-                    <Avatar src={getProfilePicture(otherPubkey)} />
+                    <Avatar src={getProfilePicture(otherPubkey)} sx={{ width: 46, height: 46 }} />
                   </Badge>
                 </ListItemAvatar>
                 <ListItemText
                   primary={
-                    <Typography variant="subtitle2">
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: 15 }}>
                       {getProfileName(otherPubkey)}
                     </Typography>
                   }

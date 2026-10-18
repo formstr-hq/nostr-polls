@@ -38,7 +38,7 @@ const DraftCard: React.FC<{
 }> = ({ draft, onEdit, onDelete }) => {
   const meta = kindMeta[draft.kind];
   return (
-    <Card variant="outlined">
+    <Card>
       <CardContent>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
           <Chip size="small" icon={meta.icon as any} label={meta.label} />
@@ -104,17 +104,16 @@ const DraftsList: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ py: 3 }}>
-      <Typography variant="h5">Drafts</Typography>
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
-        On device drafts
+    <Container maxWidth="md" sx={{ py: 1.5, px: { xs: 1.25, sm: 2 } }}>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5, px: 0.5 }}>
+        Drafts are stored on this device only.
       </Typography>
       {items.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
           No drafts yet — save one while composing a poll, note, or comment.
         </Typography>
       ) : (
-        <Stack spacing={2}>
+        <Stack spacing={1.25}>
           {items.map((draft) => (
             <DraftCard
               key={draft.id}

@@ -25,6 +25,13 @@ interface MentionTextAreaProps {
   onFilePaste?: (file: File, cursorPos: number) => void;
   /** Exposes the underlying textarea so parents can insert text at the caret. */
   inputRef?: React.MutableRefObject<HTMLTextAreaElement | null>;
+  /**
+   * Borderless, label-less editor (Color Block composer): the surrounding slab
+   * is the field. `fontSize` / `fontWeight` style the typed text.
+   */
+  bare?: boolean;
+  fontSize?: number;
+  fontWeight?: number;
 }
 
 interface ProfileMatch {
@@ -44,6 +51,9 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
   maxRows = 8,
   onFilePaste,
   inputRef: externalInputRef,
+  bare,
+  fontSize,
+  fontWeight,
 }) => {
   const { profiles } = useAppContext();
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -192,7 +202,17 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
     <Box ref={anchorRef}>
       <TextField
         inputRef={setInputRef}
-        label={label}
+        label={bare ? undefined : label}
+        variant={bare ? "standard" : "outlined"}
+        slotProps={bare ? { input: { disableUnderline: true, "aria-label": label } as any } : undefined}
+        sx={
+          bare
+            ? {
+                "& .MuiInputBase-root": { p: 0, fontSize: fontSize ?? 18, fontWeight: fontWeight ?? 400, lineHeight: 1.45 },
+                "& textarea::placeholder": { opacity: 0.45 },
+              }
+            : undefined
+        }
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
@@ -210,7 +230,7 @@ const MentionTextArea: React.FC<MentionTextAreaProps> = ({
         placement="bottom-start"
         style={{ zIndex: 1301 }}
       >
-        <Paper elevation={4} sx={{ maxHeight: 300, overflow: "auto", width: anchorRef.current?.clientWidth }}>
+        <Paper elevation={6} sx={{ maxHeight: 300, overflow: "auto", width: anchorRef.current?.clientWidth, borderRadius: "20px", p: 0.5 }}>
           <MenuList dense>
             {matches.map((profile, index) => (
               <MenuItem

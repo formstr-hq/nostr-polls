@@ -675,7 +675,8 @@ export const RichText: React.FC<{ text: string; tags?: string[][] }> = ({
   const emojiMap = useMemo(() => emojiMapFromTags(tags), [tags]);
   if (!text) return null;
   const ctx: InlineTokenContext = {
-    color: theme.palette.primary.main,
+    // Links, mentions and hashtags use the highlight (secondary) color.
+    color: theme.palette.secondary.main,
     profiles,
     fetchUserProfileThrottled,
     emojiMap,
@@ -762,7 +763,7 @@ export const TextWithImages: React.FC<TextWithImagesProps> = ({
   const renderContent = (text: string) => {
     if (!text) return null;
     const ctx: InlineTokenContext = {
-      color: theme.palette.primary.main,
+      color: theme.palette.secondary.main,
       profiles,
       fetchUserProfileThrottled,
       emojiMap,

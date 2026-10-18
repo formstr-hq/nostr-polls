@@ -1,3 +1,4 @@
+import { useSectionColor } from "../Shell/useSectionColor";
 import React, { useRef, useState } from "react";
 import { Box, Typography, Paper, Chip, CircularProgress, Tooltip } from "@mui/material";
 import ReplyIcon from "@mui/icons-material/Reply";
@@ -91,21 +92,21 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onRetry,
 }) => {
   const theme = useTheme();
-  const isDark = theme.palette.mode === "dark";
   const [diagOpen, setDiagOpen] = useState(false);
 
-  // Sent-bubble colour tokens — warm amber palette, mode-aware.
-  // Dark: deep amber bg so it doesn't sear against the #4d4d4d page background.
-  // Light: pale gold bg, stays consistent with the goldenrod theme.
+  // Sent bubbles are the block color (Color Block); text flips for contrast.
+  // My bubbles wear the Messages section color (finish included).
+  const section = useSectionColor();
+  const onBlockIsDark = section.on !== "#ffffff";
   const sent = {
-    bg:          isDark ? "#5C4A00"               : "#FEF3C7",
-    text:        isDark ? "rgba(255,255,255,0.88)" : "rgba(0,0,0,0.87)",
-    link:        theme.palette.primary.main,
-    subtext:     isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)",
-    quoteBorder: isDark ? "rgba(250,209,63,0.5)"  : "rgba(218,165,32,0.6)",
-    quoteBg:     isDark ? "rgba(0,0,0,0.25)"      : "rgba(0,0,0,0.05)",
-    quoteName:   theme.palette.primary.main,
-    quoteText:   isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.6)",
+    bg:          section.fill,
+    text:        section.on,
+    link:        section.on,
+    subtext:     onBlockIsDark ? "rgba(0,0,0,0.55)" : "rgba(255,255,255,0.7)",
+    quoteBorder: onBlockIsDark ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.55)",
+    quoteBg:     onBlockIsDark ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.14)",
+    quoteName:   section.on,
+    quoteText:   onBlockIsDark ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.8)",
   };
 
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -230,10 +231,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           }}
           sx={{
             px: 2,
-            py: 1,
-            borderRadius: 2,
+            py: 1.1,
+            borderRadius: "22px",
+            [isMine ? "borderBottomRightRadius" : "borderBottomLeftRadius"]: "6px",
             overflow: "hidden",
-            backgroundColor: isMine ? sent.bg : "action.hover",
+            background: isMine ? sent.bg : undefined,
+            bgcolor: isMine ? undefined : "cb.slab",
             cursor: "default",
             userSelect: "none",
             WebkitUserSelect: "none",

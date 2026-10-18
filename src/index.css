@@ -24,7 +24,6 @@ code {
 
 .header-safe-area {
   padding-top: env(safe-area-inset-top); /* iOS notch / status bar */
-  background-color: var(--ion-color-primary); /* or your header bg */
   z-index: 10;
 }
 

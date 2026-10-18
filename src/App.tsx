@@ -38,6 +38,9 @@ import { ModerationProvider } from "./contexts/moderation-context";
 import { TranslationBatchProvider } from "./contexts/translation-batch-context";
 import { FeedScrollProvider } from "./contexts/FeedScrollContext";
 import { SubNavProvider } from "./contexts/SubNavContext";
+import { HeaderTitleProvider } from "./contexts/HeaderTitleContext";
+import { ImmersiveScrollProvider } from "./contexts/ImmersiveScrollContext";
+import CollapsibleHeader from "./components/Shell/CollapsibleHeader";
 import { AppearanceProvider, useAppearance } from "./contexts/AppearanceContext";
 import NavSidebar from "./components/SidePane";
 import { DraggableCorner } from "./components/Common/DraggableCorner";
@@ -47,7 +50,7 @@ import { useAndroidNotifications } from "./hooks/useAndroidNotifications";
 import { UpdateBanner } from "./components/UpdateBanner";
 
 import CssBaseline from "@mui/material/CssBaseline";
-import { ThemeProvider, Box, Fab } from "@mui/material";
+import { ThemeProvider, Box, Fab, useMediaQuery, useTheme } from "@mui/material";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import { buildTheme } from "./styles/theme";
 import { getFontPreset } from "./styles/themes";
@@ -91,6 +94,9 @@ import NewConversation from "./components/Messages/NewConversation";
 import NotificationsPage from "./components/Notifications/NotificationsPage";
 import { SettingsScreen } from "./components/Settings/SettingsScreen";
 import DraftsList from "./components/Drafts/DraftsList";
+import NavDock, { useDockClearance } from "./components/Shell/NavDock";
+import ExploreHub from "./components/Shell/ExploreHub";
+import { useSectionColor } from "./components/Shell/useSectionColor";
 
 declare global {
   interface Window {
@@ -105,18 +111,10 @@ function AndroidNotifications() {
 
 // Reads appearance context and provides a dynamically built MUI theme
 function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
-  const { fontPresetId, colorPreset } = useAppearance();
+  const { fontPresetId, colorPreset, finish } = useAppearance();
   const fontPreset = getFontPreset(fontPresetId);
   const theme = useMemo(
-    () => buildTheme(
-      fontPreset.fontFamily,
-      colorPreset.lightPrimary,
-      colorPreset.darkPrimary,
-      colorPreset.lightBg,
-      colorPreset.darkBg,
-      colorPreset.lightSecondary,
-      colorPreset.darkSecondary,
-    ),
+    () => buildTheme(fontPreset.fontFamily, colorPreset, finish),
     // Rebuild when the font, the selected preset, or (for the custom theme) the
     // chosen colors change — hence keying on the resolved color values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -127,6 +125,7 @@ function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
       colorPreset.darkPrimary,
       colorPreset.lightSecondary,
       colorPreset.darkSecondary,
+      finish,
     ],
   );
   return (
@@ -166,6 +165,9 @@ function AppContent() {
   const { user } = useUserContext();
   const { resetStore } = useAppContext();
   const location = useLocation();
+  const muiTheme = useTheme();
+  const isDesktop = useMediaQuery(muiTheme.breakpoints.up("md"));
+  const section = useSectionColor();
   const prevPubkeyRef = React.useRef<string | null | undefined>(undefined);
 
   React.useEffect(() => {
@@ -183,16 +185,27 @@ function AppContent() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      <div className="header-safe-area">
-        <Header />
-      </div>
+      {/* The status-bar inset is painted with the block color so the header
+          block runs edge to edge under the system bar. */}
+      <Box
+        className="header-safe-area"
+        sx={{
+          // Only the status-bar inset is painted (in the section's color), so the
+          // header's rounded bottom corners show the page behind them.
+          background: `linear-gradient(${section.color}, ${section.color}) top / 100% calc(env(safe-area-inset-top) + 1px) no-repeat`,
+        }}
+      >
+        <CollapsibleHeader>
+          <Header />
+        </CollapsibleHeader>
+      </Box>
       <UpdateBanner />
 
       {/* Sidebar + routes side by side — both heights are constant */}
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex" }}>
         <NavSidebar open={sidebarOpen} onToggle={toggleSidebar} />
         <Box key={user?.pubkey ?? 'anon'} sx={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-          {!sidebarOpen && (
+          {isDesktop && !sidebarOpen && (
             <DraggableCorner
               storageKey="pollerama:sidebarFabCorner"
               defaultCorner="bl"
@@ -255,6 +268,7 @@ function AppContent() {
             <Route path="music" element={<MusicFeed />} />
             <Route path="music/shared/:naddr" element={<SharedPlaylistDetail />} />
             <Route path="music/:playlistId" element={<PlaylistDetail />} />
+            <Route path="explore" element={<ExploreHub />} />
             <Route path="games" element={<GamesFeed />} />
             <Route path="games/2048" element={<Twenty48Board />} />
             <Route path="games/tetris" element={<TetrisBoard />} />
@@ -283,6 +297,7 @@ function AppContent() {
       {/* Docked at the bottom of the app column: it shrinks the content above
           rather than overlaying it, so it never hides feed items. */}
       <MiniPlayer />
+      <NavDock />
     </div>
   );
 }
@@ -372,7 +387,11 @@ const App: React.FC = () => {
                               <AndroidNotifications />
                               <FeedScrollProvider>
                                 <SubNavProvider>
-                                  <AppContent />
+                                  <HeaderTitleProvider>
+                                    <ImmersiveScrollProvider>
+                                      <AppContent />
+                                    </ImmersiveScrollProvider>
+                                  </HeaderTitleProvider>
                                 </SubNavProvider>
                               </FeedScrollProvider>
                               <FloatingVideoPlayer />
@@ -404,10 +423,11 @@ const App: React.FC = () => {
 
 // Standalone pages need their own overflow-y:auto container because the global
 // layout locks html/body overflow so Virtuoso can be the sole scroller on feeds.
-// paddingBottom reserves space for the mobile bottom nav bar.
+// paddingBottom reserves space for the floating mobile nav dock.
 function ScrollPage({ children }: { children: React.ReactNode }) {
+  const dockClearance = useDockClearance();
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", pb: { xs: "56px", md: 0 } }}>
+    <Box sx={{ height: "100%", overflowY: "auto", ...dockClearance }}>
       {children}
     </Box>
   );
@@ -416,9 +436,10 @@ function ScrollPage({ children }: { children: React.ReactNode }) {
 // Wrapper to pass eventId to PrepareNote.
 function PrepareNoteWrapper() {
   const { eventId } = useParams();
+  const dockClearance = useDockClearance();
   if (!eventId) return null;
   return (
-    <Box sx={{ height: "100%", overflowY: "auto" }}>
+    <Box sx={{ height: "100%", overflowY: "auto", ...dockClearance }}>
       <PrepareNote neventId={eventId} />
     </Box>
   );
@@ -428,9 +449,10 @@ function PrepareNoteWrapper() {
 // it never leaves the browser.
 function PrivateNoteWrapper() {
   const { nevent } = useParams();
+  const dockClearance = useDockClearance();
   if (!nevent) return null;
   return (
-    <Box sx={{ height: "100%", overflowY: "auto" }}>
+    <Box sx={{ height: "100%", overflowY: "auto", ...dockClearance }}>
       <PrivateNote neventId={nevent} />
     </Box>
   );
