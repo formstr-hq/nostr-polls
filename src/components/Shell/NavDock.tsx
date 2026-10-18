@@ -9,6 +9,7 @@ import BookmarkIcon from "@mui/icons-material/BookmarkRounded";
 import AddIcon from "@mui/icons-material/AddRounded";
 import { useLocation, useNavigate } from "react-router-dom";
 import { dockKey, routeInfo } from "./navConfig";
+import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
 
 const DESTINATIONS = [
   { key: "home", label: "Home", Icon: HomeIcon, to: "/feeds/home" },
@@ -20,6 +21,18 @@ const DESTINATIONS = [
 
 /** Height reserved under scrolling content so the floating dock never covers it. */
 export const DOCK_CLEARANCE = 96;
+
+/**
+ * Bottom padding that keeps content clear of the dock. Collapses while the dock
+ * is hidden for immersive scrolling so no empty band is left behind.
+ */
+export function useDockClearance() {
+  const hidden = useImmersiveHidden();
+  return {
+    pb: { xs: hidden ? "0px" : `${DOCK_CLEARANCE}px`, md: 0 },
+    transition: "padding-bottom .28s cubic-bezier(.2,0,0,1)",
+  };
+}
 
 /** Size/offset shared with CreateFAB, which occupies the dock's right-hand slot on feeds. */
 export const DOCK_BOTTOM = 18;
@@ -35,6 +48,7 @@ const NavDock: React.FC = () => {
   const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
   const location = useLocation();
   const navigate = useNavigate();
+  const hidden = useImmersiveHidden();
   if (isDesktop) return null;
   const info = routeInfo(location.pathname);
   if (info.hideDock) return null;
@@ -55,6 +69,8 @@ const NavDock: React.FC = () => {
         background: `linear-gradient(${alpha(t.palette.cb.page, 0)}, ${alpha(t.palette.cb.page, 0.92)} 55%)`,
         pointerEvents: "none",
         zIndex: 1099,
+        opacity: hidden ? 0 : 1,
+        transition: "opacity .25s ease",
       })}
     />
     <Box
@@ -75,6 +91,11 @@ const NavDock: React.FC = () => {
         pl: 1,
         zIndex: 1100,
         pointerEvents: "none",
+        // Immersive scrolling: slide away while reading, back on scroll up.
+        transform: hidden ? "translateY(calc(100% + 40px))" : "none",
+        opacity: hidden ? 0 : 1,
+        transition: "transform .28s cubic-bezier(.2,0,0,1), opacity .2s ease",
+        "@media (prefers-reduced-motion: reduce)": { transition: "none" },
       }}
     >
       <Box

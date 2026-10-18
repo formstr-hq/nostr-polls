@@ -11,6 +11,7 @@ import { useNotification } from "../../contexts/notification-context";
 import { DraggableCorner } from "../Common/DraggableCorner";
 import { useDrafts } from "../../contexts/drafts-context";
 import { DOCK_BOTTOM, DOCK_FAB_SIZE } from "../Shell/NavDock";
+import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
 
 interface CreateFABProps {
   extraActions?: {
@@ -32,6 +33,7 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
   const onPolls = location.pathname.startsWith("/feeds/polls");
+  const immersiveHidden = useImmersiveHidden();
 
   const handleCreate = () => {
     setOpen(false);
@@ -196,6 +198,10 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
           right: 14,
           bottom: `calc(${DOCK_BOTTOM + 1}px + env(safe-area-inset-bottom))`,
           zIndex: 1150,
+          // Leaves with the nav dock during immersive scrolling.
+          transform: immersiveHidden && !open ? "translateY(calc(100% + 40px))" : "none",
+          opacity: immersiveHidden && !open ? 0 : 1,
+          transition: "transform .28s cubic-bezier(.2,0,0,1), opacity .2s ease",
           "& .MuiSpeedDial-fab": {
             width: DOCK_FAB_SIZE,
             height: DOCK_FAB_SIZE,

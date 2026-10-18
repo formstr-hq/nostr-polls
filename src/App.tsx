@@ -39,6 +39,8 @@ import { TranslationBatchProvider } from "./contexts/translation-batch-context";
 import { FeedScrollProvider } from "./contexts/FeedScrollContext";
 import { SubNavProvider } from "./contexts/SubNavContext";
 import { HeaderTitleProvider } from "./contexts/HeaderTitleContext";
+import { ImmersiveScrollProvider } from "./contexts/ImmersiveScrollContext";
+import CollapsibleHeader from "./components/Shell/CollapsibleHeader";
 import { AppearanceProvider, useAppearance } from "./contexts/AppearanceContext";
 import NavSidebar from "./components/SidePane";
 import { DraggableCorner } from "./components/Common/DraggableCorner";
@@ -92,7 +94,7 @@ import NewConversation from "./components/Messages/NewConversation";
 import NotificationsPage from "./components/Notifications/NotificationsPage";
 import { SettingsScreen } from "./components/Settings/SettingsScreen";
 import DraftsList from "./components/Drafts/DraftsList";
-import NavDock, { DOCK_CLEARANCE } from "./components/Shell/NavDock";
+import NavDock, { useDockClearance } from "./components/Shell/NavDock";
 import ExploreHub from "./components/Shell/ExploreHub";
 import { isPollLocation } from "./components/Shell/navConfig";
 
@@ -194,7 +196,9 @@ function AppContent() {
           };
         }}
       >
-        <Header />
+        <CollapsibleHeader>
+          <Header />
+        </CollapsibleHeader>
       </Box>
       <UpdateBanner />
 
@@ -385,7 +389,9 @@ const App: React.FC = () => {
                               <FeedScrollProvider>
                                 <SubNavProvider>
                                   <HeaderTitleProvider>
-                                    <AppContent />
+                                    <ImmersiveScrollProvider>
+                                      <AppContent />
+                                    </ImmersiveScrollProvider>
                                   </HeaderTitleProvider>
                                 </SubNavProvider>
                               </FeedScrollProvider>
@@ -420,8 +426,9 @@ const App: React.FC = () => {
 // layout locks html/body overflow so Virtuoso can be the sole scroller on feeds.
 // paddingBottom reserves space for the floating mobile nav dock.
 function ScrollPage({ children }: { children: React.ReactNode }) {
+  const dockClearance = useDockClearance();
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", pb: { xs: `${DOCK_CLEARANCE}px`, md: 0 } }}>
+    <Box sx={{ height: "100%", overflowY: "auto", ...dockClearance }}>
       {children}
     </Box>
   );
@@ -430,9 +437,10 @@ function ScrollPage({ children }: { children: React.ReactNode }) {
 // Wrapper to pass eventId to PrepareNote.
 function PrepareNoteWrapper() {
   const { eventId } = useParams();
+  const dockClearance = useDockClearance();
   if (!eventId) return null;
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", pb: { xs: `${DOCK_CLEARANCE}px`, md: 0 } }}>
+    <Box sx={{ height: "100%", overflowY: "auto", ...dockClearance }}>
       <PrepareNote neventId={eventId} />
     </Box>
   );
@@ -442,9 +450,10 @@ function PrepareNoteWrapper() {
 // it never leaves the browser.
 function PrivateNoteWrapper() {
   const { nevent } = useParams();
+  const dockClearance = useDockClearance();
   if (!nevent) return null;
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", pb: { xs: `${DOCK_CLEARANCE}px`, md: 0 } }}>
+    <Box sx={{ height: "100%", overflowY: "auto", ...dockClearance }}>
       <PrivateNote neventId={nevent} />
     </Box>
   );

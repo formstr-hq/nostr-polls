@@ -3,17 +3,18 @@ import { Box } from "@mui/material";
 import { Outlet } from "react-router-dom";
 import CreateFAB from "./CreateFAB";
 import { FeedActionsProvider } from "../../contexts/FeedActionsContext";
-import { DOCK_CLEARANCE } from "../Shell/NavDock";
+import { useDockClearance } from "../Shell/NavDock";
 
 const FeedsLayout: React.FC = () => {
+  const dockClearance = useDockClearance();
   return (
     <FeedActionsProvider>
       <Box
         maxWidth={800}
         mx="auto"
         px={{ xs: 0, sm: 2 }}
-        pb={{ xs: `${DOCK_CLEARANCE}px`, md: 0 }}
         sx={{
+          ...dockClearance,
           height: "100%",
           display: "flex",
           flexDirection: "column",
