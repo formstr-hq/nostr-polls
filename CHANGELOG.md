@@ -1,3 +1,16 @@
+# 2.0.0
+
+A whole new look: **Color Block**.
+
+- Color everywhere: every part of the app has its own color. The header is a bold block of color that holds whatever you're looking at, and moving between Home, Polls, Notes, Explore, Messages, Notifications, Profile and Settings moves through your palette.
+- Palettes: choose Festival, Lagoon, Orchard or Prism, or build your own from six colors in Appearance settings. If you used one of the old single-color themes, you've been moved to the closest palette.
+- Finishes: paint the color blocks Solid, Gradient, Aurora, Holo, Metallic or Glossy.
+- New navigation: a floating bar at the bottom (Home, Polls, Notes, Explore, Saved) with a Create button, plus a new Explore page for Topics, Articles, Music, Movies, Follow Packs and Games. Sub-feeds like Global, Following and Web of Trust are always visible at the top.
+- Immersive scrolling: the header and bottom bar slide away while you read and come back as soon as you scroll up.
+- Redesigned feed: polls and notes sit on rounded cards. Polls show a POLL tag, and their results fill in the poll color.
+- New composer: a cleaner, full-screen editor with a floating toolbar. Adds @ and # buttons, poll templates (Yes/No, Rate it, This or that, Emoji scale), quick presets for when voting ends, spam-protection levels, Enter to add an option, and a warning for duplicate options.
+- Fresh coats of paint on profiles, chat, notifications, messages, settings, drafts, games and the music player.
+
 # 1.18.0
 
 - Opens straight to content: the feed now paints from the on-device cache the moment the app starts, instead of showing a loading screen while that same cache sat unread on disk. Every feed benefits — notes, polls, articles, movies, topics, bookmarks, follow packs, profile tabs and direct messages.
