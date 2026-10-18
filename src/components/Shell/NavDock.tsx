@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, ButtonBase, useMediaQuery, useTheme } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import HomeIcon from "@mui/icons-material/HomeRounded";
 import PollIcon from "@mui/icons-material/PollRounded";
 import NotesIcon from "@mui/icons-material/ArticleRounded";
@@ -41,6 +42,21 @@ const NavDock: React.FC = () => {
   const onFeeds = location.pathname.startsWith("/feeds");
 
   return (
+    <>
+    {/* Content fades out under the floating dock instead of cutting off hard. */}
+    <Box
+      aria-hidden
+      sx={(t) => ({
+        position: "fixed",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: `calc(${DOCK_CLEARANCE + 12}px + env(safe-area-inset-bottom))`,
+        background: `linear-gradient(${alpha(t.palette.cb.page, 0)}, ${alpha(t.palette.cb.page, 0.92)} 55%)`,
+        pointerEvents: "none",
+        zIndex: 1099,
+      })}
+    />
     <Box
       component="nav"
       aria-label="Primary"
@@ -128,6 +144,7 @@ const NavDock: React.FC = () => {
         </ButtonBase>
       )}
     </Box>
+    </>
   );
 };
 
