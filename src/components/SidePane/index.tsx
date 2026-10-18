@@ -25,6 +25,8 @@ import { SvgIconComponent } from "@mui/icons-material";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { safeSetItem } from "../../utils/localStorage";
+import { sectionIndex } from "../Shell/navConfig";
+import { sectionColorFrom } from "../Shell/useSectionColor";
 
 // Static sub-item definitions — used for the mobile popup regardless of which
 // feed is currently mounted. Active state is read from localStorage so we can
@@ -187,6 +189,7 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
       >
         {feedOptions.map(({ value, label, Icon }) => {
           const active = currentFeed === value;
+          const itemColor = sectionColorFrom(theme.palette.cb, sectionIndex(`/feeds/${value}`));
 
           return (
             <React.Fragment key={value}>
@@ -201,12 +204,13 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
                   mx: 0.75,
                   borderRadius: "16px",
                   cursor: "pointer",
-                  color: active ? "cb.onBlock" : "text.secondary",
-                  bgcolor: active ? "cb.block" : "transparent",
+                  // Each feed wears its own palette color when active.
+                  color: active ? itemColor.on : "text.secondary",
+                  background: active ? itemColor.fill : "transparent",
                   fontWeight: active ? 800 : 500,
                   "&:hover": {
-                    bgcolor: active
-                      ? "cb.block"
+                    background: active
+                      ? itemColor.fill
                       : alpha(theme.palette.text.primary, 0.06),
                   },
                   transition: "background-color 0.15s, color 0.15s",

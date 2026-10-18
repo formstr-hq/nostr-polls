@@ -1,3 +1,4 @@
+import { useSectionColorAt } from "../Shell/useSectionColor";
 import React, { useState, useEffect, useRef } from "react";
 import {
   Box,
@@ -359,6 +360,7 @@ const NoteTemplateForm: React.FC<{
   };
 
   const hasExpiry = !!(expiresInSeconds || customExpiryDate);
+  const noteColor = useSectionColorAt(0);
   const expiryLabel = customExpiryDate
     ? customExpiryDate.format("MMM D, HH:mm")
     : EXPIRY_PRESETS.find((p) => p.seconds === expiresInSeconds)?.label;
@@ -503,8 +505,9 @@ const NoteTemplateForm: React.FC<{
                       fontFamily: "inherit",
                       fontWeight: 800,
                       fontSize: 16,
-                      bgcolor: on ? "cb.block" : "cb.inner",
-                      color: on ? "cb.onBlock" : "text.primary",
+                      background: on ? noteColor.fill : undefined,
+                      bgcolor: on ? undefined : "cb.inner",
+                      color: on ? noteColor.on : "text.primary",
                     }}
                   >
                     {label}

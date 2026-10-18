@@ -12,6 +12,7 @@ import { DraggableCorner } from "../Common/DraggableCorner";
 import { useDrafts } from "../../contexts/drafts-context";
 import { DOCK_BOTTOM, DOCK_FAB_SIZE } from "../Shell/NavDock";
 import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
+import { useSectionColor } from "../Shell/useSectionColor";
 
 interface CreateFABProps {
   extraActions?: {
@@ -32,7 +33,7 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   const draftCount = drafts?.size ?? 0;
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
-  const onPolls = location.pathname.startsWith("/feeds/polls");
+  const section = useSectionColor();
   const immersiveHidden = useImmersiveHidden();
 
   const handleCreate = () => {
@@ -207,9 +208,9 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
             height: DOCK_FAB_SIZE,
             borderRadius: "22px",
             border: "none !important",
-            bgcolor: onPolls ? "cb.poll" : "cb.block",
-            color: onPolls ? "cb.onPoll" : "cb.onBlock",
-            "&:hover": { bgcolor: onPolls ? "cb.poll" : "cb.block" },
+            background: section.fill,
+            color: section.on,
+            "&:hover": { background: section.fill },
           },
         }}
       >

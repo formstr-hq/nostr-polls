@@ -1,3 +1,4 @@
+import { useSectionColor } from "../Shell/useSectionColor";
 import { copyToClipboard } from "../../utils/common";
 import React, { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
@@ -74,6 +75,7 @@ function compactNpub(npub: string): string {
 }
 
 const ProfilePage: React.FC = () => {
+  const section = useSectionColor();
   const { npubOrNprofile } = useParams<{ npubOrNprofile: string }>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -298,14 +300,14 @@ const ProfilePage: React.FC = () => {
           mb: 2,
           overflow: "hidden",
           borderRadius: "30px",
-          bgcolor: "cb.block",
-          color: "cb.onBlock",
+          background: section.fill,
+          color: section.on,
           "& .MuiTypography-root": { color: "inherit" },
           "& .MuiIconButton-root": { color: "inherit" },
           "& .MuiChip-root": { color: "inherit", borderColor: "currentColor" },
           "& .MuiChip-icon": { color: "inherit" },
           "& .MuiButton-outlined": { color: "inherit", borderColor: "currentColor" },
-          "& .MuiButton-contained": { bgcolor: "cb.onBlock", color: "cb.block", "&:hover": { bgcolor: "cb.onBlock" } },
+          "& .MuiButton-contained": { bgcolor: section.on, color: section.color, "&:hover": { bgcolor: section.on } },
           "& .MuiButton-text": { color: "inherit" },
         }}
       >
@@ -340,7 +342,7 @@ const ProfilePage: React.FC = () => {
                 width: 80,
                 height: 80,
                 border: "3px solid",
-                borderColor: "cb.onBlock",
+                borderColor: section.on,
                 flexShrink: 0,
               }}
             />

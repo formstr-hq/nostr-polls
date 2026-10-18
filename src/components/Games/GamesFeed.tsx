@@ -1,3 +1,4 @@
+import { useSectionColorAt } from "../Shell/useSectionColor";
 import React, { useEffect, useState } from "react";
 import { Box, Button, Card, CardContent, Stack, Typography } from "@mui/material";
 import { useNavigate } from "react-router-dom";
@@ -46,6 +47,8 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
   const dateIso = todayUtcIso();
   const [myBest, setMyBest] = useState<number | null>(null);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
+  // Each game gets its own palette color.
+  const tint = useSectionColorAt(GAMES.findIndex((g) => g.id === id) + 3);
 
   useEffect(() => {
     if (!user?.pubkey) return;
@@ -63,7 +66,7 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
       <CardContent>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-            <Box sx={{ width: 40, height: 40, borderRadius: "13px", bgcolor: "cb.block", color: "cb.onBlock", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Box sx={{ width: 40, height: 40, borderRadius: "13px", background: tint.fill, color: tint.on, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <SportsEsportsIcon />
             </Box>
             <Typography variant="h6">{label}</Typography>

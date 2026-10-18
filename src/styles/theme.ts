@@ -1,4 +1,4 @@
-import {createTheme, darken, lighten} from "@mui/material/styles";
+import {alpha, createTheme, darken, lighten} from "@mui/material/styles";
 import {Theme} from "@mui/system/createTheme";
 import {CSSObject} from "@mui/material";
 import {ColorPreset} from "./themes";
@@ -32,6 +32,72 @@ export interface ColorBlockTokens {
   onInk: string;
   /** Translucent fill for controls sitting on the block. */
   onBlockTint: string;
+  /**
+   * One color per app section (6 for palettes; the single preset color repeated
+   * for single-color presets). See sectionIndex in components/Shell/navConfig.
+   */
+  sections: string[];
+  /** Readable text/icon color on each section color. */
+  onSections: string[];
+  /** Bright variant of each section color, for use on ink/black surfaces. */
+  sectionAccents: string[];
+  /** How blocks are painted: flat, blended into the next color, or metallic. */
+  finish: BlockFinish;
+}
+
+export const BLOCK_FINISHES = ["solid", "gradient", "aurora", "holographic", "metallic", "glossy"] as const;
+export type BlockFinish = (typeof BLOCK_FINISHES)[number];
+
+/**
+ * CSS `background` for a block painted with palette color `i`. Multi-color
+ * finishes pull in the following palette colors, which is what makes palettes
+ * feel like a color explosion; single-color presets get tints of their color.
+ */
+export function blockFill(sections: string[], i: number, finish: BlockFinish): string {
+  const n = sections.length;
+  const c = sections[i % n];
+  let next = sections[(i + 1) % n];
+  let next2 = sections[(i + 2) % n];
+  if (next === c) {
+    // Single-color preset: derive companions from the color itself.
+    next = darken(c, 0.32);
+    next2 = lighten(c, 0.3);
+  }
+  switch (finish) {
+    case "gradient":
+      return `linear-gradient(125deg, ${c} 0%, ${c} 35%, ${next} 115%)`;
+    case "aurora":
+      // Soft glows of the neighbouring palette colors drifting over the base.
+      return [
+        `radial-gradient(85% 130% at 100% 0%, ${next} 0%, ${alpha(next, 0)} 62%)`,
+        `radial-gradient(70% 120% at 35% 135%, ${next2} 0%, ${alpha(next2, 0)} 62%)`,
+        c,
+      ].join(", ");
+    case "holographic":
+      // Iridescent foil: a palette conic sweep under a pearly light band.
+      return [
+        "linear-gradient(115deg, rgba(255,255,255,0) 18%, rgba(255,255,255,0.38) 30%, rgba(190,230,255,0.22) 38%, rgba(255,190,240,0.22) 46%, rgba(255,255,255,0) 58%)",
+        `conic-gradient(from 200deg at 72% 28%, ${c}, ${next}, ${next2}, ${c})`,
+      ].join(", ");
+    case "metallic": {
+      // Brushed metal: alternating light/dark bands plus a fine diagonal grain.
+      const hi = lighten(c, 0.42);
+      const mid = lighten(c, 0.16);
+      const lo = darken(c, 0.22);
+      return [
+        "repeating-linear-gradient(100deg, rgba(255,255,255,0.05) 0 2px, rgba(0,0,0,0.035) 2px 4px)",
+        `linear-gradient(115deg, ${lo} 0%, ${mid} 18%, ${hi} 30%, ${c} 46%, ${lo} 64%, ${mid} 80%, ${hi} 92%, ${c} 100%)`,
+      ].join(", ");
+    }
+    case "glossy":
+      // Candy gloss: a bright highlight across the top half.
+      return [
+        "linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.14) 40%, rgba(255,255,255,0) 52%, rgba(0,0,0,0.08) 100%)",
+        c,
+      ].join(", ");
+    default:
+      return c;
+  }
 }
 
 declare module "@mui/material/styles" {
@@ -73,18 +139,23 @@ export const readableOn = (color: string, mode: "light" | "dark") => {
   return c;
 };
 
-export function colorBlockTokens(preset: ColorPreset, mode: "light" | "dark"): ColorBlockTokens {
+export function colorBlockTokens(
+  preset: ColorPreset,
+  mode: "light" | "dark",
+  finish: BlockFinish = "solid"
+): ColorBlockTokens {
   const dark = mode === "dark";
   const pal = preset.palette;
-  const [c1, c2, c3] = pal
-    ? (dark ? pal.dark : pal.light)
-    : [
-        dark ? preset.darkPrimary : preset.lightPrimary,
-        dark ? preset.darkPrimary : preset.lightPrimary,
-        dark ? preset.darkPrimary : preset.lightPrimary,
-      ];
-  const [d1, d2] = pal ? pal.dark : [preset.darkPrimary, preset.darkPrimary];
+  const single = dark ? preset.darkPrimary : preset.lightPrimary;
+  const sections = pal ? (dark ? pal.dark : pal.light) : Array(6).fill(single);
+  const sectionAccents = pal ? pal.dark : Array(6).fill(preset.darkPrimary);
+  const [c1, c2, c3] = sections;
+  const [d1, d2] = sectionAccents;
   return {
+    sections,
+    onSections: sections.map(onColor),
+    sectionAccents,
+    finish,
     block: c1,
     onBlock: onColor(c1),
     poll: c2,
@@ -113,9 +184,9 @@ export const getColorsWithTheme = (theme: Theme, styles: CSSObject, contrast: CS
   }
 }
 
-export function buildTheme(fontFamily: string, preset: ColorPreset) {
-  const light = colorBlockTokens(preset, "light");
-  const dark = colorBlockTokens(preset, "dark");
+export function buildTheme(fontFamily: string, preset: ColorPreset, finish: BlockFinish = "solid") {
+  const light = colorBlockTokens(preset, "light", finish);
+  const dark = colorBlockTokens(preset, "dark", finish);
   const lightSecondary = readableOn(preset.lightSecondary ?? "#757575", "light");
   const darkSecondary = readableOn(preset.darkSecondary ?? "#bdbdbc", "dark");
   const lightPrimary = readableOn(light.block, "light");

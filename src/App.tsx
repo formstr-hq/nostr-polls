@@ -96,7 +96,7 @@ import { SettingsScreen } from "./components/Settings/SettingsScreen";
 import DraftsList from "./components/Drafts/DraftsList";
 import NavDock, { useDockClearance } from "./components/Shell/NavDock";
 import ExploreHub from "./components/Shell/ExploreHub";
-import { isPollLocation } from "./components/Shell/navConfig";
+import { useSectionColor } from "./components/Shell/useSectionColor";
 
 declare global {
   interface Window {
@@ -111,10 +111,10 @@ function AndroidNotifications() {
 
 // Reads appearance context and provides a dynamically built MUI theme
 function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
-  const { fontPresetId, colorPreset } = useAppearance();
+  const { fontPresetId, colorPreset, finish } = useAppearance();
   const fontPreset = getFontPreset(fontPresetId);
   const theme = useMemo(
-    () => buildTheme(fontPreset.fontFamily, colorPreset),
+    () => buildTheme(fontPreset.fontFamily, colorPreset, finish),
     // Rebuild when the font, the selected preset, or (for the custom theme) the
     // chosen colors change — hence keying on the resolved color values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -125,6 +125,7 @@ function DynamicThemeWrapper({ children }: { children: React.ReactNode }) {
       colorPreset.darkPrimary,
       colorPreset.lightSecondary,
       colorPreset.darkSecondary,
+      finish,
     ],
   );
   return (
@@ -166,6 +167,7 @@ function AppContent() {
   const location = useLocation();
   const muiTheme = useTheme();
   const isDesktop = useMediaQuery(muiTheme.breakpoints.up("md"));
+  const section = useSectionColor();
   const prevPubkeyRef = React.useRef<string | null | undefined>(undefined);
 
   React.useEffect(() => {
@@ -187,13 +189,10 @@ function AppContent() {
           block runs edge to edge under the system bar. */}
       <Box
         className="header-safe-area"
-        sx={(t) => {
-          const c = isPollLocation(location.pathname, location.search) ? t.palette.cb.poll : t.palette.cb.block;
-          // Only the status-bar inset is painted, so the header's rounded bottom
-          // corners show the page behind them.
-          return {
-            background: `linear-gradient(${c}, ${c}) top / 100% calc(env(safe-area-inset-top) + 1px) no-repeat`,
-          };
+        sx={{
+          // Only the status-bar inset is painted (in the section's color), so the
+          // header's rounded bottom corners show the page behind them.
+          background: `linear-gradient(${section.color}, ${section.color}) top / 100% calc(env(safe-area-inset-top) + 1px) no-repeat`,
         }}
       >
         <CollapsibleHeader>

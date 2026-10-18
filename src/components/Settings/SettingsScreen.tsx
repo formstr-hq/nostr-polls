@@ -1,3 +1,4 @@
+import { sectionColorFrom } from "../Shell/useSectionColor";
 import {
   Box,
   Divider,
@@ -142,8 +143,8 @@ export const SettingsScreen: React.FC = () => {
                         width: 38,
                         height: 38,
                         borderRadius: "12px",
-                        bgcolor: "cb.block",
-                        color: "cb.onBlock",
+                        background: sectionColorFrom(theme.palette.cb, idx).fill,
+                        color: sectionColorFrom(theme.palette.cb, idx).on,
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",

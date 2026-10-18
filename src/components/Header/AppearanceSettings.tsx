@@ -1,60 +1,20 @@
 import React from 'react';
 import { Box, ButtonBase, Typography, useTheme } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
-import { FONT_PRESETS, COLOR_PRESETS, PALETTE_PRESETS, CUSTOM_PRESET_ID } from '../../styles/themes';
+import { FONT_PRESETS, PALETTE_PRESETS, CUSTOM_PALETTE_ID, PALETTE_SLOT_LABELS, buildCustomPalette } from '../../styles/themes';
 import { useAppearance } from '../../contexts/AppearanceContext';
+import { BLOCK_FINISHES, BlockFinish, blockFill } from '../../styles/theme';
+
 import { ColorSchemeToggle } from '../ColorScheme';
 
-// A circular swatch backed by a native <input type="color">, so picking a color
-// uses the OS picker (reliable on web + Android WebView). The visible circle shows
-// the current value; the input sits invisibly on top to catch the tap.
-const ColorPicker: React.FC<{
-  label: string;
-  value: string;
-  onChange: (color: string) => void;
-}> = ({ label, value, onChange }) => (
-  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75 }}>
-    <Box
-      sx={{
-        position: 'relative',
-        width: 40,
-        height: 40,
-        borderRadius: '50%',
-        bgcolor: value,
-        border: '2px solid',
-        borderColor: 'divider',
-        cursor: 'pointer',
-        overflow: 'hidden',
-      }}
-    >
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          opacity: 0,
-          border: 'none',
-          padding: 0,
-          cursor: 'pointer',
-        }}
-      />
-    </Box>
-    <Typography variant="caption" color="text.secondary">
-      {label}
-    </Typography>
-  </Box>
-);
-
-const GRID_SX = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(76px, 1fr))',
-  gap: 1,
-} as const;
+const FINISH_LABELS: Record<BlockFinish, string> = {
+  solid: 'Solid',
+  gradient: 'Gradient',
+  aurora: 'Aurora',
+  holographic: 'Holo',
+  metallic: 'Metallic',
+  glossy: 'Glossy',
+};
 
 const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Typography
@@ -90,7 +50,7 @@ const ThemeTile: React.FC<{
       boxShadow: (t) => (selected ? `inset 0 0 0 2.5px ${t.palette.text.primary}` : 'none'),
     }}
   >
-    <Box sx={{ width: '100%', height: 44, borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ width: '100%', height: 48, borderRadius: '12px', overflow: 'hidden', display: 'flex' }}>
       {colors.map((c, i) => (
         <Box key={i} sx={{ flex: 1, bgcolor: c }} />
       ))}
@@ -118,22 +78,55 @@ const ThemeTile: React.FC<{
   </ButtonBase>
 );
 
+// One palette slot: a big swatch backed by a native <input type="color"> (the
+// OS picker is reliable on web and in the Android WebView) with its label.
+const SlotPicker: React.FC<{ label: string; value: string; onChange: (c: string) => void }> = ({
+  label,
+  value,
+  onChange,
+}) => (
+  <Box
+    component="label"
+    sx={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 0.75,
+      p: 1,
+      borderRadius: '18px',
+      bgcolor: 'cb.inner',
+      cursor: 'pointer',
+      fontSize: 12,
+      fontWeight: 700,
+      textAlign: 'center',
+      lineHeight: 1.25,
+    }}
+  >
+    <Box sx={{ position: 'relative', height: 44, borderRadius: '12px', bgcolor: value, overflow: 'hidden' }}>
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={`${label} color`}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, border: 'none', padding: 0, cursor: 'pointer' }}
+      />
+    </Box>
+    {label}
+  </Box>
+);
+
 export const AppearanceSettings: React.FC = () => {
   const {
     fontPresetId,
     colorPresetId,
-    customColors,
     setFontPreset,
     setColorPreset,
-    setCustomColors,
+    customPalette,
+    setCustomPalette,
+    finish,
+    setFinish,
   } = useAppearance();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-
-  // The custom theme shows the same colors in both modes (see buildCustomPreset).
-  const customSwatch = customColors.primary;
-  const customAccent = customColors.secondary;
-  const customSelected = colorPresetId === CUSTOM_PRESET_ID;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -143,33 +136,11 @@ export const AppearanceSettings: React.FC = () => {
       </Box>
 
       <Box>
-        <SectionLabel>Single color</SectionLabel>
-        <Box sx={GRID_SX}>
-          {COLOR_PRESETS.map((preset) => (
-            <ThemeTile
-              key={preset.id}
-              name={preset.name}
-              colors={[isDark ? preset.darkPrimary : preset.lightPrimary]}
-              selected={colorPresetId === preset.id}
-              onClick={() => setColorPreset(preset.id)}
-            />
-          ))}
-          {/* The user's custom theme, selectable alongside the presets. */}
-          <ThemeTile
-            name="Custom"
-            colors={[customSwatch, customAccent]}
-            selected={customSelected}
-            onClick={() => setColorPreset(CUSTOM_PRESET_ID)}
-          />
-        </Box>
-      </Box>
-
-      <Box>
-        <SectionLabel>Palettes</SectionLabel>
+        <SectionLabel>Palette</SectionLabel>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -1, mb: 1.5 }}>
-          Three colors: one for notes, one for polls, one for highlights.
+          Every part of the app gets its own color from your palette.
         </Typography>
-        <Box sx={GRID_SX}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1 }}>
           {PALETTE_PRESETS.map((preset) => (
             <ThemeTile
               key={preset.id}
@@ -179,26 +150,72 @@ export const AppearanceSettings: React.FC = () => {
               onClick={() => setColorPreset(preset.id)}
             />
           ))}
+          {/* The user's own palette, built below. */}
+          <ThemeTile
+            name="Mine"
+            colors={(() => {
+              const mine = buildCustomPalette(customPalette).palette!;
+              return isDark ? mine.dark : mine.light;
+            })()}
+            selected={colorPresetId === CUSTOM_PALETTE_ID}
+            onClick={() => setColorPreset(CUSTOM_PALETTE_ID)}
+          />
         </Box>
       </Box>
 
       <Box>
-        <SectionLabel>Make Your Own</SectionLabel>
-        <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
-          <ColorPicker
-            label="Primary"
-            value={customColors.primary}
-            onChange={(c) => setCustomColors({ ...customColors, primary: c })}
-          />
-          <ColorPicker
-            label="Secondary"
-            value={customColors.secondary}
-            onChange={(c) => setCustomColors({ ...customColors, secondary: c })}
-          />
-          <Typography variant="caption" color="text.secondary" sx={{ flex: 1, mt: 0.5 }}>
-            Pick a primary and secondary color to build your own theme. Choosing a color
-            selects it automatically.
-          </Typography>
+        <SectionLabel>Make your own palette</SectionLabel>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -1, mb: 1.5 }}>
+          Pick a color for each part of the app. Changes apply instantly and select your palette.
+        </Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1 }}>
+          {PALETTE_SLOT_LABELS.map((label, i) => (
+            <SlotPicker
+              key={label}
+              label={label}
+              value={customPalette[i]}
+              onChange={(c) => {
+                const next = [...customPalette];
+                next[i] = c;
+                setCustomPalette(next);
+              }}
+            />
+          ))}
+        </Box>
+      </Box>
+
+      <Box>
+        <SectionLabel>Finish</SectionLabel>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -1, mb: 1.5 }}>
+          How the color blocks are painted.
+        </Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1 }}>
+          {BLOCK_FINISHES.map((f) => {
+            const selected = finish === f;
+            return (
+              <ButtonBase
+                key={f}
+                onClick={() => setFinish(f)}
+                aria-pressed={selected}
+                sx={{
+                  position: 'relative',
+                  flexDirection: 'column',
+                  gap: 0.75,
+                  p: 1,
+                  borderRadius: '18px',
+                  bgcolor: 'cb.inner',
+                  fontFamily: 'inherit',
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  color: 'text.primary',
+                  boxShadow: (t) => (selected ? `inset 0 0 0 2.5px ${t.palette.text.primary}` : 'none'),
+                }}
+              >
+                <Box sx={{ width: '100%', height: 52, borderRadius: '14px', background: blockFill(theme.palette.cb.sections, 0, f) }} />
+                {FINISH_LABELS[f]}
+              </ButtonBase>
+            );
+          })}
         </Box>
       </Box>
 

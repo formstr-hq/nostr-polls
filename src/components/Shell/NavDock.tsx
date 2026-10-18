@@ -8,7 +8,8 @@ import ExploreIcon from "@mui/icons-material/ExploreRounded";
 import BookmarkIcon from "@mui/icons-material/BookmarkRounded";
 import AddIcon from "@mui/icons-material/AddRounded";
 import { useLocation, useNavigate } from "react-router-dom";
-import { dockKey, routeInfo } from "./navConfig";
+import { DOCK_SECTION, dockKey, routeInfo } from "./navConfig";
+import { sectionColorFrom, useSectionColor } from "./useSectionColor";
 import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
 
 const DESTINATIONS = [
@@ -49,6 +50,7 @@ const NavDock: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const hidden = useImmersiveHidden();
+  const section = useSectionColor();
   if (isDesktop) return null;
   const info = routeInfo(location.pathname);
   if (info.hideDock) return null;
@@ -134,8 +136,9 @@ const NavDock: React.FC = () => {
                 fontFamily: "inherit",
                 fontSize: 10.5,
                 fontWeight: 700,
+                // Each destination wears its own palette color when active.
                 color: on ? "#111" : "rgba(255,255,255,0.62)",
-                bgcolor: on ? (key === "polls" ? "cb.accentPoll" : "cb.accent") : "transparent",
+                background: on ? sectionColorFrom(theme.palette.cb, DOCK_SECTION[key]).accent : "transparent",
                 transition: "background-color .2s, color .2s",
               }}
             >
@@ -155,8 +158,8 @@ const NavDock: React.FC = () => {
             width: DOCK_FAB_SIZE,
             height: DOCK_FAB_SIZE,
             borderRadius: "22px",
-            bgcolor: "cb.block",
-            color: "cb.onBlock",
+            background: section.fill,
+            color: section.on,
             pointerEvents: "auto",
             boxShadow: "0 14px 28px -12px rgba(0,0,0,0.5)",
           }}

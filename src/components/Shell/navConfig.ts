@@ -95,3 +95,70 @@ export function isPollLocation(pathname: string, search = ""): boolean {
   if (/^\/(feeds\/polls|respond|result)(\/|$)/.test(pathname)) return true;
   return pathname === "/create" && new URLSearchParams(search).get("type") === "poll";
 }
+
+// ── Section colors ──────────────────────────────────────────────────────────
+// With a multi-color palette every part of the app owns one of its six colors,
+// so moving around the app moves through the palette. Indices 0–2 keep their
+// roles (0 home/notes-writing, 1 polls, 2 highlights); 3–5 are extra hues.
+const FEED_SECTION: Record<string, number> = {
+  home: 0,
+  polls: 1,
+  notes: 3,
+  explore: 4,
+  topics: 5,
+  articles: 2,
+  music: 4,
+  movies: 5,
+  "follow-packs": 3,
+  bookmarks: 2,
+  games: 5,
+  profiles: 3,
+};
+
+/** Palette index of the section a location belongs to. */
+export function sectionIndex(pathname: string, search = ""): number {
+  const [root, sub] = pathname.split("/").filter(Boolean);
+  switch (root) {
+    case "feeds":
+      return FEED_SECTION[sub || "polls"] ?? 0;
+    case "create":
+      return new URLSearchParams(search).get("type") === "poll" ? 1 : 0;
+    case "respond":
+    case "result":
+      return 1;
+    case "note":
+    case "p":
+      return 3;
+    case "profile":
+      return 5;
+    case "settings":
+      return 4;
+    case "notifications":
+      return 2;
+    case "messages":
+      return 3;
+    case "ratings":
+      return 5;
+    default:
+      return 0;
+  }
+}
+
+/** Palette index for each nav-dock destination (matches the sections above). */
+export const DOCK_SECTION: Record<string, number> = {
+  home: 0,
+  polls: 1,
+  notes: 3,
+  explore: 4,
+  saved: 2,
+};
+
+/** Palette index for each Explore tile. */
+export const EXPLORE_SECTION: Record<string, number> = {
+  topics: 5,
+  articles: 2,
+  music: 4,
+  movies: 5,
+  "follow-packs": 3,
+  games: 1,
+};

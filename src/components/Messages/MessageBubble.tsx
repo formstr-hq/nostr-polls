@@ -1,3 +1,4 @@
+import { useSectionColor } from "../Shell/useSectionColor";
 import React, { useRef, useState } from "react";
 import { Box, Typography, Paper, Chip, CircularProgress, Tooltip } from "@mui/material";
 import ReplyIcon from "@mui/icons-material/Reply";
@@ -94,16 +95,17 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [diagOpen, setDiagOpen] = useState(false);
 
   // Sent bubbles are the block color (Color Block); text flips for contrast.
-  const cb = theme.palette.cb;
-  const onBlockIsDark = cb.onBlock !== "#ffffff";
+  // My bubbles wear the Messages section color (finish included).
+  const section = useSectionColor();
+  const onBlockIsDark = section.on !== "#ffffff";
   const sent = {
-    bg:          cb.block,
-    text:        cb.onBlock,
-    link:        cb.onBlock,
+    bg:          section.fill,
+    text:        section.on,
+    link:        section.on,
     subtext:     onBlockIsDark ? "rgba(0,0,0,0.55)" : "rgba(255,255,255,0.7)",
     quoteBorder: onBlockIsDark ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.55)",
     quoteBg:     onBlockIsDark ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.14)",
-    quoteName:   cb.onBlock,
+    quoteName:   section.on,
     quoteText:   onBlockIsDark ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.8)",
   };
 
@@ -233,7 +235,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             borderRadius: "22px",
             [isMine ? "borderBottomRightRadius" : "borderBottomLeftRadius"]: "6px",
             overflow: "hidden",
-            backgroundColor: isMine ? sent.bg : "cb.slab",
+            background: isMine ? sent.bg : undefined,
+            bgcolor: isMine ? undefined : "cb.slab",
             cursor: "default",
             userSelect: "none",
             WebkitUserSelect: "none",

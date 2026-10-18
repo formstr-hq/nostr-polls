@@ -9,6 +9,9 @@ import GamesIcon from "@mui/icons-material/SportsEsportsRounded";
 import SearchIcon from "@mui/icons-material/SearchRounded";
 import { useNavigate } from "react-router-dom";
 import { SearchModal } from "../Search/SearchModal";
+import { useTheme } from "@mui/material";
+import { EXPLORE_SECTION } from "./navConfig";
+import { sectionColorFrom } from "./useSectionColor";
 
 const TILES = [
   { feed: "topics", label: "Topics", hint: "#hashtags & interests", Icon: TagIcon },
@@ -23,6 +26,7 @@ const TILES = [
 const ExploreHub: React.FC = () => {
   const navigate = useNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
+  const cb = useTheme().palette.cb;
   return (
     <Box sx={{ height: "100%", overflowY: "auto", px: 1.25, pt: 1.5, pb: 14 }}>
       <ButtonBase
@@ -44,7 +48,10 @@ const ExploreHub: React.FC = () => {
         <SearchIcon /> Search Pollerama
       </ButtonBase>
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", sm: "1fr 1fr 1fr" }, gap: 1.25 }}>
-        {TILES.map(({ feed, label, hint, Icon }) => (
+        {TILES.map(({ feed, label, hint, Icon }) => {
+          // Each destination previews its own palette color.
+          const c = sectionColorFrom(cb, EXPLORE_SECTION[feed] ?? 0);
+          return (
           <ButtonBase
             key={feed}
             onClick={() => {
@@ -68,8 +75,8 @@ const ExploreHub: React.FC = () => {
                 width: 44,
                 height: 44,
                 borderRadius: "14px",
-                bgcolor: "cb.block",
-                color: "cb.onBlock",
+                background: c.fill,
+                color: c.on,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -82,7 +89,8 @@ const ExploreHub: React.FC = () => {
               <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>{hint}</Typography>
             </Box>
           </ButtonBase>
-        ))}
+          );
+        })}
       </Box>
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </Box>

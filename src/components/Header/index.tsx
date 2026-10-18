@@ -9,7 +9,8 @@ import { NotificationBell } from "./NotificationBell";
 import { useDMContext } from "../../hooks/useDMContext";
 import { SearchModal } from "../Search/SearchModal";
 import { useSubNav } from "../../contexts/SubNavContext";
-import { isPollLocation, routeInfo } from "../Shell/navConfig";
+import { routeInfo } from "../Shell/navConfig";
+import { useSectionColor } from "../Shell/useSectionColor";
 import { useHeaderTitleOverride } from "../../contexts/HeaderTitleContext";
 
 /**
@@ -24,10 +25,9 @@ const Header: React.FC = () => {
   const { items: subNavItems } = useSubNav();
   const [searchOpen, setSearchOpen] = useState(false);
   const titleOverride = useHeaderTitleOverride();
-  const info = {
-    ...routeInfo(location.pathname),
-    poll: isPollLocation(location.pathname, location.search),
-  };
+  const info = routeInfo(location.pathname);
+  // Every section of the app owns a palette color; the block wears it.
+  const section = useSectionColor();
   // Pages publish pills via SubNavContext (feeds: sub-feeds; composer: Note/Poll)
   // and clear them on unmount.
   const showPills = subNavItems.length > 0;
@@ -54,17 +54,17 @@ const Header: React.FC = () => {
         component="header"
         data-testid="block-header"
         sx={{
-          bgcolor: info.poll ? "cb.poll" : "cb.block",
-          color: info.poll ? "cb.onPoll" : "cb.onBlock",
+          background: section.fill,
+          color: section.on,
           borderBottomLeftRadius: 30,
           borderBottomRightRadius: 30,
           px: { xs: 1.5, sm: 2.5 },
           pb: showPills ? 1.75 : 1,
-          transition: "background-color .25s ease",
+          transition: "color .25s ease",
           // Badges on the block invert it (block-colored text on the block's ink/white).
           "& .MuiBadge-badge": {
-            bgcolor: info.poll ? "cb.onPoll" : "cb.onBlock",
-            color: info.poll ? "cb.poll" : "cb.block",
+            bgcolor: section.on,
+            color: section.color,
             fontWeight: 800,
           },
         }}
@@ -143,11 +143,9 @@ const Header: React.FC = () => {
                   fontSize: 14,
                   whiteSpace: "nowrap",
                   opacity: item.disabled ? 0.45 : 1,
-                  bgcolor: item.active
-                    ? info.poll ? "cb.onPoll" : "cb.onBlock"
-                    : "cb.onBlockTint",
+                  bgcolor: item.active ? section.on : "cb.onBlockTint",
                   color: item.active
-                    ? info.poll ? "cb.poll" : "cb.block"
+                    ? section.color
                     : "inherit",
                 }}
               >

@@ -1,3 +1,4 @@
+import { useSectionColorAt } from "../Shell/useSectionColor";
 import React from "react";
 import { Avatar, Box, ButtonBase, CircularProgress, IconButton, Tooltip, Typography } from "@mui/material";
 import CloudDoneIcon from "@mui/icons-material/CloudDoneRounded";
@@ -93,7 +94,10 @@ export const ComposerDock: React.FC<{
   submitting?: boolean;
   disabled?: boolean;
   poll?: boolean;
-}> = ({ tools, submitLabel, submitting, disabled, poll }) => (
+}> = ({ tools, submitLabel, submitting, disabled, poll }) => {
+  // Post wears the note or poll palette color.
+  const post = useSectionColorAt(poll ? 1 : 0);
+  return (
   <Box
     sx={{
       position: "sticky",
@@ -136,8 +140,8 @@ export const ComposerDock: React.FC<{
         fontFamily: "inherit",
         fontWeight: 800,
         fontSize: 16,
-        bgcolor: poll ? "cb.poll" : "cb.block",
-        color: poll ? "cb.onPoll" : "cb.onBlock",
+        background: post.fill,
+        color: post.on,
         boxShadow: "0 14px 28px -12px rgba(0,0,0,0.5)",
         // Solid when disabled: the dock floats over content, so no translucency.
         "&.Mui-disabled": { bgcolor: "cb.ink", color: "rgba(255,255,255,0.4)" },
@@ -148,6 +152,7 @@ export const ComposerDock: React.FC<{
     </ButtonBase>
   </Box>
 );
+};
 
 /** Insert `text` at the textarea's cursor, keeping focus and caret after it. */
 export function insertAtCursor(

@@ -1,44 +1,60 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
-  COLOR_PRESETS,
   ColorPreset,
   getFontPreset,
   getColorPreset,
-  buildCustomPreset,
-  CUSTOM_PRESET_ID,
-  DEFAULT_CUSTOM_PRIMARY,
-  DEFAULT_CUSTOM_SECONDARY,
+  resolvePaletteId,
+  buildCustomPalette,
+  CUSTOM_PALETTE_ID,
+  DEFAULT_CUSTOM_PALETTE,
+  PALETTE_PRESETS,
   SYSTEM_FONT_ID,
   DEFAULT_COLOR_PRESET_ID,
 } from '../styles/themes';
-
-interface CustomColors {
-  primary: string;
-  secondary: string;
-}
+import { BLOCK_FINISHES, type BlockFinish } from '../styles/theme';
 
 interface AppearanceContextType {
   fontPresetId: string;
+  /** Id of the selected multi-color palette. */
   colorPresetId: string;
-  /** The resolved color preset for the current selection (handles "custom"). */
+  /** The resolved palette for the current selection. */
   colorPreset: ColorPreset;
-  /** The user's saved custom colors (editable in the "make your own" section). */
-  customColors: CustomColors;
   setFontPreset: (id: string) => void;
   setColorPreset: (id: string) => void;
-  /** Save custom primary/secondary and switch to the custom theme. */
-  setCustomColors: (colors: CustomColors) => void;
+  /** The six colors of the user's own palette ("Make your own"). */
+  customPalette: string[];
+  /** Save the user's palette and switch to it. */
+  setCustomPalette: (colors: string[]) => void;
+  /** How Color Block blocks are painted (solid / gradient / aurora / …). */
+  finish: BlockFinish;
+  setFinish: (finish: BlockFinish) => void;
 }
 
 const AppearanceContext = createContext<AppearanceContextType>({
-  fontPresetId: 'shantell',
-  colorPresetId: 'golden',
-  colorPreset: COLOR_PRESETS[0],
-  customColors: { primary: DEFAULT_CUSTOM_PRIMARY, secondary: DEFAULT_CUSTOM_SECONDARY },
+  fontPresetId: SYSTEM_FONT_ID,
+  colorPresetId: DEFAULT_COLOR_PRESET_ID,
+  colorPreset: PALETTE_PRESETS[0],
   setFontPreset: () => {},
   setColorPreset: () => {},
-  setCustomColors: () => {},
+  customPalette: DEFAULT_CUSTOM_PALETTE,
+  setCustomPalette: () => {},
+  finish: 'solid',
+  setFinish: () => {},
 });
+
+const FINISH_KEY = 'pollerama:blockFinish';
+const PALETTE_KEY = 'pollerama:colorPreset';
+const CUSTOM_PALETTE_KEY = 'pollerama:customPalette';
+
+function readCustomPalette(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CUSTOM_PALETTE_KEY) || 'null');
+    if (Array.isArray(parsed) && parsed.every((c) => typeof c === 'string')) return parsed;
+  } catch {
+    /* fall through to the default */
+  }
+  return DEFAULT_CUSTOM_PALETTE;
+}
 
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
   const [fontPresetId, setFontPresetId] = useState(() => {
@@ -51,17 +67,22 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     return SYSTEM_FONT_ID;
   });
   const [colorPresetId, setColorPresetId] = useState(() => {
-    const stored = localStorage.getItem('pollerama:colorPreset');
-    if (stored) return stored;
-    // New installs start on a multi-color palette (Color Block). Existing users
-    // keep whatever they picked.
-    localStorage.setItem('pollerama:colorPreset', DEFAULT_COLOR_PRESET_ID);
-    return DEFAULT_COLOR_PRESET_ID;
+    // Only multi-color palettes exist now; retired single-color presets and the
+    // old custom theme migrate to the closest palette (resolvePaletteId).
+    const stored = localStorage.getItem(PALETTE_KEY);
+    const resolved = resolvePaletteId(stored);
+    if (resolved !== stored) localStorage.setItem(PALETTE_KEY, resolved);
+    return resolved;
   });
-  const [customColors, setCustomColorsState] = useState<CustomColors>(() => ({
-    primary: localStorage.getItem('pollerama:customPrimary') || DEFAULT_CUSTOM_PRIMARY,
-    secondary: localStorage.getItem('pollerama:customSecondary') || DEFAULT_CUSTOM_SECONDARY,
-  }));
+  const [finish, setFinishState] = useState<BlockFinish>(() => {
+    const stored = localStorage.getItem(FINISH_KEY);
+    if ((BLOCK_FINISHES as readonly string[]).includes(stored ?? '')) return stored as BlockFinish;
+    // No finish picked yet: start each user on a random one (kept from then on),
+    // so the app looks different from install to install.
+    const random = BLOCK_FINISHES[Math.floor(Math.random() * BLOCK_FINISHES.length)];
+    localStorage.setItem(FINISH_KEY, random);
+    return random;
+  });
 
   useEffect(() => {
     document.body.style.fontFamily = getFontPreset(fontPresetId).fontFamily;
@@ -73,25 +94,27 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const setColorPreset = useCallback((id: string) => {
-    localStorage.setItem('pollerama:colorPreset', id);
-    setColorPresetId(id);
+    const resolved = resolvePaletteId(id);
+    localStorage.setItem(PALETTE_KEY, resolved);
+    setColorPresetId(resolved);
   }, []);
 
-  // Persist the custom colors and select the custom theme so the change is visible.
-  const setCustomColors = useCallback((colors: CustomColors) => {
-    localStorage.setItem('pollerama:customPrimary', colors.primary);
-    localStorage.setItem('pollerama:customSecondary', colors.secondary);
-    localStorage.setItem('pollerama:colorPreset', CUSTOM_PRESET_ID);
-    setCustomColorsState(colors);
-    setColorPresetId(CUSTOM_PRESET_ID);
+  const [customPalette, setCustomPaletteState] = useState<string[]>(readCustomPalette);
+  const setCustomPalette = useCallback((colors: string[]) => {
+    localStorage.setItem(CUSTOM_PALETTE_KEY, JSON.stringify(colors));
+    localStorage.setItem(PALETTE_KEY, CUSTOM_PALETTE_ID);
+    setCustomPaletteState(colors);
+    setColorPresetId(CUSTOM_PALETTE_ID);
+  }, []);
+
+  const setFinish = useCallback((f: BlockFinish) => {
+    localStorage.setItem(FINISH_KEY, f);
+    setFinishState(f);
   }, []);
 
   const colorPreset = useMemo(
-    () =>
-      colorPresetId === CUSTOM_PRESET_ID
-        ? buildCustomPreset(customColors.primary, customColors.secondary)
-        : getColorPreset(colorPresetId),
-    [colorPresetId, customColors]
+    () => (colorPresetId === CUSTOM_PALETTE_ID ? buildCustomPalette(customPalette) : getColorPreset(colorPresetId)),
+    [colorPresetId, customPalette]
   );
 
   return (
@@ -100,10 +123,12 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
         fontPresetId,
         colorPresetId,
         colorPreset,
-        customColors,
         setFontPreset,
         setColorPreset,
-        setCustomColors,
+        customPalette,
+        setCustomPalette,
+        finish,
+        setFinish,
       }}
     >
       {children}
