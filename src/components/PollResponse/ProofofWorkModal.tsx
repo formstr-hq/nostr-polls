@@ -27,16 +27,17 @@ export const ProofofWorkModal: React.FC<ProofofWorkModalInterface> = ({
   return (
     <Modal open={show} style={{ top: "15%", maxWidth: "80%", left: "10%" }}>
       <div>
-        <h3 style={{ color: "#FAD13F" }}>Proof Of Work</h3>
         <Box
-          style={{
+          sx={{
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexDirection: "column",
-            color: "black",
-            backgroundColor: "white",
+            color: "text.primary",
+            bgcolor: "cb.slab",
+            borderRadius: "28px",
             minHeight: 400,
+            p: 3,
           }}
         >
           <Typography>Calculating Proof of Work</Typography>

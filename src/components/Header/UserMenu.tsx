@@ -264,7 +264,7 @@ export const UserMenu: React.FC = () => {
             <MenuItem onClick={handleLogOut}>Log Out</MenuItem>
 
             <ListItem key="color-scheme">
-              <ColorSchemeToggle />
+              <ColorSchemeToggle compact />
             </ListItem>
 
             {user?.privateKey && (
@@ -295,7 +295,7 @@ export const UserMenu: React.FC = () => {
               Log In
             </MenuItem>
             <ListItem key="color-scheme">
-              <ColorSchemeToggle />
+              <ColorSchemeToggle compact />
             </ListItem>
           </>
         )}

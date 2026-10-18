@@ -9,7 +9,7 @@ const MODES = [
 ] as const;
 
 // Segmented control (Color Block): the active mode is an ink pill.
-export const ColorSchemeToggle: React.FC = () => {
+export const ColorSchemeToggle: React.FC<{ compact?: boolean }> = ({ compact }) => {
     const {mode, setMode} = useColorScheme()
     return (
         <Box role="radiogroup" aria-label="color scheme" sx={{display: "flex", gap: 0.5, p: 0.625, borderRadius: "18px", bgcolor: "cb.inner"}}>
@@ -20,9 +20,12 @@ export const ColorSchemeToggle: React.FC = () => {
                         key={value}
                         role="radio"
                         aria-checked={on}
+                        aria-label={label}
+                        title={label}
                         onClick={() => setMode(value)}
                         sx={{
                             flex: 1,
+                            minWidth: compact ? 44 : undefined,
                             height: 40,
                             gap: 0.75,
                             borderRadius: "14px",
@@ -35,7 +38,7 @@ export const ColorSchemeToggle: React.FC = () => {
                         }}
                     >
                         <Icon sx={{fontSize: 18}}/>
-                        {label}
+                        {!compact && label}
                     </ButtonBase>
                 );
             })}

@@ -115,7 +115,10 @@ const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [menuFeed, setMenuFeed] = useState<string | null>(null);
 
-  const currentFeed = location.pathname.split("/")[2] || "polls";
+  // Only feed routes highlight a sidebar item.
+  const currentFeed = location.pathname.startsWith("/feeds")
+    ? location.pathname.split("/")[2] || "polls"
+    : "";
 
   // Get the currently-active sub-key for any feed (from localStorage)
   const getActiveSub = (feedValue: string): string => {
