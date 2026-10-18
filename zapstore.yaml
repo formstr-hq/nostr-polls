@@ -14,8 +14,11 @@ website: pollerama.fun
 icon: assets/icon.png
 images:
   - assets/polls.png
-  - assets/topics.png
+  - assets/home.png
+  - assets/create.png
+  - assets/explore.png
   - assets/movies.png
+  - assets/appearance.png
 release_notes: CHANGELOG.md
 changelog: CHANGELOG.md
 release_source: ./android/app/build/outputs/apk/release/app-release.apk
