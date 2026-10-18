@@ -59,10 +59,15 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
   }, [id, dateIso, user?.pubkey]);
 
   return (
-    <Card variant="outlined">
+    <Card>
       <CardContent>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Typography variant="h6">{label}</Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+            <Box sx={{ width: 40, height: 40, borderRadius: "13px", bgcolor: "cb.block", color: "cb.onBlock", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <SportsEsportsIcon />
+            </Box>
+            <Typography variant="h6">{label}</Typography>
+          </Box>
           <Stack direction="row" spacing={1}>
             <Button
               size="small"
@@ -97,16 +102,12 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
 
 export default function GamesFeed() {
   return (
-    <Box sx={{ p: 2, overflowY: "auto", height: "100%" }}>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-        <SportsEsportsIcon />
-        <Typography variant="h5">Games</Typography>
-      </Stack>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+    <Box sx={{ p: 1.25, pt: 1.5, overflowY: "auto", height: "100%" }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5, px: 0.5 }}>
         Everyone gets the same board today — scores are verified by replaying each
         run's recorded moves against the daily seed, not by trusting a server.
       </Typography>
-      <Stack spacing={2}>
+      <Stack spacing={1.25}>
         {GAMES.map((g) => (
           <GameCard key={g.id} {...g} />
         ))}

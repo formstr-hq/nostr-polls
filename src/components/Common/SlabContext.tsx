@@ -19,3 +19,12 @@ export const slabSx = (nested: boolean) => ({
   boxShadow: "none",
   overflow: "hidden",
 });
+
+/** sx for a list rendered as one slab (rows separated by hairlines). */
+export const slabListSx = {
+  mx: { xs: 1.25, sm: 1 },
+  mt: 1.25,
+  borderRadius: "24px",
+  bgcolor: "cb.slab",
+  overflow: "hidden",
+} as const;
