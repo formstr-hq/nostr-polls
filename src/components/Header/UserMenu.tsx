@@ -86,7 +86,7 @@ export const UserMenu: React.FC = () => {
   };
 
   return (
-    <div style={{ marginLeft: 10 }}>
+    <div>
       <Tooltip
         title={
           user?.pubkey
@@ -105,7 +105,13 @@ export const UserMenu: React.FC = () => {
           <Avatar
             src={profilePicture}
             onClick={(e) => setAnchorEl(e.currentTarget)}
-            sx={{ cursor: "pointer" }}
+            sx={{
+              cursor: "pointer",
+              width: 40,
+              height: 40,
+              // Ring in the block's text color so the avatar pops off the block.
+              boxShadow: "0 0 0 2.5px currentColor",
+            }}
           >
             {!profilePicture && (profileName?.[0] ?? "?")}
           </Avatar>

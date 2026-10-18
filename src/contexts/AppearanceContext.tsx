@@ -9,6 +9,7 @@ import {
   DEFAULT_CUSTOM_PRIMARY,
   DEFAULT_CUSTOM_SECONDARY,
   SYSTEM_FONT_ID,
+  DEFAULT_COLOR_PRESET_ID,
 } from '../styles/themes';
 
 interface CustomColors {
@@ -52,9 +53,10 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   const [colorPresetId, setColorPresetId] = useState(() => {
     const stored = localStorage.getItem('pollerama:colorPreset');
     if (stored) return stored;
-    const random = COLOR_PRESETS[Math.floor(Math.random() * COLOR_PRESETS.length)].id;
-    localStorage.setItem('pollerama:colorPreset', random);
-    return random;
+    // New installs start on a multi-color palette (Color Block). Existing users
+    // keep whatever they picked.
+    localStorage.setItem('pollerama:colorPreset', DEFAULT_COLOR_PRESET_ID);
+    return DEFAULT_COLOR_PRESET_ID;
   });
   const [customColors, setCustomColorsState] = useState<CustomColors>(() => ({
     primary: localStorage.getItem('pollerama:customPrimary') || DEFAULT_CUSTOM_PRIMARY,

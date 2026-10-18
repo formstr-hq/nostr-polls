@@ -1,6 +1,87 @@
 import {createTheme} from "@mui/material/styles";
 import {Theme} from "@mui/system/createTheme";
 import {CSSObject} from "@mui/material";
+import {ColorPreset} from "./themes";
+
+// ── Color Block tokens ──────────────────────────────────────────────────────
+// The design system (see designs/app): a solid "block" of the theme color holds
+// whatever is in focus, content sits on rounded "slabs" over a neutral page, and
+// secondary chrome is near-black "ink". Exposed as `theme.palette.cb` so any
+// component can reach them via sx paths such as `bgcolor: "cb.block"`.
+export interface ColorBlockTokens {
+  /** Block color for notes / general screens. */
+  block: string;
+  onBlock: string;
+  /** Block color for polls (differs from `block` only in multi-color palettes). */
+  poll: string;
+  onPoll: string;
+  /** Selection, unread and highlight color. */
+  selection: string;
+  onSelection: string;
+  /** Bright variant of the block color, readable on ink/black surfaces. */
+  accent: string;
+  accentPoll: string;
+  /** Neutral page behind slabs. */
+  page: string;
+  /** Content surface. */
+  slab: string;
+  /** Surface nested inside a slab (poll options, inputs). */
+  inner: string;
+  /** Near-black chrome (nav dock, mini player). */
+  ink: string;
+  onInk: string;
+  /** Translucent fill for controls sitting on the block. */
+  onBlockTint: string;
+}
+
+declare module "@mui/material/styles" {
+  interface Palette {
+    cb: ColorBlockTokens;
+  }
+  interface PaletteOptions {
+    cb?: ColorBlockTokens;
+  }
+}
+
+const luminance = (hex: string) => {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16) / 255);
+  const f = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+};
+
+/** Ink or white, whichever reads better on `bg`. */
+export const onColor = (bg: string) => (luminance(bg) > 0.3 ? "#141414" : "#ffffff");
+
+export function colorBlockTokens(preset: ColorPreset, mode: "light" | "dark"): ColorBlockTokens {
+  const dark = mode === "dark";
+  const pal = preset.palette;
+  const [c1, c2, c3] = pal
+    ? (dark ? pal.dark : pal.light)
+    : [
+        dark ? preset.darkPrimary : preset.lightPrimary,
+        dark ? preset.darkPrimary : preset.lightPrimary,
+        dark ? preset.darkPrimary : preset.lightPrimary,
+      ];
+  const [d1, d2] = pal ? pal.dark : [preset.darkPrimary, preset.darkPrimary];
+  return {
+    block: c1,
+    onBlock: onColor(c1),
+    poll: c2,
+    onPoll: onColor(c2),
+    selection: c3,
+    onSelection: onColor(c3),
+    accent: d1,
+    accentPoll: d2,
+    page: dark ? "#000000" : "#f2f2ef",
+    slab: dark ? "#141414" : "#ffffff",
+    inner: dark ? "#1f1f1f" : "#f4f4f1",
+    ink: dark ? "#1c1c1c" : "#141414",
+    onInk: "#ffffff",
+    onBlockTint: "rgba(0,0,0,0.13)",
+  };
+}
 
 export const getColorsWithTheme = (theme: Theme, styles: CSSObject, contrast: CSSObject = {}) => {
   const contrastStyles = Object.keys(styles).reduce<CSSObject>((map, key) => {
@@ -13,47 +94,51 @@ export const getColorsWithTheme = (theme: Theme, styles: CSSObject, contrast: CS
   }
 }
 
-export function buildTheme(
-  fontFamily: string,
-  lightPrimary: string,
-  darkPrimary: string,
-  lightBg: string,
-  darkBg: string,
-  lightSecondary: string = "#bdbdbc",
-  darkSecondary: string = "#bdbdbc",
-) {
+export function buildTheme(fontFamily: string, preset: ColorPreset) {
+  const light = colorBlockTokens(preset, "light");
+  const dark = colorBlockTokens(preset, "dark");
+  const lightSecondary = preset.lightSecondary ?? "#bdbdbc";
+  const darkSecondary = preset.darkSecondary ?? "#bdbdbc";
+
   return createTheme({
     typography: {
       fontFamily,
+      h4: { fontWeight: 900, letterSpacing: "-0.03em" },
+      h5: { fontWeight: 900, letterSpacing: "-0.03em" },
+      h6: { fontWeight: 800, letterSpacing: "-0.02em" },
     },
+    shape: { borderRadius: 14 },
     colorSchemes: {
       dark: {
         palette: {
           mode: "dark",
-          primary: { main: darkPrimary },
+          primary: { main: dark.block, contrastText: dark.onBlock },
           secondary: { main: darkSecondary },
-          background: { default: darkBg, paper: darkBg },
+          background: { default: dark.page, paper: dark.slab },
+          cb: dark,
         },
       },
       light: {
         palette: {
-          primary: { main: lightPrimary },
+          primary: { main: light.block, contrastText: light.onBlock },
           secondary: { main: lightSecondary },
-          background: { default: lightBg, paper: lightBg },
+          background: { default: light.page, paper: light.slab },
+          cb: light,
         },
       }
     },
     palette: {
       mode: "light",
-      primary: { main: lightPrimary },
+      primary: { main: light.block, contrastText: light.onBlock },
       secondary: { main: lightSecondary },
-      background: { default: lightBg, paper: lightBg },
+      background: { default: light.page, paper: light.slab },
+      cb: light,
     },
     components: {
       MuiCssBaseline: {
         styleOverrides: (theme) => ({
           body: {
-            backgroundColor: theme.palette.mode === 'dark' ? darkBg : lightBg,
+            backgroundColor: theme.palette.cb.page,
           }
         })
       },
@@ -62,23 +147,26 @@ export function buildTheme(
           root: {
             borderRadius: "50px",
             textTransform: "none",
+            fontWeight: 700,
+          },
+          contained: {
+            boxShadow: "none",
+            "&:hover": { boxShadow: "none" },
           },
           text: ({ theme }) => ({
-            color: theme.palette.mode === 'dark' ? theme.palette.primary.main : '#000000',
+            color: theme.palette.text.primary,
             '&:hover': {
-              backgroundColor: theme.palette.mode === 'dark'
-                ? 'rgba(255,255,255,0.08)'
-                : 'rgba(0,0,0,0.04)',
+              backgroundColor: theme.palette.action.hover,
             },
           }),
           outlined: ({ theme }) => ({
-            color: theme.palette.mode === 'dark' ? theme.palette.primary.main : '#000000',
-            borderColor: theme.palette.mode === 'dark' ? theme.palette.primary.main : '#000000',
+            color: theme.palette.text.primary,
+            borderColor: theme.palette.divider,
+            borderWidth: 1.5,
             '&:hover': {
-              backgroundColor: theme.palette.mode === 'dark'
-                ? 'rgba(255,255,255,0.08)'
-                : 'rgba(0,0,0,0.04)',
-              borderColor: theme.palette.mode === 'dark' ? theme.palette.primary.main : '#000000',
+              backgroundColor: theme.palette.action.hover,
+              borderColor: theme.palette.text.secondary,
+              borderWidth: 1.5,
             },
           }),
         },
@@ -86,11 +174,41 @@ export function buildTheme(
       MuiAppBar: {
         styleOverrides: {
           root: ({ theme }) => ({
-            // StyledAppBar sets bg to white (light) or black (dark).
-            // Override the inherited primary.contrastText so icons are
-            // always visible regardless of which primary color is active.
-            color: theme.palette.mode === 'dark' ? '#ffffff' : 'rgba(0,0,0,0.87)',
+            backgroundColor: theme.palette.cb.block,
+            color: theme.palette.cb.onBlock,
+            boxShadow: "none",
           }),
+        },
+      },
+      MuiPaper: {
+        styleOverrides: {
+          root: { backgroundImage: "none" },
+          rounded: { borderRadius: 22 },
+        },
+      },
+      MuiCard: {
+        defaultProps: { elevation: 0 },
+        styleOverrides: {
+          root: ({ theme }) => ({
+            borderRadius: 26,
+            backgroundColor: theme.palette.cb.slab,
+            border: "none",
+          }),
+        },
+      },
+      MuiDialog: {
+        styleOverrides: {
+          paper: { borderRadius: 28 },
+        },
+      },
+      MuiMenu: {
+        styleOverrides: {
+          paper: { borderRadius: 18 },
+        },
+      },
+      MuiChip: {
+        styleOverrides: {
+          root: { borderRadius: 12, fontWeight: 600 },
         },
       },
       MuiModal: {
@@ -100,15 +218,15 @@ export function buildTheme(
           },
         },
       },
-      // Floating action buttons carry the secondary accent by default, so the
-      // theme's secondary color shows up on the app's primary actions. A Fab that
-      // sets its own `color` prop still wins (defaultProps only fill the gap).
       MuiFab: {
         defaultProps: {
-          color: "secondary",
+          color: "primary",
+        },
+        styleOverrides: {
+          root: { boxShadow: "0 14px 28px -12px rgba(0,0,0,0.5)" },
         },
       },
-      // Inline links pick up the secondary accent too.
+      // Inline links pick up the secondary accent.
       MuiLink: {
         styleOverrides: {
           root: ({ theme }) => ({
@@ -117,16 +235,17 @@ export function buildTheme(
           }),
         },
       },
-      // Tab bars: the active-tab indicator + label use the secondary accent (the
-      // top-level feed nav stays primary; these in-page tabs read as secondary).
       MuiTabs: {
         defaultProps: {
           indicatorColor: "secondary",
           textColor: "secondary",
         },
       },
-      // Toggles, sliders (e.g. the music scrubber), and spinners default to the
-      // secondary accent. A component that sets its own `color` prop still wins.
+      MuiTab: {
+        styleOverrides: {
+          root: { textTransform: "none", fontWeight: 700 },
+        },
+      },
       MuiSwitch: {
         defaultProps: { color: "secondary" },
       },
@@ -135,6 +254,11 @@ export function buildTheme(
       },
       MuiCircularProgress: {
         defaultProps: { color: "secondary" },
+      },
+      MuiOutlinedInput: {
+        styleOverrides: {
+          root: { borderRadius: 14 },
+        },
       },
       MuiAvatar: {
         styleOverrides: {
@@ -156,12 +280,3 @@ export function buildTheme(
     },
   });
 }
-
-// Default theme instance — used as a static fallback
-export const baseTheme = buildTheme(
-  '"Shantell Sans", sans-serif',
-  '#DAA520',
-  '#FAD13F',
-  '#f5f4f1',
-  '#3d3d3d',
-);

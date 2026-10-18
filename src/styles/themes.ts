@@ -15,6 +15,15 @@ export interface ColorPreset {
   /** Accent (MUI `secondary`) colors — complements the primary; used throughout. */
   lightSecondary?: string;
   darkSecondary?: string;
+  /**
+   * Multi-color palettes only: three colors per mode — [notes/general, polls,
+   * selection/highlights]. Single-color presets leave this unset and use the
+   * primary color everywhere.
+   */
+  palette?: {
+    light: [string, string, string];
+    dark: [string, string, string];
+  };
 }
 
 /** OLED-friendly pure black used as the dark background for every preset. */
@@ -154,12 +163,69 @@ export const COLOR_PRESETS: ColorPreset[] = [
   },
 ];
 
+/**
+ * Multi-color palettes (Color Block). Each content type owns a color: notes and
+ * general screens use the first, polls the second, and selection/highlights the
+ * third. Listed after the single-color presets in Appearance settings.
+ */
+export const PALETTE_PRESETS: ColorPreset[] = [
+  {
+    id: 'festival',
+    name: 'Festival',
+    lightPrimary: '#F4B400',
+    darkPrimary: '#FFD24A',
+    lightBg: '#f2f2ef',
+    darkBg: OLED_BLACK,
+    lightSecondary: '#5B5BD6',
+    darkSecondary: '#8B8BFF',
+    palette: {
+      light: ['#F4B400', '#FF5A5F', '#5B5BD6'],
+      dark: ['#FFD24A', '#FF7A7E', '#8B8BFF'],
+    },
+  },
+  {
+    id: 'lagoon',
+    name: 'Lagoon',
+    lightPrimary: '#0FA3B1',
+    darkPrimary: '#3FE0EC',
+    lightBg: '#f2f2ef',
+    darkBg: OLED_BLACK,
+    lightSecondary: '#B07A00',
+    darkSecondary: '#FFCA4D',
+    palette: {
+      light: ['#0FA3B1', '#3D5AFE', '#FFB400'],
+      dark: ['#3FE0EC', '#7C8CFF', '#FFCA4D'],
+    },
+  },
+  {
+    id: 'orchard',
+    name: 'Orchard',
+    lightPrimary: '#2BB673',
+    darkPrimary: '#5CE39A',
+    lightBg: '#f2f2ef',
+    darkBg: OLED_BLACK,
+    lightSecondary: '#C2185B',
+    darkSecondary: '#FF6FA0',
+    palette: {
+      light: ['#2BB673', '#FF7A1A', '#E0457B'],
+      dark: ['#5CE39A', '#FF9A4D', '#FF6FA0'],
+    },
+  },
+];
+
+/** Palette shown to brand-new installs. */
+export const DEFAULT_COLOR_PRESET_ID = 'festival';
+
 export function getFontPreset(id: string): FontPreset {
   return FONT_PRESETS.find(f => f.id === id) ?? FONT_PRESETS[0];
 }
 
 export function getColorPreset(id: string): ColorPreset {
-  return COLOR_PRESETS.find(c => c.id === id) ?? COLOR_PRESETS[0];
+  return (
+    COLOR_PRESETS.find(c => c.id === id) ??
+    PALETTE_PRESETS.find(c => c.id === id) ??
+    COLOR_PRESETS[0]
+  );
 }
 
 /** Id of the user-defined "make your own" theme. */
