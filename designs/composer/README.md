@@ -20,6 +20,10 @@ Colors are the Golden preset from `src/styles/themes.ts`. Icons are the real `@m
 
 ## Style directions (`styles/`)
 
-`styles/00-style-directions.png` shows the same composer in three visual languages (Glass, Neumorphic, and our own **Sunlit Candy**), each in light and dark. There is also one image per style. The style CSS is in `src/styles.py` and layers on top of the base layout in `src/build.py`.
+- `00-style-directions.png`: Ballot, Aura and Color Block, each in light and dark. Also `ballot.png`, `aura.png`, `block.png` and `ballot-detail.png`.
+- `block-presets.png`: **Color Block** (current favorite) across all 8 presets, light and dark.
+- `block-palettes.png`: idea for multi-color palettes (notes, polls and selection each get their own color).
 
-Regenerate with `python3 designs/composer/src/styles.py`, and the screens with `python3 designs/composer/src/build.py` (needs Google Chrome).
+The style CSS is in `src/styles.py` and layers on top of the base layout in `src/build.py`.
+
+Regenerate with `python3 designs/composer/src/styles.py`, and the base screens with `python3 designs/composer/src/build.py` (needs Google Chrome).
