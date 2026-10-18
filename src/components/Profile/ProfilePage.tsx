@@ -283,24 +283,41 @@ const ProfilePage: React.FC = () => {
         maxWidth={800}
         mx="auto"
       sx={{
-        px: 2,
-        py: { xs: 2, sm: 4 },
+        px: { xs: 1.25, sm: 2 },
+        pt: 1.25,
+        pb: { xs: 12, md: 4 },
         height: "100%",
         width: "100%",
         overflowY: "auto",
         overflowX: "hidden",
       }}
     >
-      {/* Profile Header */}
-      <Card sx={{ mb: 3, overflow: "visible" }}>
+      {/* Profile Header — Color Block: the person in focus is the block */}
+      <Card
+        sx={{
+          mb: 2,
+          overflow: "hidden",
+          borderRadius: "30px",
+          bgcolor: "cb.block",
+          color: "cb.onBlock",
+          "& .MuiTypography-root": { color: "inherit" },
+          "& .MuiIconButton-root": { color: "inherit" },
+          "& .MuiChip-root": { color: "inherit", borderColor: "currentColor" },
+          "& .MuiChip-icon": { color: "inherit" },
+          "& .MuiButton-outlined": { color: "inherit", borderColor: "currentColor" },
+          "& .MuiButton-contained": { bgcolor: "cb.onBlock", color: "cb.block", "&:hover": { bgcolor: "cb.onBlock" } },
+          "& .MuiButton-text": { color: "inherit" },
+        }}
+      >
         {/* Banner */}
         <Box
           sx={{
             height: 120,
-            borderRadius: "4px 4px 0 0",
+            m: 1,
+            borderRadius: "24px",
             background: profile?.banner
               ? `url(${profile.banner}) center/cover no-repeat`
-              : "linear-gradient(135deg, #FAD13F 0%, transparent 100%)",
+              : "linear-gradient(135deg, rgba(0,0,0,0.18) 0%, rgba(0,0,0,0) 100%)",
           }}
         />
 
@@ -322,8 +339,8 @@ const ProfilePage: React.FC = () => {
               sx={{
                 width: 80,
                 height: 80,
-                border: "3px solid white",
-                boxShadow: 1,
+                border: "3px solid",
+                borderColor: "cb.onBlock",
                 flexShrink: 0,
               }}
             />
@@ -345,7 +362,7 @@ const ProfilePage: React.FC = () => {
                   flexWrap: "wrap",
                 }}
               >
-                <Typography variant="h5" sx={{ fontWeight: 600 }}>
+                <Typography variant="h5" sx={{ fontWeight: 900 }}>
                   {profile?.name || profile?.username || "Unnamed"}
                 </Typography>
                 {followsYou && (
@@ -556,12 +573,19 @@ const ProfilePage: React.FC = () => {
       </Card>
 
       {/* Tabs */}
-      <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 2 }}>
+      <Box sx={{ mb: 0.5, p: 0.625, borderRadius: "18px", bgcolor: "cb.slab" }}>
         <Tabs
           value={tabValue}
           onChange={handleTabChange}
           aria-label="profile tabs"
           variant="fullWidth"
+          // Segmented control: the selected tab is an ink pill.
+          TabIndicatorProps={{ sx: { display: "none" } }}
+          sx={{
+            minHeight: 40,
+            "& .MuiTab-root": { minHeight: 40, borderRadius: "14px", color: "text.secondary", fontWeight: 700 },
+            "& .MuiTab-root.Mui-selected": { bgcolor: "text.primary", color: "background.default" },
+          }}
         >
           <Tab label="Notes" />
           <Tab label="Polls" />
