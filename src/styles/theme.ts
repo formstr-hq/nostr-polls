@@ -1,4 +1,4 @@
-import {createTheme} from "@mui/material/styles";
+import {createTheme, darken, lighten} from "@mui/material/styles";
 import {Theme} from "@mui/system/createTheme";
 import {CSSObject} from "@mui/material";
 import {ColorPreset} from "./themes";
@@ -54,6 +54,25 @@ const luminance = (hex: string) => {
 /** Ink or white, whichever reads better on `bg`. */
 export const onColor = (bg: string) => (luminance(bg) > 0.3 ? "#141414" : "#ffffff");
 
+const contrast = (a: string, b: string) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+/**
+ * The block color made safe for text and icons on the page: darkened in light
+ * mode / lightened in dark mode only as much as needed for 3:1 contrast. Blocks
+ * keep the vivid color (cb.block); MUI's `primary` uses this readable one.
+ */
+export const readableOn = (color: string, mode: "light" | "dark") => {
+  const bg = mode === "dark" ? "#000000" : "#ffffff";
+  let c = color;
+  for (let i = 0; i < 12 && contrast(c, bg) < 3; i++) {
+    c = mode === "dark" ? lighten(c, 0.12) : darken(c, 0.1);
+  }
+  return c;
+};
+
 export function colorBlockTokens(preset: ColorPreset, mode: "light" | "dark"): ColorBlockTokens {
   const dark = mode === "dark";
   const pal = preset.palette;
@@ -97,8 +116,10 @@ export const getColorsWithTheme = (theme: Theme, styles: CSSObject, contrast: CS
 export function buildTheme(fontFamily: string, preset: ColorPreset) {
   const light = colorBlockTokens(preset, "light");
   const dark = colorBlockTokens(preset, "dark");
-  const lightSecondary = preset.lightSecondary ?? "#bdbdbc";
-  const darkSecondary = preset.darkSecondary ?? "#bdbdbc";
+  const lightSecondary = readableOn(preset.lightSecondary ?? "#757575", "light");
+  const darkSecondary = readableOn(preset.darkSecondary ?? "#bdbdbc", "dark");
+  const lightPrimary = readableOn(light.block, "light");
+  const darkPrimary = readableOn(dark.block, "dark");
 
   return createTheme({
     typography: {
@@ -112,7 +133,7 @@ export function buildTheme(fontFamily: string, preset: ColorPreset) {
       dark: {
         palette: {
           mode: "dark",
-          primary: { main: dark.block, contrastText: dark.onBlock },
+          primary: { main: darkPrimary, contrastText: onColor(darkPrimary) },
           secondary: { main: darkSecondary },
           background: { default: dark.page, paper: dark.slab },
           cb: dark,
@@ -120,7 +141,7 @@ export function buildTheme(fontFamily: string, preset: ColorPreset) {
       },
       light: {
         palette: {
-          primary: { main: light.block, contrastText: light.onBlock },
+          primary: { main: lightPrimary, contrastText: onColor(lightPrimary) },
           secondary: { main: lightSecondary },
           background: { default: light.page, paper: light.slab },
           cb: light,
@@ -129,7 +150,7 @@ export function buildTheme(fontFamily: string, preset: ColorPreset) {
     },
     palette: {
       mode: "light",
-      primary: { main: light.block, contrastText: light.onBlock },
+      primary: { main: lightPrimary, contrastText: onColor(lightPrimary) },
       secondary: { main: lightSecondary },
       background: { default: light.page, paper: light.slab },
       cb: light,

@@ -32,6 +32,7 @@ import { getAppBaseUrl } from "../../utils/platform";
 import { PrepareNote } from "./PrepareNote";
 import { NaddrHandlers } from "../Common/Parsers/NaddrHandlers";
 import { FeedbackMenu } from "../FeedbackMenu";
+import { SlabContext, slabSx, useInsideSlab } from "../Common/SlabContext";
 import { alpha, useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useResizeObserver } from "../../hooks/useResizeObserver";
@@ -366,11 +367,12 @@ export const Notes: React.FC<NotesProps> = ({
   const isSmall = useMediaQuery(theme.breakpoints.down("sm"));
   const isMedium = useMediaQuery(theme.breakpoints.between("sm", "md"));
   const maxContentHeight = isSmall ? 400 : isMedium ? 500 : 600;
-  const primaryColor = theme.palette.primary.main;
+  const insideSlab = useInsideSlab();
+  const fadeTo = insideSlab ? theme.palette.cb.inner : theme.palette.cb.slab;
   const subtleGradient = `linear-gradient(
     to bottom,
-    rgba(255,255,255,0),
-    ${alpha(primaryColor, 0.6)} 100%
+    ${alpha(fadeTo, 0)},
+    ${fadeTo} 85%
   )`;
 
   const checkOverflow = () => {
@@ -446,16 +448,8 @@ export const Notes: React.FC<NotesProps> = ({
           elevation={0}
           className="poll-response-form"
           sx={{
-            // Full-bleed and borderless: a feed item separates from the next by a
-            // hairline, not by a four-sided box floating on the page. The previous
-            // `variant="outlined"` + `m: 1` is what made notes read as cards.
-            m: 0,
-            border: 0,
-            borderRadius: 0,
-            borderBottom: 1,
-            borderColor: "divider",
-            bgcolor: "transparent",
-            boxShadow: "none",
+            // Color Block slab (or an inner surface when embedded in another item).
+            ...slabSx(insideSlab),
             opacity: hidden ? 0.5 : 1,
             pointerEvents: "auto",
           }}
@@ -500,7 +494,7 @@ export const Notes: React.FC<NotesProps> = ({
                   "&:hover .profile-name": { textDecoration: "underline" },
                 }}
               >
-                <Typography className="profile-name">
+                <Typography className="profile-name" sx={{ fontWeight: 700, fontSize: 15 }}>
                   {profiles?.get(event.pubkey)?.name ||
                     profiles?.get(event.pubkey)?.username ||
                     profiles?.get(event.pubkey)?.nip05 ||
@@ -731,6 +725,7 @@ export const Notes: React.FC<NotesProps> = ({
                 p: 2,
               }}
             >
+              <SlabContext.Provider value={true}>
               <TextWithImages content={displayContent} tags={event.tags} />
 
               {replyingToNevent ? (
@@ -745,6 +740,7 @@ export const Notes: React.FC<NotesProps> = ({
                 </div>
               ) : null}
 
+              </SlabContext.Provider>
               <ClientChip tags={event.tags} />
 
               {!isExpanded && isOverflowing && (

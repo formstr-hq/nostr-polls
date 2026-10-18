@@ -1,11 +1,10 @@
 import React from "react";
 import { Box, Checkbox, Radio, Typography, Avatar } from "@mui/material";
-import { alpha, useTheme } from "@mui/material/styles";
+import { useTheme } from "@mui/material/styles";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
 import { OptionResult } from "../../hooks/usePollResults";
 import { useAppContext } from "../../hooks/useAppContext";
 import { DEFAULT_IMAGE_URL } from "../../utils/constants";
-import { BAR_COLORS } from "./barColors";
 
 interface PollOptionsProps {
   options: [string, string, string][];
@@ -46,7 +45,6 @@ const PollOptions: React.FC<PollOptionsProps> = ({
         const percentage = result?.percentage ?? 0;
         const isLeading = showResults && !!result && result.count > 0 && result.count === maxCount;
         const isSelected = selectedResponses.includes(optionId);
-        const barColor = BAR_COLORS[optionIndex % BAR_COLORS.length];
         const responders = result?.responders ?? [];
 
         return (
@@ -54,10 +52,12 @@ const PollOptions: React.FC<PollOptionsProps> = ({
             key={optionId}
             sx={{
               position: "relative",
-              borderBottom: `1px solid ${alpha(theme.palette.text.primary, 0.1)}`,
-              "&:last-child": { borderBottom: "none" },
               overflow: "hidden",
-              borderRadius: 1,
+              // Color Block: each option is an inner slab; your pick gets a ring.
+              borderRadius: "14px",
+              bgcolor: "cb.inner",
+              mb: 0.75,
+              boxShadow: isSelected ? `inset 0 0 0 2px ${theme.palette.text.primary}` : "none",
             }}
           >
             {/* Gradient progress bar */}
@@ -68,10 +68,10 @@ const PollOptions: React.FC<PollOptionsProps> = ({
                 bottom: 0,
                 left: 0,
                 width: showResults ? `${percentage}%` : "0%",
-                background: isLeading
-                  ? `linear-gradient(90deg, ${alpha(barColor, 0.50)} 0%, ${alpha(barColor, 0.10)} 100%)`
-                  : `linear-gradient(90deg, ${alpha(barColor, 0.28)} 0%, ${alpha(barColor, 0.05)} 100%)`,
-                borderRadius: "0 6px 6px 0",
+                // Results fill in the poll color; the leading option is stronger.
+                bgcolor: "cb.poll",
+                opacity: isLeading ? 0.55 : 0.3,
+                borderRadius: "14px",
                 transition: "width 0.7s cubic-bezier(0.25, 1, 0.5, 1)",
                 pointerEvents: "none",
               }}
@@ -83,8 +83,10 @@ const PollOptions: React.FC<PollOptionsProps> = ({
                 position: "relative",
                 display: "flex",
                 alignItems: "center",
-                py: 0.75,
-                px: 0.5,
+                minHeight: 46,
+                py: 0.5,
+                px: 0.75,
+                fontWeight: 600,
                 cursor: disabled ? "default" : "pointer",
               }}
               onClick={() => !disabled && onResponseChange(optionId)}
@@ -95,7 +97,7 @@ const PollOptions: React.FC<PollOptionsProps> = ({
                   onChange={() => onResponseChange(optionId)}
                   disabled={disabled}
                   size="small"
-                  sx={{ p: 0.5, flexShrink: 0 }}
+                  sx={{ p: 0.5, flexShrink: 0, "&.Mui-checked": { color: "text.primary" } }}
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
@@ -104,7 +106,7 @@ const PollOptions: React.FC<PollOptionsProps> = ({
                   onChange={() => onResponseChange(optionId)}
                   disabled={disabled}
                   size="small"
-                  sx={{ p: 0.5, flexShrink: 0 }}
+                  sx={{ p: 0.5, flexShrink: 0, "&.Mui-checked": { color: "text.primary" } }}
                   onClick={(e) => e.stopPropagation()}
                 />
               )}
@@ -146,8 +148,8 @@ const PollOptions: React.FC<PollOptionsProps> = ({
                     sx={{
                       minWidth: 32,
                       textAlign: "right",
-                      fontWeight: isLeading ? 700 : 400,
-                      opacity: 0.9,
+                      fontWeight: 800,
+                      fontSize: 13.5,
                     }}
                   >
                     {percentage.toFixed(0)}%
