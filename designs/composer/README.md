@@ -18,4 +18,8 @@ No existing composer feature is removed.
 
 Colors are the Golden preset from `src/styles/themes.ts`. Icons are the real `@mui/icons-material` Rounded set. The exact CSS (sizes, radii, spacing) is in `src/build.py`.
 
-Regenerate with `python3 designs/composer/src/build.py` (needs Google Chrome).
+## Style directions (`styles/`)
+
+`styles/00-style-directions.png` shows the same composer in three visual languages (Glass, Neumorphic, and our own **Sunlit Candy**), each in light and dark. There is also one image per style. The style CSS is in `src/styles.py` and layers on top of the base layout in `src/build.py`.
+
+Regenerate with `python3 designs/composer/src/styles.py`, and the screens with `python3 designs/composer/src/build.py` (needs Google Chrome).

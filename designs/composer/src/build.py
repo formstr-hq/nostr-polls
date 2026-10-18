@@ -19,6 +19,18 @@ CHROME = os.environ.get('CHROME', 'google-chrome')
 
 # ---------------------------------------------------------------- styles
 CSS = r"""
+/* floating tool dock: one capsule of tools + a separate round preview button */
+.tray{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px 12px;flex:none;position:relative}
+.tools{display:flex;gap:2px;padding:4px;border-radius:999px;background:var(--surface);border:1px solid var(--div);box-shadow:0 6px 20px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.05)}
+.tool{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--sec);flex:none}
+.tool span{display:none}
+.tool.on-warn{background:var(--warn-tint);color:var(--warn)}
+.tool.pv{width:50px;height:50px;background:var(--text);color:var(--bg);box-shadow:0 6px 20px rgba(0,0,0,.15)}
+.tool.pv.on{background:var(--pri);color:var(--onpri)}
+.dark .tools{background:#1a1a1a}
+.draft{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;color:var(--text2)}
+.draft::before{content:"·";margin-right:2px}
+
 :root{
   /* Golden preset (src/styles/themes.ts) */
   --pri:#DAA520; --onpri:#1b1b1b; --sec:#B45309; --onsec:#fff;
@@ -280,20 +292,28 @@ def appbar(kind='note', post='Post', post_on=True, drafts=3, pins=(), back=False
       <div class="btn fill{'' if post_on else ' dis'}"{pin("post","r",-6,-8)}>{post}</div>
     </div>'''
 
-def toolbar(kind='note', expiry=False, saved='Saved', preview=False, pins=()):
+def toolbar(kind='note', expiry=False, preview=False, pins=()):
+    """Floating tool tray: separate labeled pills above the keyboard, no full-width strip."""
     P = dict(pins)
-    def pin(k, side='c', dx=0, dy=-14):
+    def pin(k, side='c', dx=0, dy=-12):
         return f' data-pin="{P[k]}" data-side="{side}" data-dx="{dx}" data-dy="{dy}"' if k in P else ''
-    b = [f'<div class="iconbtn"{pin("attach")}>{ic("AddPhotoAlternateRounded",24)}</div>',
-         f'<div class="iconbtn">{ic("EmojiEmotionsRounded",24)}</div>',
-         f'<div class="iconbtn"{pin("at")}>{ic("AlternateEmailRounded",23)}</div>',
-         f'<div class="iconbtn">{ic("TagRounded",23)}</div>']
+    def tool(key, icon, label=None, cls=''):
+        lab = f'<span>{label}</span>' if label else ''
+        return f'<div class="tool{" round" if not label else ""} {cls}"{pin(key)}>{ic(icon,19)}{lab}</div>'
+    b = [tool('attach','AddPhotoAlternateRounded','Media'),
+         tool('emoji','EmojiEmotionsRounded'),
+         tool('at','AlternateEmailRounded'),
+         tool('hash','TagRounded')]
     if kind == 'note':
-        b.append(f'<div class="iconbtn{" warnon" if expiry else ""}"{pin("timer")}>{ic("TimerRounded",23)}</div>')
-        b.append(f'<div class="iconbtn"{pin("ai")}>{ic("AutoFixHighRounded",22)}</div>')
-    sv = (f'<div class="saved"{pin("saved","c",0,-14)}>{ic("CloudDoneRounded",17)}{saved}</div>' if saved else '')
-    pv = f'<div class="iconbtn{" tonal" if preview else ""}" style="color:var(--text)"{pin("preview")}>{ic("VisibilityRounded",22)}</div>'
-    return f'<div class="toolbar">{"".join(b)}<div class="sp"></div>{sv}{pv}</div>'
+        b.append(tool('timer','TimerRounded','24h' if expiry else 'Expire','on-warn' if expiry else ''))
+        b.append(tool('ai','AutoFixHighRounded','Proofread'))
+    pv = f'<div class="tool round pv{" on" if preview else ""}"{pin("preview")}>{ic("VisibilityRounded",20)}</div>'
+    return f'<div class="tray"><div class="tools">{"".join(b)}</div>{pv}</div>'
+
+def who(saved=None, pin=None):
+    p = f' data-pin="{pin}" data-side="r" data-dx="4" data-dy="-4"' if pin else ''
+    sv = f'<span class="draft"{p}>{ic("CloudDoneRounded",14)}{saved}</span>' if saved else ''
+    return f'<div class="who"><b>abhay</b>{sv}</div>'
 
 def keyboard(sugg=('the','and','I')):
     r1 = ''.join(f'<div class="key">{c}</div>' for c in 'qwertyuiop')
@@ -318,14 +338,16 @@ def legend(kicker, title, lede, items):
 def page(body, cls='board', dark=False):
     return f'<!doctype html><html><head><meta charset="utf-8"><style>{CSS}</style></head><body><div class="{cls}">{body}</div>{PIN_JS}</body></html>'
 
-def render(name, html_doc, w, h):
-    p = os.path.join(TMP, name + '.html'); open(p, 'w').write(html_doc)
-    out = os.path.join(OUT, name + '.png')
+def render_to(out, html_doc, w, h):
+    p = os.path.join(TMP, os.path.basename(out) + '.html'); open(p, 'w').write(html_doc)
     subprocess.run([CHROME, '--headless', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
-                    '--force-device-scale-factor=2', '--virtual-time-budget=1500',
+                    '--allow-file-access-from-files', '--force-device-scale-factor=2', '--virtual-time-budget=1500',
                     f'--window-size={w},{h}', f'--screenshot={out}', 'file://' + p],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     print('wrote', os.path.relpath(out))
+
+def render(name, html_doc, w, h):
+    render_to(os.path.join(OUT, name + '.png'), html_doc, w, h)
 
 BOARD_W, BOARD_H = 1240, 970
 def board(name, phone_html, leg, dark=False):
@@ -353,17 +375,17 @@ def n_empty(dark=False, pins=True):
         <div class="text"><span class="caret"></span><span class="ph">What’s on your mind?</span></div>
       </div></div>
       <div class="meta">{audience_chip(pin=5 if pins else None)}</div>
-    </div></div>''' + toolbar('note', saved=None, pins=T) + keyboard(('I','The','Just'))
+    </div></div>''' + toolbar('note', pins=T) + keyboard(('I','The','Just'))
     return inner
 
 def n_filled(dark=False, pins=True):
     P = [('post',6)] if pins else []
-    T = [('timer',7),('saved',8)] if pins else []
+    T = [('timer',7)] if pins else []
     pin = (lambda n, side='r', dx=0, dy=0: f' data-pin="{n}" data-side="{side}" data-dx="{dx}" data-dy="{dy}"') if pins else (lambda *a, **k: '')
     inner = appbar('note', pins=P) + f'''
     <div class="content"><div class="scroll">
       <div class="editor"><div class="av"></div><div class="body">
-        <div class="who"><b>abhay</b></div>
+        {who('Draft saved', 8 if pins else None)}
         <div class="text"{pin(1,'l',-6,30)}>{note_text_filled()}</div>
       </div></div>
       <div class="media">
@@ -381,14 +403,14 @@ def n_filled(dark=False, pins=True):
       <div style="padding:18px 0 0 52px">
         <div class="hint"{pin(5,'l',-20,-2)}>{ic("InfoOutlined",16)}Paste or drop images and videos anywhere to attach.</div>
       </div>
-    </div></div>''' + toolbar('note', expiry=True, saved='Saved', pins=T)
+    </div></div>''' + toolbar('note', expiry=True, pins=T)
     return inner
 
 def n_mention():
     inner = appbar('note') + f'''
     <div class="content"><div class="scroll">
       <div class="editor"><div class="av"></div><div class="body">
-        <div class="who"><b>abhay</b></div>
+        {who('Saving…')}
         <div class="text">Shoutout to <span class="mention" style="background:var(--pri-tint2);color:var(--text)">@mi</span><span class="caret"></span></div>
       </div></div>
     </div>
@@ -396,7 +418,7 @@ def n_mention():
       <div class="mrow on"><div class="av sm g"></div><div style="flex:1"><b>Mira Okafor</b><span>mira@nostr.example</span></div>{ic("KeyboardReturnRounded",18,"var(--text2)")}</div>
       <div class="mrow"><div class="av sm b"></div><div><b>Mike Dilger</b><span>mike@gossip.example</span></div></div>
       <div class="mrow"><div class="av sm p"></div><div><b>Milo</b><span>npub1m1lo…8xq2</span></div></div>
-    </div></div>''' + toolbar('note', saved='Saving…', pins=[('at',2)]) + keyboard(('Mira','Mike','Milo'))
+    </div></div>''' + toolbar('note', pins=[('at',2)]) + keyboard(('Mira','Mike','Milo'))
     return inner
 
 def sheet_wrap(base, sheet):
@@ -502,7 +524,7 @@ def p_empty():
         <div class="label" style="margin-bottom:10px">Or start from a template</div>
         <div class="tmpl">{tc}</div></div>
       <div style="padding-top:20px" data-pin="4" data-side="r" data-dx="6" data-dy="40">{SETTINGS_ROWS('Single choice','In 7 days','Off')}</div>
-    </div></div>''' + toolbar('poll', saved=None)
+    </div></div>''' + toolbar('poll')
     return inner
 
 def p_filled(pins=True, dark=False):
@@ -510,7 +532,7 @@ def p_filled(pins=True, dark=False):
     inner = appbar('poll', pins=[('post',8)] if pins else []) + f'''
     <div class="content"><div class="scroll">
       <div class="editor"><div class="av"></div><div class="body">
-        <div class="who"><b>abhay</b></div>
+        {who('Draft saved')}
         <div class="q">Best way to start a Sunday? <span class="hash" style="font-weight:700">#coffee</span></div>
       </div></div>
       <div class="opts">
@@ -521,7 +543,7 @@ def p_filled(pins=True, dark=False):
         <div class="addopt"{pin(5,'r',6,12)}>{ic("AddRounded",20)}Add option</div>
       </div>
       <div style="padding-top:18px"{pin(6,'r',6,20)}>{SETTINGS_ROWS('Single choice','In 3 days','Off')}</div>
-    </div></div>''' + toolbar('poll', saved='Saved', pins=[('preview',7)] if pins else [])
+    </div></div>''' + toolbar('poll', pins=[('preview',7)] if pins else [])
     return inner
 
 def p_type():
@@ -628,7 +650,7 @@ def overview(items):
 # ---------------------------------------------------------------- main
 if __name__ == '__main__':
     board('01-note-empty', n_empty(), legend('Composer · note', 'Note — empty, keyboard open',
-        'Opens straight into writing. The old stacked card (tabs, form, big buttons, preview toggle) becomes a full-screen editor. Every action sits in one bar above the keyboard.',
+        'Opens straight into writing. The old stacked card (tabs, form, big buttons, preview toggle) becomes a full-screen editor. Tools live in a floating capsule above the keyboard, not a full-width toolbar strip.',
         [('Close','changed','Closes the composer. Drafts already autosave locally, so nothing is lost and there’s no confirm dialog.'),
          ('Note / Poll switch','changed','Replaces the full-width tabs. Text you’ve typed carries over, as it does now (shared <code>eventContent</code>).'),
          ('Drafts','same','Opens <code>/drafts</code>. The badge shows the draft count.'),
