@@ -10,6 +10,7 @@ import { useDMContext } from "../../hooks/useDMContext";
 import { SearchModal } from "../Search/SearchModal";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { isPollLocation, routeInfo } from "../Shell/navConfig";
+import { useHeaderTitleOverride } from "../../contexts/HeaderTitleContext";
 
 /**
  * Color Block header: a solid block of the theme color with a rounded bottom. It
@@ -22,6 +23,7 @@ const Header: React.FC = () => {
   const { unreadTotal } = useDMContext();
   const { items: subNavItems } = useSubNav();
   const [searchOpen, setSearchOpen] = useState(false);
+  const titleOverride = useHeaderTitleOverride();
   const info = {
     ...routeInfo(location.pathname),
     poll: isPollLocation(location.pathname, location.search),
@@ -75,6 +77,9 @@ const Header: React.FC = () => {
               <ArrowBackIcon />
             </IconButton>
           )}
+          {titleOverride ? (
+            <Box sx={{ flex: 1, minWidth: 0, ml: 0.5, fontWeight: 800, fontSize: 18 }}>{titleOverride}</Box>
+          ) : (
           <ButtonBase
             onClick={() => navigate("/")}
             aria-label="Go home"
@@ -97,6 +102,7 @@ const Header: React.FC = () => {
           >
             {info.title}
           </ButtonBase>
+          )}
           <IconButton color="inherit" onClick={() => setSearchOpen(true)} aria-label="Search">
             <SearchIcon />
           </IconButton>

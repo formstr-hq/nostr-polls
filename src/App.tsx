@@ -38,6 +38,7 @@ import { ModerationProvider } from "./contexts/moderation-context";
 import { TranslationBatchProvider } from "./contexts/translation-batch-context";
 import { FeedScrollProvider } from "./contexts/FeedScrollContext";
 import { SubNavProvider } from "./contexts/SubNavContext";
+import { HeaderTitleProvider } from "./contexts/HeaderTitleContext";
 import { AppearanceProvider, useAppearance } from "./contexts/AppearanceContext";
 import NavSidebar from "./components/SidePane";
 import { DraggableCorner } from "./components/Common/DraggableCorner";
@@ -383,7 +384,9 @@ const App: React.FC = () => {
                               <AndroidNotifications />
                               <FeedScrollProvider>
                                 <SubNavProvider>
-                                  <AppContent />
+                                  <HeaderTitleProvider>
+                                    <AppContent />
+                                  </HeaderTitleProvider>
                                 </SubNavProvider>
                               </FeedScrollProvider>
                               <FloatingVideoPlayer />
