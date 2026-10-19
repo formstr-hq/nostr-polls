@@ -1,10 +1,13 @@
 # Build the SPA, then ship only the build + the gateway.
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# The app is Yarn 1 (yarn.lock + resolutions). npm ci fails on the
+# nostr-signer-capacitor-plugin / Capacitor 8 peer conflict.
+RUN corepack enable && corepack prepare yarn@1.22.22 --activate
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN yarn build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app

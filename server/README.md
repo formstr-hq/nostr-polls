@@ -51,8 +51,9 @@ reverse proxy → pollerama-web :8080
 ## Local
 
 ```bash
-npm run build
-(cd server && npm ci)
+yarn install --frozen-lockfile
+yarn build
+(cd server && npm ci)   # the gateway sidecar uses npm
 SITE_URL=http://localhost:8080 node server/index.mjs
 
 curl -s http://localhost:8080/note/<identifier> | grep -oE 'property="og:[^"]*" content="[^"]*"'
