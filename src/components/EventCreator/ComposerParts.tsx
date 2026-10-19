@@ -94,14 +94,22 @@ export const ComposerDock: React.FC<{
   submitting?: boolean;
   disabled?: boolean;
   poll?: boolean;
-}> = ({ tools, submitLabel, submitting, disabled, poll }) => {
+  /**
+   * Float at the bottom of the scrollport (the /create page). Set false inside
+   * a dialog/quote composer: there the dock should sit under the editor in
+   * normal flow so the keyboard/Post button can't cover the text being typed.
+   */
+  sticky?: boolean;
+}> = ({ tools, submitLabel, submitting, disabled, poll, sticky = true }) => {
   // Post wears the note or poll palette color.
   const post = useSectionColorAt(poll ? 1 : 0);
   return (
   <Box
     sx={{
-      position: "sticky",
-      bottom: { xs: "calc(12px + env(safe-area-inset-bottom))", md: 12 },
+      position: sticky ? "sticky" : "relative",
+      bottom: sticky
+        ? { xs: "calc(12px + env(safe-area-inset-bottom))", md: 12 }
+        : undefined,
       zIndex: 5,
       display: "flex",
       alignItems: "center",

@@ -75,6 +75,12 @@ interface NotesProps {
   extras?: React.ReactNode;
   hidden?: boolean;
   showReason?: React.ReactNode;
+  /**
+   * Render a read-only preview: no reaction/repost/comment row, no overflow
+   * menu, no follow button. Used by the quote composer, where the quoted note
+   * should read as content rather than as another interactive card.
+   */
+  hideActions?: boolean;
 }
 
 export const Notes: React.FC<NotesProps> = ({
@@ -82,6 +88,7 @@ export const Notes: React.FC<NotesProps> = ({
   extras,
   hidden = false,
   showReason,
+  hideActions = false,
 }) => {
   const navigate = useNavigate();
   const { profiles, fetchUserProfileThrottled, aiSettings, editsMap, editsHistoryMap, fetchEditsThrottled, addEventToMap } = useAppContext();
@@ -455,7 +462,7 @@ export const Notes: React.FC<NotesProps> = ({
           }}
           onContextMenu={handleContextMenu}
         >
-          {referencedEventId && (
+          {!hideActions && referencedEventId && (
             <Button
               variant="text"
               size="small"
@@ -510,6 +517,7 @@ export const Notes: React.FC<NotesProps> = ({
               </Box>
             }
             action={
+              hideActions ? undefined : (
               <Box sx={{ display: "flex", alignItems: "center" }}>
                 {user && !user.follows?.includes(event.pubkey) && (
                   <Button
@@ -529,6 +537,7 @@ export const Notes: React.FC<NotesProps> = ({
                   <MoreVertIcon />
                 </IconButton>
               </Box>
+              )
             }
             subheader={
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
@@ -778,7 +787,7 @@ export const Notes: React.FC<NotesProps> = ({
             </CardContent>
           </Card>
 
-          <FeedbackMenu event={event} />
+          {!hideActions && <FeedbackMenu event={event} />}
         </Card>
       )}
 

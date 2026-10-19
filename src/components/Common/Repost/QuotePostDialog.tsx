@@ -94,15 +94,18 @@ const QuotePostDialog: React.FC<QuotePostDialogProps> = ({ open, onClose, event 
               overflow: "hidden",
               opacity: 0.85,
               pointerEvents: "none",
+              // Notes/PollResponseForm set pointerEvents:auto on their own card;
+              // a quote preview must be inert all the way down.
+              "& *": { pointerEvents: "none !important" },
             }}
           >
             <Typography variant="caption" color="text.secondary" sx={{ px: 1.5, pt: 1, display: "block" }}>
               Quoting:
             </Typography>
             {event.kind === NOSTR_EVENT_KINDS.POLL ? (
-              <PollResponseForm pollEvent={event} />
+              <PollResponseForm pollEvent={event} hideActions />
             ) : (
-              <Notes event={event} />
+              <Notes event={event} hideActions />
             )}
           </Box>
         ) : (
@@ -115,6 +118,7 @@ const QuotePostDialog: React.FC<QuotePostDialogProps> = ({ open, onClose, event 
             eventContent={content}
             setEventContent={setContent}
             quotedEvent={event}
+            dockSticky={false}
             onPublishResult={(ev, result) => openModal(ev, result, "Quote publish results")}
           />
         ) : (
@@ -122,6 +126,7 @@ const QuotePostDialog: React.FC<QuotePostDialogProps> = ({ open, onClose, event 
             eventContent={content}
             setEventContent={setContent}
             quotedEvent={event}
+            dockSticky={false}
             onPublishResult={(ev, result) => openModal(ev, result, "Quote publish results")}
           />
         )}

@@ -1,6 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Tooltip, Box, IconButton, useTheme, Modal } from "@mui/material";
+import {
+  Tooltip,
+  Box,
+  IconButton,
+  useTheme,
+  Modal,
+  Popover,
+  Button,
+  Divider,
+} from "@mui/material";
 import FavoriteBorder from "@mui/icons-material/FavoriteBorder";
+import AddReactionOutlined from "@mui/icons-material/AddReactionOutlined";
 import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { Event, EventTemplate } from "nostr-tools/lib/types/core";
@@ -9,6 +19,11 @@ import { useRelays } from "../../../hooks/useRelays";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { dataLayer } from "@formstr/local-relay";
 import ReactionsDetailsModal from "./ReactionsDetailsModal";
+import {
+  QUICK_REACTIONS,
+  buildReactionTemplate,
+  displayReaction,
+} from "../../../utils/reactions";
 
 const LONG_PRESS_MS = 500;
 
@@ -44,6 +59,8 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const { relays } = useRelays();
   const [showPicker, setShowPicker] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [quickAnchor, setQuickAnchor] = useState<HTMLElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didLongPress = useRef(false);
   const theme = useTheme();
@@ -53,6 +70,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const startLongPress = () => {
     didLongPress.current = false;
     if (reactions.length === 0) return;
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
     longPressTimer.current = setTimeout(() => {
       didLongPress.current = true;
       setShowDetails(true);
@@ -68,7 +86,9 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
 
   const handleClick = () => {
     if (didLongPress.current) return;
-    setShowPicker(true);
+    // Amethyst-style: one tap opens the compact quick-reaction row. The full
+    // emoji picker is one more tap ("More reactions") from there.
+    setQuickAnchor(buttonRef.current);
   };
 
   // All of the current user's own reactions on this note (a user can stack more
@@ -107,24 +127,30 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     }
 
     // Tapping an emoji you've already reacted with toggles it off.
-    const existing = userReactions.find((r) => r.content === emoji);
+    const existing = userReactions.find(
+      (r) => displayReaction(r.content) === displayReaction(emoji)
+    );
     if (existing) {
       await removeReaction(existing);
       setShowPicker(false);
       return;
     }
 
-    const event: EventTemplate = {
-      content: emoji,
-      kind: 7,
-      tags: [["e", pollEvent.id, relays[0]]],
-      created_at: Math.floor(Date.now() / 1000),
-    };
+    // NIP-25: `e` targets the event, `p` its author, `k` its kind, and `a` for
+    // addressable targets. Built in one tested helper so reactions published
+    // here are readable by Amethyst and other clients.
+    const event = buildReactionTemplate(pollEvent, emoji, relays[0]);
 
     const finalEvent = await signEvent(event, user.privateKey);
     dataLayer.publishEvent(finalEvent!);
     addEventToMap(finalEvent!);
     setShowPicker(false);
+  };
+
+  /** React from the compact quick-reaction row and dismiss it. */
+  const handleQuickReaction = async (emoji: string) => {
+    setQuickAnchor(null);
+    await addReaction(emoji);
   };
 
   useEffect(() => {
@@ -133,14 +159,16 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     }
   }, [pollEvent.id, likesMap, fetchLikesThrottled, user]);
 
-  // Compute top emojis + count, preserving tags for custom emoji rendering
+  // Compute top emojis + count, preserving tags for custom emoji rendering.
+  // "+"/"-" are normalized so an Amethyst-style like clusters with ❤️.
   const getTopEmojis = () => {
     const emojiData: Record<string, { count: number; tags?: string[][] }> = {};
     reactions.forEach((r) => {
-      if (!emojiData[r.content]) {
-        emojiData[r.content] = { count: 0, tags: r.tags };
+      const emoji = displayReaction(r.content);
+      if (!emojiData[emoji]) {
+        emojiData[emoji] = { count: 0, tags: r.tags };
       }
-      emojiData[r.content].count += 1;
+      emojiData[emoji].count += 1;
     });
     const sorted = Object.entries(emojiData)
       .sort((a, b) => b[1].count - a[1].count)
@@ -158,7 +186,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
       : "Tap to react · Hold to see reactions"
     : userReaction
     ? "Change reaction"
-    : "React";
+    : "Tap to react";
 
   return (
     <Box
@@ -183,9 +211,15 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           }}
           onClick={handleClick}
         >
-          <IconButton size="small" sx={{ p: 0 }} component="span">
+          <IconButton
+            ref={buttonRef}
+            size="small"
+            sx={{ p: 0 }}
+            component="span"
+            aria-label="React"
+          >
             {userReaction ? (
-              <RenderEmoji content={userReaction.content} tags={userReaction.tags} />
+              <RenderEmoji content={displayReaction(userReaction.content)} tags={userReaction.tags} />
             ) : (
               <FavoriteBorder sx={{ p: 0 }} />
             )}
@@ -193,10 +227,10 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
 
           {/* Top 2 emojis next to button — clicking the cluster (incl. the
               "+x" badge) opens the reactions details modal instead of the
-              emoji picker. stopPropagation keeps the parent's click (which
-              opens the picker) from also firing. Only rendered when there are
-              reactions; an empty cluster would still carry its ml margin and
-              widen the row gap. */}
+              quick-reaction row. stopPropagation keeps the parent's click
+              (which opens the quick row) from also firing. Only rendered when
+              there are reactions; an empty cluster would still carry its ml
+              margin and widen the row gap. */}
           {hasReactions && (
           <Box
             display="flex"
@@ -235,6 +269,80 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           )}
         </Box>
       </Tooltip>
+
+      {/* Amethyst-style quick reaction row. Tapping an emoji reacts (or removes
+          that same reaction) immediately; "More reactions" opens the full
+          emoji picker. Published as a standard NIP-25 kind-7 event, so
+          reactions made here show up in Amethyst and vice versa. */}
+      <Popover
+        open={Boolean(quickAnchor)}
+        anchorEl={quickAnchor}
+        onClose={() => setQuickAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+        slotProps={{ paper: { sx: { p: 1, borderRadius: 3 } } }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.25 }}>
+          {QUICK_REACTIONS.map((emoji) => {
+            const mine = userReactions.some(
+              (r) => displayReaction(r.content) === emoji
+            );
+            return (
+              <Box
+                key={emoji}
+                role="button"
+                tabIndex={0}
+                aria-label={
+                  mine ? `Remove ${emoji} reaction` : `React with ${emoji}`
+                }
+                aria-pressed={mine}
+                onClick={() => void handleQuickReaction(emoji)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    void handleQuickReaction(emoji);
+                  }
+                }}
+                sx={{
+                  width: 40,
+                  height: 40,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 22,
+                  lineHeight: 1,
+                  borderRadius: 2,
+                  cursor: "pointer",
+                  userSelect: "none",
+                  border: 2,
+                  borderColor: mine ? "primary.main" : "transparent",
+                  bgcolor: mine ? "action.selected" : "transparent",
+                  "&:hover": { bgcolor: "action.hover" },
+                  "&:focus-visible": {
+                    outline: "2px solid",
+                    outlineColor: "primary.main",
+                  },
+                }}
+              >
+                {emoji}
+              </Box>
+            );
+          })}
+        </Box>
+        <Divider sx={{ my: 0.75 }} />
+        <Button
+          size="small"
+          fullWidth
+          startIcon={<AddReactionOutlined />}
+          onClick={() => {
+            setQuickAnchor(null);
+            setShowPicker(true);
+          }}
+          sx={{ justifyContent: "flex-start", textTransform: "none" }}
+        >
+          More reactions
+        </Button>
+      </Popover>
 
       {/* Emoji picker modal */}
       <Modal
