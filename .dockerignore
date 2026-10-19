@@ -1,0 +1,14 @@
+node_modules
+server/node_modules
+build
+.git
+.github
+android
+assets
+designs
+docs
+icons
+*.log
+.env
+.env.*
+!.env.example

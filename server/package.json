@@ -1,0 +1,12 @@
+{
+  "name": "pollerama-web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.23.5"
+  }
+}

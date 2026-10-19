@@ -47,6 +47,7 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "serve": "node server/index.mjs",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

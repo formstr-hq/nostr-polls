@@ -1,0 +1,13 @@
+services:
+  pollerama-web:
+    build: .
+    container_name: pollerama-web
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    environment:
+      PORT: 8080
+      SITE_URL: ${SITE_URL:-http://localhost:8080}
+      NOSTR_RELAYS: ${NOSTR_RELAYS:-wss://relay.formstr.app,wss://relay.damus.io,wss://relay.primal.net,wss://nos.lol,wss://relay.nostr.wirednet.jp,wss://nostr-01.yakihonne.com,wss://nostr21.com}
+      RELAY_TIMEOUT_MS: ${RELAY_TIMEOUT_MS:-10000}
+      DEFAULT_OG_IMAGE: ${DEFAULT_OG_IMAGE:-}
+    restart: unless-stopped
