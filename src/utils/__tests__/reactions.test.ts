@@ -1,8 +1,14 @@
 import { Event } from "nostr-tools";
 import {
-  QUICK_REACTIONS,
+  DEFAULT_QUICK_REACTIONS,
+  QUICK_REACTION_LIMIT,
   buildReactionTemplate,
   displayReaction,
+  loadQuickReactions,
+  mergeQuickReactions,
+  rememberQuickReaction,
+  removeQuickReaction,
+  resetQuickReactions,
 } from "../reactions";
 
 function event(overrides: Partial<Event> = {}): Event {
@@ -56,14 +62,6 @@ describe("buildReactionTemplate (NIP-25 / Amethyst interop)", () => {
     const reaction = buildReactionTemplate(event({ kind: 1 }), "🎉");
     expect(reaction.tags.some((t) => t[0] === "a")).toBe(false);
   });
-
-  it("keeps quick reactions as non-empty Unicode emoji", () => {
-    expect(QUICK_REACTIONS.length).toBeGreaterThan(0);
-    for (const emoji of QUICK_REACTIONS) {
-      expect(emoji.length).toBeGreaterThan(0);
-      expect(emoji).not.toMatch(/^:[a-z0-9_]+:$/i);
-    }
-  });
 });
 
 describe("displayReaction", () => {
@@ -78,5 +76,61 @@ describe("displayReaction", () => {
   it("passes emoji and custom shortcodes through", () => {
     expect(displayReaction("😂")).toBe("😂");
     expect(displayReaction(":blobcat:")).toBe(":blobcat:");
+  });
+});
+
+describe("quick reactions row", () => {
+  const pk = "d".repeat(64);
+
+  beforeEach(() => localStorage.clear());
+
+  it("starts from the defaults", () => {
+    expect(loadQuickReactions(pk)).toEqual([...DEFAULT_QUICK_REACTIONS]);
+  });
+
+  it("dedupes, normalizes and caps a row", () => {
+    expect(
+      mergeQuickReactions(["❤️", "+", "😂", "", 42, "❤️", "🚀"])
+    ).toEqual(["❤️", "😂", "🚀"]);
+    expect(mergeQuickReactions([...DEFAULT_QUICK_REACTIONS, "😢"])).toHaveLength(
+      QUICK_REACTION_LIMIT
+    );
+  });
+
+  it("promotes a newly picked emoji to the front and persists it", () => {
+    const next = rememberQuickReaction(pk, "😢");
+    expect(next[0]).toBe("😢");
+    expect(loadQuickReactions(pk)[0]).toBe("😢");
+  });
+
+  it("moves an existing emoji to the front instead of duplicating it", () => {
+    const next = rememberQuickReaction(pk, "🎉");
+    expect(next[0]).toBe("🎉");
+    expect(next.filter((e) => e === "🎉")).toHaveLength(1);
+  });
+
+  it("removes an emoji from the row only", () => {
+    rememberQuickReaction(pk, "😢");
+    const next = removeQuickReaction(pk, "😢");
+    expect(next).not.toContain("😢");
+    expect(loadQuickReactions(pk)).not.toContain("😢");
+  });
+
+  it("keeps rows isolated per account", () => {
+    rememberQuickReaction(pk, "😢");
+    expect(loadQuickReactions("e".repeat(64))).toEqual([
+      ...DEFAULT_QUICK_REACTIONS,
+    ]);
+  });
+
+  it("resets to the defaults", () => {
+    rememberQuickReaction(pk, "😢");
+    expect(resetQuickReactions(pk)).toEqual([...DEFAULT_QUICK_REACTIONS]);
+    expect(loadQuickReactions(pk)).toEqual([...DEFAULT_QUICK_REACTIONS]);
+  });
+
+  it("falls back to defaults when the stored value is corrupt", () => {
+    localStorage.setItem(`pollerama:quickReactions:${pk}`, "{not json");
+    expect(loadQuickReactions(pk)).toEqual([...DEFAULT_QUICK_REACTIONS]);
   });
 });
