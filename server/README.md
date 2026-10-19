@@ -24,6 +24,7 @@ reverse proxy → pollerama-web :8080
 | `/feeds/articles/:naddr` | kind 30023 preview |
 | `/result/:id`, `/respond/:id` | poll preview |
 | `/p/:id` | `noindex,nofollow`, no preview |
+| `/api/link-preview?url=` | OG metadata (JSON) for links inside notes; used by the web app |
 | `/og-default.png` | bundled fallback card |
 | `/healthz` | `{"ok":true}` |
 | everything else | the SPA shell / static assets |
@@ -43,6 +44,9 @@ reverse proxy → pollerama-web :8080
 | `SITE_NAME` | `Pollerama` | `og:site_name` |
 | `APP_TITLE` | `Pollerama` | generic title |
 | `DEFAULT_DESCRIPTION` | `Polls On Nostr!` | generic description |
+| `LINK_PREVIEW_TIMEOUT_MS` | `6000` | per-request timeout for `/api/link-preview` |
+| `LINK_PREVIEW_CACHE_MS` | `21600000` | in-memory link-preview TTL |
+| `LINK_PREVIEW_CACHE_MAX` | `5000` | max cached link previews |
 
 ## Local
 
@@ -73,6 +77,10 @@ configuration are committed here.
 - injected values are HTML-escaped; images must be `http(s)`
 - private `/p/...` is `noindex,nofollow`
 - previews are cached in memory for `PREVIEW_CACHE_MS`
+- `/api/link-preview` only fetches public `http(s)` hosts: private, loopback and
+  link-local addresses are rejected at DNS-lookup time (every redirect hop
+  included), responses must be HTML, and at most 2 MB of the page is read.
+  The Android app doesn't use it; it fetches pages natively via CapacitorHttp.
 
 ## Limits
 

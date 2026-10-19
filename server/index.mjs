@@ -11,6 +11,7 @@ import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getLinkPreview } from "./linkPreview.mjs";
 import { resolvePreview } from "./resolve.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -193,6 +194,31 @@ const sendHtml = (req, res, html, cacheControl, extraHeaders = {}) => {
   res.end(req.method === "HEAD" ? undefined : html);
 };
 
+// Open Graph data for links inside notes. Public data, so any origin may read
+// it; empty results are cached briefly so a dead link isn't refetched per view.
+const serveLinkPreview = async (req, res, target) => {
+  const headers = {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "x-content-type-options": "nosniff",
+  };
+  let data;
+  try {
+    data = await getLinkPreview(target);
+  } catch {
+    res.writeHead(400, { ...headers, "cache-control": "no-store" });
+    res.end('{"error":"invalid url"}');
+    return;
+  }
+  res.writeHead(200, {
+    ...headers,
+    "cache-control": data
+      ? "public, max-age=3600, s-maxage=21600"
+      : "public, max-age=300",
+  });
+  res.end(req.method === "HEAD" ? undefined : JSON.stringify(data));
+};
+
 const serveStatic = async (req, res, pathname) => {
   let decoded;
   try {
@@ -245,6 +271,11 @@ const server = createServer(async (req, res) => {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405, { allow: "GET, HEAD" });
     res.end();
+    return;
+  }
+
+  if (pathname === "/api/link-preview") {
+    await serveLinkPreview(req, res, url.searchParams.get("url") || "");
     return;
   }
 
