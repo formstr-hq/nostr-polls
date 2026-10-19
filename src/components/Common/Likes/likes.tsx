@@ -183,6 +183,11 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     }
   }, [pollEvent.id, likesMap, fetchLikesThrottled, user]);
 
+  // Account switch / login: load that account's quick-reaction row.
+  useEffect(() => {
+    setQuickReactions(loadQuickReactions(user?.pubkey));
+  }, [user?.pubkey]);
+
   // Compute top emojis + count, preserving tags for custom emoji rendering.
   // "+"/"-" are normalized so an Amethyst-style like clusters with ❤️.
   const getTopEmojis = () => {
