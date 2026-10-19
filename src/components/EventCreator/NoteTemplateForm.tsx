@@ -81,7 +81,9 @@ const NoteTemplateForm: React.FC<{
   onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
   /** Hydrate the form from a previously saved local draft */
   initialDraft?: NoteDraft;
-}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft }) => {
+  /** Keep the tool/post dock floating (default). Off in the quote dialog. */
+  dockSticky?: boolean;
+}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft, dockSticky = true }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [audience, setAudience] = useState<Audience>(
     initialDraft ? ({ kind: initialDraft.audienceKind } as Audience) : { kind: "public" }
@@ -538,6 +540,7 @@ const NoteTemplateForm: React.FC<{
         </Collapse>
 
         <ComposerDock
+          sticky={dockSticky}
           submitting={isSubmitting}
           disabled={!eventContent.trim()}
           submitLabel={

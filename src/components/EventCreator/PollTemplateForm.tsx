@@ -122,7 +122,9 @@ const PollTemplateForm: React.FC<{
   onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
   /** Hydrate the form from a previously saved local draft */
   initialDraft?: PollDraft;
-}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft }) => {
+  /** Keep the tool/post dock floating (default). Off in the quote dialog. */
+  dockSticky?: boolean;
+}> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft, dockSticky = true }) => {
   const [showPreview, setShowPreview] = useState(false);
   const [options, setOptions] = useState<Option[]>(
     initialDraft?.options ?? [
@@ -605,6 +607,7 @@ const PollTemplateForm: React.FC<{
 
         <ComposerDock
           poll
+          sticky={dockSticky}
           submitting={isSubmitting}
           disabled={!eventContent.trim() || options.some((o, i) => duplicateOf(options, i) >= 0)}
           submitLabel="Post"

@@ -20,6 +20,7 @@ import {
   getWotCache,
   putWotCache,
   clearWotCacheTime,
+  isWotCacheFresh,
   WotCacheRecord,
 } from "../utils/wotCache";
 
@@ -36,6 +37,20 @@ const WOT_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
 const WOT_TWO_DEGREE_KEY = "pollerama:wotTwoDegrees";
 const WOT_TWO_DEGREE_CHUNK = 400; // authors per relay filter (relay-safe cap)
 const WOT_TWO_DEGREE_MAX_SOURCES = 2000; // hard cap on hop-2 fetch authors
+
+// First hop: commit no later than this even if events keep dribbling in. The
+// relay layer's own EOSE deadline is ~8s, so this leaves a little room for slow
+// relays without holding the computation open indefinitely.
+const WOT_FIRST_HOP_HARD_CAP_MS = 15000;
+
+// A first-hop run is "settled" only if we saw contact lists for at least this
+// fraction of the user's follows. Below that the run is treated as partial:
+// its union still seeds/raises the live network (never shrink) but it is not
+// persisted as a complete cache result, so the next launch retries instead of
+// serving a contact-list-sized network for the whole TTL. Kept low because a
+// follow without a kind-3 can never contribute a source, and we can't know
+// which follows those are up front.
+const WOT_SOURCE_SETTLE_RATIO = 0.25;
 
 // The web-of-trust "network index" maps every reachable pubkey to the subset of
 // the user's own follows that follow them. It powers the "followed by … you
@@ -258,6 +273,13 @@ export function ListProvider({ children }: { children: ReactNode }) {
   // Cached follow suggestions (worker-computed, persisted). Lives in a ref since
   // it's only read on demand via getFollowRecommendations, not rendered directly.
   const recommendationsRef = useRef<WotRecommendation[]>([]);
+  // Largest web-of-trust union ever held for this account. Recomputes must
+  // never persist or display a smaller union: the first pass commits *before*
+  // the (optional) 2-degree hop, so a sparse 1-degree result used to demote a
+  // 40k network to the ~1-degree union — and being written to the cache it
+  // becomes the *seed* of the next run, which only grows relative to that
+  // seed. That is exactly the "shrinks to my contact list every few days" bug.
+  const wotBestUnionRef = useRef<string[]>([]);
   const prevPubkeyRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -278,6 +300,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
       wotAttemptedRef.current = false;
       networkIndexRef.current = new Map();
       recommendationsRef.current = [];
+      wotBestUnionRef.current = [];
       setWotIndexVersion((v) => v + 1);
       setIsFetchingWoT(false);
       setWotProfileCount(0);
@@ -713,8 +736,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
    * worker pass seeded with `seedUnion`, and hand the enlarged result to
    * `onDone`. Quality over quantity: sources are pre-sorted best-first, and
    * later chunks are dropped if the quiet-window between chunks is exceeded —
-   * the cap bounds worst-case network work, not correctness (union can only
-   * grow, and the 5-day TTL recomputes eventually). */
+   * the cap bounds worst-case network work. A capped hop is reported as such
+   * so its result is stored as provisional and retried, rather than trusted as
+   * the final network for the full TTL. */
   const fetchSecondHop = (
     accountPubkey: string,
     sources: string[],
@@ -724,6 +748,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
       serializedIndex: string;
       recommendations: WotRecommendation[];
       size: number;
+      // True if the whole-hop hard cap fired, i.e. later chunks were dropped
+      // and the result may be partial.
+      capped: boolean;
     }) => void
   ) => {
     const chunks: string[][] = [];
@@ -743,12 +770,14 @@ export function ListProvider({ children }: { children: ReactNode }) {
     });
 
     let committed = false;
+    let capped = false;
     let quietTimer: ReturnType<typeof setTimeout> | null = null;
 
     const commit = () => {
       if (committed) return;
       committed = true;
       if (quietTimer) clearTimeout(quietTimer);
+      clearTimeout(hardTimer);
       handle.unobserve();
       worker.postMessage({ type: "commit" });
     };
@@ -767,6 +796,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
         serializedIndex: msg.serializedIndex as string,
         recommendations: (msg.recommendations ?? []) as WotRecommendation[],
         size: msg.size as number,
+        capped,
       });
     };
 
@@ -777,7 +807,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
     const declareNextChunk = () => {
       if (chunkIdx >= chunks.length) return;
       const chunk = chunks[chunkIdx++];
-      const filter: Filter = { kinds: [3], authors: chunk, limit: 500 };
+      const filter: Filter = { kinds: [3], authors: chunk };
       if (typeof handle.update === "function") {
         handle.update([filter]);
       }
@@ -785,7 +815,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
     let handle: { unobserve: () => void; update?: (filters: Filter[]) => void };
     handle = dataLayer.observe(
-      [{ kinds: [3], authors: chunks[0], limit: 500 }],
+      [{ kinds: [3], authors: chunks[0] }],
       {
         onEvent: (event: Event) => {
           worker.postMessage({
@@ -809,11 +839,10 @@ export function ListProvider({ children }: { children: ReactNode }) {
     );
 
     // Whole-hop hard cap: 45s covers 5 chunks (2000 authors) at ~8s each.
-    const hardTimer = setTimeout(commit, 45000);
-    // Keep hardTimer referenced so lint doesn't flag it; commit clears it
-    // via `clearTimeout(hardTimer)` in the first-pass code path only, so
-    // clear it here after firing regardless:
-    void hardTimer;
+    const hardTimer = setTimeout(() => {
+      capped = true;
+      commit();
+    }, 45000);
   };
 
   /** Second-hop completion bookkeeping: clear the in-flight flags exactly
@@ -823,7 +852,60 @@ export function ListProvider({ children }: { children: ReactNode }) {
     setIsFetchingWoT(false);
   };
 
-  const subscribeToContacts = () => {
+  /** Fold in a freshly computed WoT result. The union set obeys a strict
+   * never-shrink rule: a result smaller than the largest union already held
+   * for this account means a sparse or partial fetch (slow relays, a dropped
+   * or interrupted hop-2 chunk, the hard cap firing mid-stream) and must
+   * neither replace the live network nor become the cache's seed again.
+   *
+   * `complete` records whether the run actually finished (all/settled first-hop
+   * sources + any configured 2-degree hop). A provisional result is still
+   * applied when it is at least as large as the previous best, but it is stored
+   * with `complete: false` so the next launch recomputes instead of trusting a
+   * partial network for the full 5-day TTL. */
+  const applyWotResult = (
+    accountPubkey: string,
+    union: string[],
+    serializedIndex: string,
+    recommendations: WotRecommendation[],
+    complete: boolean,
+  ) => {
+    if (union.length === 0) return;
+    const best = wotBestUnionRef.current.length;
+    if (union.length < best) {
+      // Keep the larger existing union/index live and in the cache, and retry
+      // on the next recompute rather than baking the sparse result in as the
+      // new baseline seed.
+      return;
+    }
+
+    const nextIndex = deserializeNetworkIndex(serializedIndex);
+    // A provisional run can have a good union (seeded from cache) but very few
+    // edges. Don't wipe a richer index with it; a completed run is authoritative.
+    if (complete || nextIndex.size >= networkIndexRef.current.size) {
+      networkIndexRef.current = nextIndex;
+      recommendationsRef.current = recommendations;
+      setWotIndexVersion((v) => v + 1);
+    }
+
+    wotBestUnionRef.current = union;
+    setWotProfileCount(union.length);
+    const now = Date.now();
+    void putWotCache({
+      pubkey: accountPubkey,
+      union,
+      serializedIndex,
+      recommendations,
+      time: now,
+      complete,
+    });
+    setWotLastComputed(now);
+    setUser((prev) =>
+      prev ? ({ ...prev, webOfTrust: new Set(union) } as User) : null,
+    );
+  };
+
+  const subscribeToContacts = (force = false) => {
     if (!user || !user.follows?.length) return;
     // Guard against concurrent subscriptions: webOfTrust isn't set on `user`
     // until EOSE, so the triggering effect could otherwise fire again mid-fetch.
@@ -846,7 +928,11 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setWotProfileCount(0);
       setIsFetchingWoT(true); // Drives the non-blocking progress in Network settings.
 
-      const filter: Filter = { kinds: [3], authors: follows, limit: 500 };
+      // No `limit`: kind-3 is replaceable (one per author), but the data layer
+      // applies `limit` to the *whole* result across all authors. With 500 it
+      // silently truncated a 900-follow list to the 500 newest contact lists,
+      // which is exactly how a first hop ends up looking contact-list-sized.
+      const filter: Filter = { kinds: [3], authors: follows };
 
       const worker = new Worker(new URL("../utils/wot-worker", import.meta.url));
       wotWorkerRef.current = worker;
@@ -868,6 +954,9 @@ export function ListProvider({ children }: { children: ReactNode }) {
       // we keep the interest open and ask the worker to commit once the stream
       // goes quiet, with a hard cap so the computation can never hang.
       let committed = false;
+      // True when the hard cap fired rather than the stream settling. A capped
+      // run is partial by definition and must not become the trusted baseline.
+      let hardCapped = false;
       let quietTimer: ReturnType<typeof setTimeout> | null = null;
 
       const commit = () => {
@@ -893,32 +982,17 @@ export function ListProvider({ children }: { children: ReactNode }) {
         if (wotWorkerRef.current === worker) wotWorkerRef.current = null;
         wotInFlightRef.current = false;
         setIsFetchingWoT(false);
-        setWotProfileCount(msg.size);
 
         const union: string[] = msg.union;
         const recommendations: WotRecommendation[] = msg.recommendations ?? [];
-        // Don't persist an empty result — leave any existing cache intact so
-        // the next session retries instead of being stuck empty. The cache lives
-        // in IndexedDB (see ../utils/wotCache); putWotCache swallows its own
-        // errors, so the in-memory index below is always set regardless.
-        if (union.length > 0) {
-          const now = Date.now();
-          void putWotCache({
-            pubkey,
-            union,
-            serializedIndex: msg.serializedIndex,
-            recommendations,
-            time: now,
-          });
-          setWotLastComputed(now);
-        }
-
-        recommendationsRef.current = recommendations;
-        networkIndexRef.current = deserializeNetworkIndex(msg.serializedIndex);
-        setWotIndexVersion((v) => v + 1);
-        setUser((prev) =>
-          prev ? ({ ...prev, webOfTrust: new Set(union) } as User) : null,
-        );
+        const sourceCount: number = msg.sourceCount ?? 0;
+        // A first hop is settled only if it wasn't cut off by the hard cap and
+        // we saw contact lists for a meaningful share of the user's follows.
+        // Otherwise its union still raises the live network (never-shrink) but
+        // it is stored as provisional so the next launch retries the fetch.
+        const settledSources =
+          sourceCount >= Math.ceil(follows.length * WOT_SOURCE_SETTLE_RATIO);
+        const firstHopComplete = !hardCapped && settledSources;
 
         // ── opt-in second hop ────────────────────────────────────────────
         // "Expand to 2 degrees": fetch the kind-3 contact lists of the
@@ -927,39 +1001,54 @@ export function ListProvider({ children }: { children: ReactNode }) {
         // fresh worker pass, and commit the enlarged union with the same
         // grow-only seed rule. The user's own follows' lists were already
         // fetched by the first pass; hop-2 only adds new sources.
-        // Own the in-flight flag for the hop so a manual recompute can't
-        // double-spawn workers mid-expansion.
-        if (wotTwoDegrees && union.length > 0) {
-          const hop2Sources = rankByTrustForHop2(
-            recommendations,
-            follows,
-            WOT_TWO_DEGREE_MAX_SOURCES
-          );
-          if (hop2Sources.length > 0) {
-            wotInFlightRef.current = true;
-            setIsFetchingWoT(true);
-            fetchSecondHop(pubkey, hop2Sources, union, (hop2Result) => {
-              setWotInFlightDone();
-              if (hop2Result.union.length > 0) {
-                const now = Date.now();
-                void putWotCache({
-                  pubkey,
-                  union: hop2Result.union,
-                  serializedIndex: hop2Result.serializedIndex,
-                  recommendations: hop2Result.recommendations,
-                  time: now,
-                });
-                setWotLastComputed(now);
-              }
-              recommendationsRef.current = hop2Result.recommendations;
-              networkIndexRef.current = deserializeNetworkIndex(hop2Result.serializedIndex);
-              setWotIndexVersion((v) => v + 1);
-              setWotProfileCount(hop2Result.size);
-              setUser((prev) =>
-                prev ? ({ ...prev, webOfTrust: new Set(hop2Result.union) } as User) : null,
-              );
-            });
-          }
+        const hop2Sources =
+          wotTwoDegrees && union.length > 0
+            ? rankByTrustForHop2(
+                recommendations,
+                follows,
+                WOT_TWO_DEGREE_MAX_SOURCES
+              )
+            : [];
+        const hop2WillRun = hop2Sources.length > 0;
+
+        // Apply under the never-shrink rule (see applyWotResult): this pass
+        // commits *before* the optional 2-degree hop, so a sparse 1-degree
+        // result must not demote the network already live. It is only marked
+        // complete when no hop is pending.
+        applyWotResult(
+          pubkey,
+          union,
+          msg.serializedIndex,
+          recommendations,
+          firstHopComplete && !hop2WillRun
+        );
+
+        if (hop2WillRun) {
+          // Own the in-flight flag for the hop so a manual recompute can't
+          // double-spawn workers mid-expansion.
+          wotInFlightRef.current = true;
+          setIsFetchingWoT(true);
+          // Seed from the *best* union, not just this (possibly sparse) pass:
+          // otherwise a partial first hop re-seeds the expansion below the
+          // network we already hold and the hop has to climb back to it.
+          const hop2Seed =
+            union.length >= wotBestUnionRef.current.length
+              ? union
+              : wotBestUnionRef.current;
+          fetchSecondHop(pubkey, hop2Sources, hop2Seed, (hop2Result) => {
+            setWotInFlightDone();
+            // Same never-shrink rule: a partially-delivered hop-2 that didn't
+            // re-grow the union past what we've already held must not demote
+            // it (that previously baked the shrunken union in as the seed).
+            // The final record is only complete if the first hop settled too.
+            applyWotResult(
+              pubkey,
+              hop2Result.union,
+              hop2Result.serializedIndex,
+              hop2Result.recommendations,
+              firstHopComplete && !hop2Result.capped
+            );
+          });
         }
       };
 
@@ -978,8 +1067,13 @@ export function ListProvider({ children }: { children: ReactNode }) {
         },
       });
 
-      // Hard cap: commit no later than 10s even if events keep dribbling in.
-      const hardTimer = setTimeout(commit, 10000);
+      // Hard cap: commit no later than this even if events keep dribbling in.
+      // The relay layer EOSEs around 8s; 15s leaves room for slow relays while
+      // still bounding the computation. A run that hits this cap is partial.
+      const hardTimer = setTimeout(() => {
+        hardCapped = true;
+        commit();
+      }, WOT_FIRST_HOP_HARD_CAP_MS);
     };
 
     // Read the cache (IndexedDB, async), migrating any legacy localStorage copy
@@ -996,21 +1090,44 @@ export function ListProvider({ children }: { children: ReactNode }) {
 
       if (cached?.time) setWotLastComputed(cached.time);
 
-      // Only trust a non-empty cache within TTL. An empty array is never a valid
-      // result — treat it as a cache miss and re-fetch rather than leaving the
-      // user with an empty web of trust for the next 5 days.
-      const cacheValid =
+      // Seed the never-shrink tracker from whatever we already hold — the
+      // cached union or the in-memory network, whichever is larger (a silent
+      // cache write can leave the two diverged).
+      const held = cached && Array.isArray(cached.union) ? cached.union : [];
+      const candidate =
+        held.length >= seedFromUser.length ? held : seedFromUser;
+      if (candidate.length > wotBestUnionRef.current.length) {
+        wotBestUnionRef.current = candidate;
+      }
+
+      // Transitional: caches written before the `complete` flag existed were
+      // trusted forever within the TTL, including ones a sparse first hop had
+      // shrunk to roughly the contact-list size. With 2-degree expansion on, a
+      // union that is not even larger than the follow list is almost certainly
+      // such a partial result — recompute it now instead of waiting out the TTL.
+      const legacyPartialCache =
+        wotTwoDegrees &&
+        follows.length >= 100 &&
         !!cached &&
-        Array.isArray(cached.union) &&
-        cached.union.length > 0 &&
-        cached.time > 0 &&
-        Date.now() - cached.time < WOT_TTL;
+        cached.complete === undefined &&
+        cached.union.length <= follows.length;
+
+      // Only trust a non-empty, *complete* cache within TTL. An empty array is
+      // never a valid result, and `complete: false` marks a partial run (a
+      // provisional 1-degree pass, a hard-capped fetch) that must retry rather
+      // than sit shrunken for the whole 5 days. `force` (manual recompute /
+      // turning on 2-degree expansion) skips this check entirely so the caller
+      // can't be defeated by the TTL-clearing write landing late.
+      const cacheValid =
+        !legacyPartialCache &&
+        isWotCacheFresh(cached, WOT_TTL, Date.now(), force);
 
       if (cacheValid) {
         // The union set powers the "in your wider network" check — restore it now.
         setUser((prev: User | null) =>
           prev ? { ...prev, webOfTrust: new Set(cached!.union) } : null,
         );
+        setWotProfileCount(cached!.union.length);
 
         if (cached!.serializedIndex) {
           try {
@@ -1029,19 +1146,39 @@ export function ListProvider({ children }: { children: ReactNode }) {
         // the index below. The union is already live, so this isn't user-visible.
       }
 
-      startFetch(cached?.union ?? seedFromUser);
+      // Seed the worker run with whichever already-hold union is larger so a
+      // recompute always grows from our best known network.
+      startFetch(candidate);
     })();
   };
 
-  // Manual refresh from the Network settings panel. Busts the cache timestamp so
-  // the validity check misses, then re-runs the (worker-backed) fetch. The union
-  // is seeded from the existing cache, so a recompute can only grow it.
+  // Manual refresh from the Network settings panel. `force` bypasses the
+  // cache-validity check directly; clearing the TTL first and then reading was
+  // racy (the async clear could land after the read, so the "recompute" just
+  // re-hydrated the old result). The union is still read from the cache and
+  // used as the seed, so a recompute can only grow it.
   const recomputeWebOfTrust = () => {
     if (!user?.pubkey || wotInFlightRef.current) return;
-    void clearWotCacheTime(user.pubkey);
     wotAttemptedRef.current = false;
-    subscribeToContacts();
+    subscribeToContacts(true);
   };
+
+  // The "Expand to 2 degrees" switch promises to trigger a compute. The setter
+  // only persists the flag (+ busts the TTL); run the actual recompute here
+  // when it flips on. Turning it off does nothing: the hop only ever added
+  // pubkeys, and the seed rule means shrinking back keeps them.
+  const prevWotTwoDegreesRef = useRef(wotTwoDegrees);
+  useEffect(() => {
+    const wasOn = prevWotTwoDegreesRef.current;
+    prevWotTwoDegreesRef.current = wotTwoDegrees;
+    if (!wotTwoDegrees || wasOn) return;
+    if (!user?.follows?.length || wotInFlightRef.current) return;
+    wotAttemptedRef.current = false;
+    subscribeToContacts(true);
+    // `subscribeToContacts` is recreated every render on purpose; this effect
+    // should only fire when the switch changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wotTwoDegrees]);
 
   const getNetworkFollowers = useCallback(
     (pk: string): string[] => {

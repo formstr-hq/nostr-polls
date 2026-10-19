@@ -70,11 +70,17 @@ import { useBackClose } from "../../hooks/useBackClose";
 interface PollResponseFormProps {
   pollEvent: Event;
   userResponse?: Event;
+  /**
+   * Read-only preview for the quote composer: hide voting/follow/menu actions
+   * so the quoted poll reads as content, not as a second interactive poll.
+   */
+  hideActions?: boolean;
 }
 
 const PollResponseForm: React.FC<PollResponseFormProps> = ({
   pollEvent,
   userResponse,
+  hideActions = false,
 }) => {
   const theme = useTheme();
   const isSmall = useMediaQuery(theme.breakpoints.down("sm"));
@@ -446,7 +452,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
               subheader={calculateTimeAgo(pollEvent.created_at)}
               action={
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                  {user && !user.follows?.includes(pollEvent.pubkey) && (
+                  {!hideActions && user && !user.follows?.includes(pollEvent.pubkey) && (
                     <Button size="small" onClick={addToContacts}>Follow</Button>
                   )}
                   {/* Content-type tag in the poll color (multi-color palettes give polls their own). */}
@@ -469,14 +475,16 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                     <PollIcon sx={{ fontSize: 14 }} />
                     POLL
                   </Box>
-                  <IconButton
-                    onClick={(e) => {
-                      setIsDetailsOpen(!isDetailsOpen);
-                      setAnchorEl(e.currentTarget);
-                    }}
-                  >
-                    <MoreVertIcon />
-                  </IconButton>
+                  {!hideActions && (
+                    <IconButton
+                      onClick={(e) => {
+                        setIsDetailsOpen(!isDetailsOpen);
+                        setAnchorEl(e.currentTarget);
+                      }}
+                    >
+                      <MoreVertIcon />
+                    </IconButton>
+                  )}
                 </Box>
               }
               sx={{ m: 0, pl: 2, pt: 1 }}
@@ -645,43 +653,45 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
               </CardContent>
             </Box>
 
-            <CardActions>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                  width: "100%",
-                }}
-              >
-                {displaySubmit() ? (
-                  <Button
-                    type="submit"
-                    variant="contained"
-                    sx={{ bgcolor: "cb.poll", color: "cb.onPoll", "&:hover": { bgcolor: "cb.poll" } }}
-                  >
-                    {userResponse || hasSubmitted ? "Update Vote" : "Submit Response"}
-                  </Button>
-                ) : (
-                  <div />
-                )}
-                <div style={{ display: "flex", flexDirection: "row" }}>
-                  {showResults && (
-                    <Filters onChange={(pubkeys) => setFilterPubkeys(pubkeys)} />
+            {!hideActions && (
+              <CardActions>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    width: "100%",
+                  }}
+                >
+                  {displaySubmit() ? (
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      sx={{ bgcolor: "cb.poll", color: "cb.onPoll", "&:hover": { bgcolor: "cb.poll" } }}
+                    >
+                      {userResponse || hasSubmitted ? "Update Vote" : "Submit Response"}
+                    </Button>
+                  ) : (
+                    <div />
                   )}
-                  <Button
-                    onClick={() => setShowResults((v) => !v)}
-                    variant="contained"
-                    sx={{ bgcolor: "cb.inner", color: "text.primary", "&:hover": { bgcolor: "cb.inner" } }}
-                  >
-                    {showResults ? "Hide results" : "Results"}
-                  </Button>
+                  <div style={{ display: "flex", flexDirection: "row" }}>
+                    {showResults && (
+                      <Filters onChange={(pubkeys) => setFilterPubkeys(pubkeys)} />
+                    )}
+                    <Button
+                      onClick={() => setShowResults((v) => !v)}
+                      variant="contained"
+                      sx={{ bgcolor: "cb.inner", color: "text.primary", "&:hover": { bgcolor: "cb.inner" } }}
+                    >
+                      {showResults ? "Hide results" : "Results"}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </CardActions>
+              </CardActions>
+            )}
           </Card>
         </form>
-        <FeedbackMenu event={pollEvent} rootKind={pollEvent.kind} />
+        {!hideActions && <FeedbackMenu event={pollEvent} rootKind={pollEvent.kind} />}
         {diagnosticResult && (
           <PublishDiagnosticModal
             open={diagnosticOpen}

@@ -35,6 +35,10 @@ let union = new Set<string>();
 let index = new Map<string, Set<string>>();
 let follows = new Set<string>(); // the user's own follows — excluded from recs
 let ownPubkey = ""; // the user's own pubkey — excluded from recs
+// Distinct contact-list authors seen this run. Reported so the main thread can
+// tell a complete fetch (roughly one kind-3 per follow) from a partial one (a
+// hard-capped/offline run), which must not become the trusted cache baseline.
+let sources = new Set<string>();
 let lastProgress = 0;
 
 function serializeNetworkIndex(idx: Map<string, Set<string>>): string {
@@ -67,12 +71,14 @@ ctx.addEventListener("message", (e: MessageEvent) => {
       index = new Map<string, Set<string>>();
       follows = new Set<string>(msg.follows ?? []);
       ownPubkey = msg.self ?? "";
+      sources = new Set<string>();
       lastProgress = 0;
       break;
     }
     case "event": {
       const source: string = msg.pubkey; // one of the user's follows
       const tags: string[][] = msg.tags;
+      sources.add(source);
       for (const tag of tags) {
         if (tag[0] === "p" && tag[1]) {
           const target = tag[1];
@@ -111,6 +117,7 @@ ctx.addEventListener("message", (e: MessageEvent) => {
         union: Array.from(union),
         serializedIndex: serializeNetworkIndex(index),
         recommendations,
+        sourceCount: sources.size,
         size: union.size,
       });
       break;

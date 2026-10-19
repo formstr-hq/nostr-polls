@@ -1,6 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Tooltip, Box, IconButton, useTheme, Modal } from "@mui/material";
+import {
+  Tooltip,
+  Box,
+  IconButton,
+  useTheme,
+  Modal,
+  Popover,
+  Button,
+  Divider,
+  Typography,
+} from "@mui/material";
 import FavoriteBorder from "@mui/icons-material/FavoriteBorder";
+import AddReactionOutlined from "@mui/icons-material/AddReactionOutlined";
 import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { Event, EventTemplate } from "nostr-tools/lib/types/core";
@@ -9,6 +20,14 @@ import { useRelays } from "../../../hooks/useRelays";
 import { useUserContext } from "../../../hooks/useUserContext";
 import { dataLayer } from "@formstr/local-relay";
 import ReactionsDetailsModal from "./ReactionsDetailsModal";
+import {
+  loadQuickReactions,
+  rememberQuickReaction,
+  removeQuickReaction,
+  resetQuickReactions,
+  buildReactionTemplate,
+  displayReaction,
+} from "../../../utils/reactions";
 
 const LONG_PRESS_MS = 500;
 
@@ -44,6 +63,15 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const { relays } = useRelays();
   const [showPicker, setShowPicker] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [quickAnchor, setQuickAnchor] = useState<HTMLElement | null>(null);
+  // The quick row learns: emoji chosen from the full picker are persisted per
+  // account and promoted to the front, Amethyst-style. Edit mode lets the user
+  // remove entries from the row itself.
+  const [quickReactions, setQuickReactions] = useState<string[]>(() =>
+    loadQuickReactions(user?.pubkey)
+  );
+  const [editingQuick, setEditingQuick] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didLongPress = useRef(false);
   const theme = useTheme();
@@ -53,6 +81,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
   const startLongPress = () => {
     didLongPress.current = false;
     if (reactions.length === 0) return;
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
     longPressTimer.current = setTimeout(() => {
       didLongPress.current = true;
       setShowDetails(true);
@@ -68,7 +97,11 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
 
   const handleClick = () => {
     if (didLongPress.current) return;
-    setShowPicker(true);
+    // Amethyst-style: one tap opens the compact quick-reaction row. Refresh it
+    // first so a choice made on another card/in the full picker shows up here.
+    setQuickReactions(loadQuickReactions(user?.pubkey));
+    setEditingQuick(false);
+    setQuickAnchor(buttonRef.current);
   };
 
   // All of the current user's own reactions on this note (a user can stack more
@@ -107,24 +140,41 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     }
 
     // Tapping an emoji you've already reacted with toggles it off.
-    const existing = userReactions.find((r) => r.content === emoji);
+    const existing = userReactions.find(
+      (r) => displayReaction(r.content) === displayReaction(emoji)
+    );
     if (existing) {
       await removeReaction(existing);
       setShowPicker(false);
       return;
     }
 
-    const event: EventTemplate = {
-      content: emoji,
-      kind: 7,
-      tags: [["e", pollEvent.id, relays[0]]],
-      created_at: Math.floor(Date.now() / 1000),
-    };
+    // NIP-25: `e` targets the event, `p` its author, `k` its kind, and `a` for
+    // addressable targets. Built in one tested helper so reactions published
+    // here are readable by Amethyst and other clients.
+    const event = buildReactionTemplate(pollEvent, emoji, relays[0]);
 
     const finalEvent = await signEvent(event, user.privateKey);
     dataLayer.publishEvent(finalEvent!);
     addEventToMap(finalEvent!);
+    // Promote whatever was picked — including from the full picker — into the
+    // quick row so it is one tap away next time.
+    setQuickReactions(rememberQuickReaction(user.pubkey, emoji));
     setShowPicker(false);
+  };
+
+  /** React from the compact quick-reaction row and dismiss it. */
+  const handleQuickReaction = async (emoji: string) => {
+    if (editingQuick) {
+      setQuickReactions(removeQuickReaction(user?.pubkey, emoji));
+      return;
+    }
+    setQuickAnchor(null);
+    await addReaction(emoji);
+  };
+
+  const handleResetQuickReactions = () => {
+    setQuickReactions(resetQuickReactions(user?.pubkey));
   };
 
   useEffect(() => {
@@ -133,14 +183,21 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
     }
   }, [pollEvent.id, likesMap, fetchLikesThrottled, user]);
 
-  // Compute top emojis + count, preserving tags for custom emoji rendering
+  // Account switch / login: load that account's quick-reaction row.
+  useEffect(() => {
+    setQuickReactions(loadQuickReactions(user?.pubkey));
+  }, [user?.pubkey]);
+
+  // Compute top emojis + count, preserving tags for custom emoji rendering.
+  // "+"/"-" are normalized so an Amethyst-style like clusters with ❤️.
   const getTopEmojis = () => {
     const emojiData: Record<string, { count: number; tags?: string[][] }> = {};
     reactions.forEach((r) => {
-      if (!emojiData[r.content]) {
-        emojiData[r.content] = { count: 0, tags: r.tags };
+      const emoji = displayReaction(r.content);
+      if (!emojiData[emoji]) {
+        emojiData[emoji] = { count: 0, tags: r.tags };
       }
-      emojiData[r.content].count += 1;
+      emojiData[emoji].count += 1;
     });
     const sorted = Object.entries(emojiData)
       .sort((a, b) => b[1].count - a[1].count)
@@ -158,7 +215,7 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
       : "Tap to react · Hold to see reactions"
     : userReaction
     ? "Change reaction"
-    : "React";
+    : "Tap to react";
 
   return (
     <Box
@@ -183,9 +240,15 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           }}
           onClick={handleClick}
         >
-          <IconButton size="small" sx={{ p: 0 }} component="span">
+          <IconButton
+            ref={buttonRef}
+            size="small"
+            sx={{ p: 0 }}
+            component="span"
+            aria-label="React"
+          >
             {userReaction ? (
-              <RenderEmoji content={userReaction.content} tags={userReaction.tags} />
+              <RenderEmoji content={displayReaction(userReaction.content)} tags={userReaction.tags} />
             ) : (
               <FavoriteBorder sx={{ p: 0 }} />
             )}
@@ -193,10 +256,10 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
 
           {/* Top 2 emojis next to button — clicking the cluster (incl. the
               "+x" badge) opens the reactions details modal instead of the
-              emoji picker. stopPropagation keeps the parent's click (which
-              opens the picker) from also firing. Only rendered when there are
-              reactions; an empty cluster would still carry its ml margin and
-              widen the row gap. */}
+              quick-reaction row. stopPropagation keeps the parent's click
+              (which opens the quick row) from also firing. Only rendered when
+              there are reactions; an empty cluster would still carry its ml
+              margin and widen the row gap. */}
           {hasReactions && (
           <Box
             display="flex"
@@ -235,6 +298,155 @@ const Likes: React.FC<LikesProps> = ({ pollEvent }) => {
           )}
         </Box>
       </Tooltip>
+
+      {/* Amethyst-style quick reaction row. Tapping an emoji reacts (or removes
+          that same reaction) immediately; "More reactions" opens the full
+          emoji picker and promotes that choice into this row. Edit mode removes
+          entries from the row itself. Published as a standard NIP-25 kind-7
+          event, so reactions made here show up in Amethyst and vice versa. */}
+      <Popover
+        open={Boolean(quickAnchor)}
+        anchorEl={quickAnchor}
+        onClose={() => {
+          setQuickAnchor(null);
+          setEditingQuick(false);
+        }}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+        slotProps={{ paper: { sx: { p: 1, borderRadius: 3 } } }}
+      >
+        {quickReactions.length === 0 ? (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", px: 1, py: 0.5 }}
+          >
+            No quick reactions yet.
+          </Typography>
+        ) : (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.25 }}>
+            {quickReactions.map((emoji) => {
+              const shown = displayReaction(emoji);
+              const mine = userReactions.some(
+                (r) => displayReaction(r.content) === shown
+              );
+              return (
+                <Box
+                  key={emoji}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={
+                    editingQuick
+                      ? `Remove ${shown} from quick reactions`
+                      : mine
+                      ? `Remove ${shown} reaction`
+                      : `React with ${shown}`
+                  }
+                  aria-pressed={!editingQuick && mine}
+                  onClick={() => void handleQuickReaction(emoji)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      void handleQuickReaction(emoji);
+                    }
+                  }}
+                  sx={{
+                    position: "relative",
+                    width: 40,
+                    height: 40,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 22,
+                    lineHeight: 1,
+                    borderRadius: 2,
+                    cursor: "pointer",
+                    userSelect: "none",
+                    border: 2,
+                    borderColor: editingQuick
+                      ? "error.main"
+                      : mine
+                      ? "primary.main"
+                      : "transparent",
+                    bgcolor: mine && !editingQuick ? "action.selected" : "transparent",
+                    "&:hover": { bgcolor: "action.hover" },
+                    "&:focus-visible": {
+                      outline: "2px solid",
+                      outlineColor: "primary.main",
+                    },
+                  }}
+                >
+                  {shown}
+                  {editingQuick && (
+                    <Box
+                      component="span"
+                      aria-hidden
+                      sx={{
+                        position: "absolute",
+                        top: -4,
+                        right: -4,
+                        width: 16,
+                        height: 16,
+                        borderRadius: "50%",
+                        bgcolor: "error.main",
+                        color: "error.contrastText",
+                        fontSize: 11,
+                        lineHeight: 1,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      ×
+                    </Box>
+                  )}
+                </Box>
+              );
+            })}
+          </Box>
+        )}
+        <Divider sx={{ my: 0.75 }} />
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+          <Button
+            size="small"
+            startIcon={<AddReactionOutlined />}
+            onClick={() => {
+              setQuickAnchor(null);
+              setEditingQuick(false);
+              setShowPicker(true);
+            }}
+            sx={{ flex: 1, justifyContent: "flex-start", textTransform: "none" }}
+          >
+            More reactions
+          </Button>
+          <Button
+            size="small"
+            onClick={() => setEditingQuick((v) => !v)}
+            sx={{ textTransform: "none" }}
+          >
+            {editingQuick ? "Done" : "Edit"}
+          </Button>
+        </Box>
+        {editingQuick && (
+          <>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", px: 0.5, pt: 0.5 }}
+            >
+              Tap an emoji to remove it from your quick reactions.
+            </Typography>
+            <Button
+              size="small"
+              onClick={handleResetQuickReactions}
+              sx={{ justifyContent: "flex-start", textTransform: "none" }}
+            >
+              Reset to defaults
+            </Button>
+          </>
+        )}
+      </Popover>
 
       {/* Emoji picker modal */}
       <Modal

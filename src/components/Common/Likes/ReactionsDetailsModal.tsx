@@ -21,6 +21,7 @@ import { useAppContext } from "../../../hooks/useAppContext";
 import { useBackClose } from "../../../hooks/useBackClose";
 import { openProfileTab } from "../../../nostr";
 import { DEFAULT_IMAGE_URL } from "../../../utils/constants";
+import { displayReaction } from "../../../utils/reactions";
 import { Nip05Badge } from "../Nip05Badge";
 
 interface ReactionsDetailsModalProps {
@@ -34,7 +35,10 @@ const RenderEmoji: React.FC<{ content: string; tags?: string[][]; size?: number 
   tags,
   size = 18,
 }) => {
-  const match = content.match(/^:([a-zA-Z0-9_]+):$/);
+  // NIP-25 short forms: "+" is a like, "-" a dislike. Show them as the emoji
+  // Amethyst and other clients use instead of a bare +/- sign.
+  const shown = displayReaction(content);
+  const match = shown.match(/^:([a-zA-Z0-9_]+):$/);
   if (match && tags) {
     const shortcode = match[1];
     const emojiTag = tags.find((t) => t[0] === "emoji" && t[1] === shortcode);
@@ -49,7 +53,7 @@ const RenderEmoji: React.FC<{ content: string; tags?: string[][]; size?: number 
       );
     }
   }
-  return <span style={{ fontSize: size }}>{content}</span>;
+  return <span style={{ fontSize: size }}>{shown}</span>;
 };
 
 const ReactionsDetailsModal: React.FC<ReactionsDetailsModalProps> = ({
@@ -77,8 +81,9 @@ const ReactionsDetailsModal: React.FC<ReactionsDetailsModalProps> = ({
   const emojiCounts = useMemo(() => {
     const counts: Record<string, { count: number; tags?: string[][] }> = {};
     reactions.forEach((r) => {
-      if (!counts[r.content]) counts[r.content] = { count: 0, tags: r.tags };
-      counts[r.content].count += 1;
+      const emoji = displayReaction(r.content);
+      if (!counts[emoji]) counts[emoji] = { count: 0, tags: r.tags };
+      counts[emoji].count += 1;
     });
     return Object.entries(counts)
       .sort((a, b) => b[1].count - a[1].count)
@@ -86,7 +91,7 @@ const ReactionsDetailsModal: React.FC<ReactionsDetailsModalProps> = ({
   }, [reactions]);
 
   const filtered = filterEmoji
-    ? reactions.filter((r) => r.content === filterEmoji)
+    ? reactions.filter((r) => displayReaction(r.content) === filterEmoji)
     : reactions;
 
   const sorted = [...filtered].sort((a, b) => b.created_at - a.created_at);
