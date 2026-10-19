@@ -1,3 +1,12 @@
+# 2.1.0
+
+- Quick reactions: tapping the reaction button now opens a row of emoji to pick from in one tap, with "More reactions" for the full picker. Emoji you pick from the full picker move to the front of your quick row, and you can edit the row (remove emoji, or reset to defaults). Your quick row is saved per account. Long-press still shows who reacted with what.
+- Reactions are now published with complete NIP-25 tags, so other clients read them correctly, and +/- reactions display properly.
+- Quote posts: the quoted note or poll shows as a clean read-only preview, and the composer toolbar no longer covers text inside the quote dialog.
+- Web of Trust is steadier: a slow or partial network fetch can no longer shrink your trusted network. Incomplete runs retry, and larger follow graphs are no longer cut off at 500 contact lists.
+- Link previews work again in notes, on both web and Android.
+- Shared links to notes, articles and polls now show rich previews (title, description, image) when posted on other sites and apps.
+
 # 2.0.0
 
 A whole new look: **Color Block**.
