@@ -1,3 +1,10 @@
+# 2.1.1
+
+- Composer: Post now sits in the header, so it stays above the keyboard instead of covering the note or poll fields.
+- Preview is now a full editor mode, with a "Preview — how it appears in feeds" banner and an Edit button to go back.
+- The composer toolbar is pinned below the editing area, so it can no longer overlap Option 1/Option 2 while you type.
+- The preview button is now a standalone round button beside the tool capsule and uses the note/poll color.
+
 # 2.1.0
 
 - Quick reactions: tapping the reaction button now opens a row of emoji to pick from in one tap, with "More reactions" for the full picker. Emoji you pick from the full picker move to the front of your quick row, and you can edit the row (remove emoji, or reset to defaults). Your quick row is saved per account. Long-press still shows who reacted with what.
