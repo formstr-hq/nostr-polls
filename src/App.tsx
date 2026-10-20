@@ -39,6 +39,7 @@ import { TranslationBatchProvider } from "./contexts/translation-batch-context";
 import { FeedScrollProvider } from "./contexts/FeedScrollContext";
 import { SubNavProvider } from "./contexts/SubNavContext";
 import { HeaderTitleProvider } from "./contexts/HeaderTitleContext";
+import { HeaderActionProvider } from "./contexts/HeaderActionContext";
 import { ImmersiveScrollProvider } from "./contexts/ImmersiveScrollContext";
 import CollapsibleHeader from "./components/Shell/CollapsibleHeader";
 import { AppearanceProvider, useAppearance } from "./contexts/AppearanceContext";
@@ -223,7 +224,9 @@ function AppContent() {
           )}
           <ErrorBoundary resetKey={location.pathname}>
           <Routes>
-          <Route path="/create" element={<ScrollPage><EventCreator /></ScrollPage>} />
+          {/* The composer owns its scroll area so the tool/Post dock can sit
+              below it (above the keyboard) without covering the fields. */}
+          <Route path="/create" element={<EventCreator />} />
           <Route
             path="/respond/:eventId"
             element={<ScrollPage><PollResponse /></ScrollPage>}
@@ -388,9 +391,11 @@ const App: React.FC = () => {
                               <FeedScrollProvider>
                                 <SubNavProvider>
                                   <HeaderTitleProvider>
-                                    <ImmersiveScrollProvider>
-                                      <AppContent />
-                                    </ImmersiveScrollProvider>
+                                    <HeaderActionProvider>
+                                      <ImmersiveScrollProvider>
+                                        <AppContent />
+                                      </ImmersiveScrollProvider>
+                                    </HeaderActionProvider>
                                   </HeaderTitleProvider>
                                 </SubNavProvider>
                               </FeedScrollProvider>

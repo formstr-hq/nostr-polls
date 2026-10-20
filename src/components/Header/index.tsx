@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Box, IconButton, Badge, ButtonBase } from "@mui/material";
+import { Box, IconButton, Badge, ButtonBase, CircularProgress } from "@mui/material";
 import MailIcon from "@mui/icons-material/MailRounded";
 import SearchIcon from "@mui/icons-material/SearchRounded";
 import ArrowBackIcon from "@mui/icons-material/ArrowBackRounded";
@@ -12,6 +12,7 @@ import { useSubNav } from "../../contexts/SubNavContext";
 import { routeInfo } from "../Shell/navConfig";
 import { useSectionColor } from "../Shell/useSectionColor";
 import { useHeaderTitleOverride } from "../../contexts/HeaderTitleContext";
+import { useHeaderActionState } from "../../contexts/HeaderActionContext";
 
 /**
  * Color Block header: a solid block of the theme color with a rounded bottom. It
@@ -25,6 +26,7 @@ const Header: React.FC = () => {
   const { items: subNavItems } = useSubNav();
   const [searchOpen, setSearchOpen] = useState(false);
   const titleOverride = useHeaderTitleOverride();
+  const headerAction = useHeaderActionState();
   const info = routeInfo(location.pathname);
   // Every section of the app owns a palette color; the block wears it.
   const section = useSectionColor();
@@ -103,15 +105,44 @@ const Header: React.FC = () => {
             {info.title}
           </ButtonBase>
           )}
-          <IconButton color="inherit" onClick={() => setSearchOpen(true)} aria-label="Search">
-            <SearchIcon />
-          </IconButton>
-          <NotificationBell />
-          <IconButton color="inherit" onClick={() => navigate("/messages")} aria-label="Messages">
-            <Badge badgeContent={unreadTotal} invisible={unreadTotal === 0} max={99}>
-              <MailIcon />
-            </Badge>
-          </IconButton>
+          {headerAction ? (
+            // Pages with a primary action (the composer's Post) swap the global
+            // icons for it, like the block header in the composer designs.
+            <ButtonBase
+              onClick={headerAction.onClick}
+              disabled={headerAction.disabled || headerAction.submitting}
+              sx={{
+                flex: "none",
+                height: 42,
+                minWidth: 76,
+                px: 2,
+                ml: 0.5,
+                gap: 0.75,
+                borderRadius: "14px",
+                fontFamily: "inherit",
+                fontWeight: 800,
+                fontSize: 15,
+                bgcolor: section.on,
+                color: section.color,
+                "&.Mui-disabled": { opacity: 0.5 },
+              }}
+            >
+              {headerAction.submitting && <CircularProgress size={16} sx={{ color: "inherit" }} />}
+              {headerAction.label}
+            </ButtonBase>
+          ) : (
+            <>
+              <IconButton color="inherit" onClick={() => setSearchOpen(true)} aria-label="Search">
+                <SearchIcon />
+              </IconButton>
+              <NotificationBell />
+              <IconButton color="inherit" onClick={() => navigate("/messages")} aria-label="Messages">
+                <Badge badgeContent={unreadTotal} invisible={unreadTotal === 0} max={99}>
+                  <MailIcon />
+                </Badge>
+              </IconButton>
+            </>
+          )}
         </Box>
 
         {showPills && (

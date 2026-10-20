@@ -19,10 +19,13 @@ import {
   ComposerDock,
   ComposerLabel,
   ComposerSlab,
+  DockRoundTool,
   DockTool,
+  PreviewBanner,
   WhoLine,
   insertAtCursor,
 } from "./ComposerParts";
+import { useHeaderAction } from "../../contexts/HeaderActionContext";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
@@ -81,7 +84,11 @@ const NoteTemplateForm: React.FC<{
   onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
   /** Hydrate the form from a previously saved local draft */
   initialDraft?: NoteDraft;
-  /** Keep the tool/post dock floating (default). Off in the quote dialog. */
+  /**
+   * Full-page layout (default): the fields get their own scroll area and the
+   * dock becomes a fixed footer below it. Off in the quote dialog, where the
+   * form scrolls with the dialog instead.
+   */
   dockSticky?: boolean;
 }> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft, dockSticky = true }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -369,8 +376,60 @@ const NoteTemplateForm: React.FC<{
   const insertText = (text: string) =>
     insertAtCursor(textAreaRef.current, eventContentRef.current, text, setEventContent);
 
+  // On the /create page the form is a full-height column: the fields scroll in
+  // their own area above the dock, so the dock can never cover them. Inside a
+  // dialog (quote post) the form stays inline and scrolls with the dialog.
+  const pageLayout = !!dockSticky;
+  const privateNote = audience.kind === "private";
+
+  // Post lives in the block header on /create, so it stays reachable while the
+  // keyboard is open and never floats over the fields. The quote dialog keeps
+  // its submit button in the inline dock.
+  useHeaderAction(
+    pageLayout
+      ? {
+          label: privateNote ? (
+            <>
+              <LockIcon sx={{ fontSize: 18 }} /> Post
+            </>
+          ) : (
+            "Post"
+          ),
+          onClick: () => publishNoteEvent(user?.privateKey),
+          disabled: !eventContent.trim() || isSubmitting,
+          submitting: isSubmitting,
+        }
+      : null
+  );
+
   return (
-    <form onSubmit={handleSubmit}>
+    <Box
+      component="form"
+      onSubmit={handleSubmit}
+      sx={pageLayout ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : undefined}
+    >
+      <Box
+        sx={
+          pageLayout
+            ? {
+                flex: 1,
+                minHeight: 0,
+                overflowY: "auto",
+                overscrollBehavior: "contain",
+                px: { xs: 1.25, sm: 2 },
+                pb: 2,
+              }
+            : undefined
+        }
+      >
+      {showPreview ? (
+        // Preview is a mode: it takes over the editor area (with a way back),
+        // rather than collapsing in below the buttons.
+        <Stack spacing={1.25}>
+          <PreviewBanner onEdit={() => setShowPreview(false)} />
+          <NotePreview noteEvent={previewEvent} />
+        </Stack>
+      ) : (
       <Stack spacing={1.25}>
         {/* Editor slab — drag-and-drop zone wraps the whole thing */}
         <ComposerSlab
@@ -532,25 +591,43 @@ const NoteTemplateForm: React.FC<{
           </ComposerSlab>
         </Collapse>
 
-        <Collapse in={showPreview} unmountOnExit>
-          <ComposerSlab>
-            <ComposerLabel>Preview</ComposerLabel>
-            <NotePreview noteEvent={previewEvent} />
-          </ComposerSlab>
-        </Collapse>
+      </Stack>
+      )}
+      </Box>
 
+      {/* The dock lives outside the scroll area, so it stays put below the
+          fields (above the keyboard) instead of floating over them. */}
+      <Box
+        sx={
+          pageLayout
+            ? {
+                flex: "none",
+                px: { xs: 1.25, sm: 2 },
+                pb: "calc(12px + env(safe-area-inset-bottom))",
+              }
+            : undefined
+        }
+      >
         <ComposerDock
-          sticky={dockSticky}
           submitting={isSubmitting}
           disabled={!eventContent.trim()}
           submitLabel={
-            audience.kind === "private" ? (
+            pageLayout ? undefined : privateNote ? (
               <>
                 <LockIcon sx={{ fontSize: 18 }} /> Post
               </>
             ) : (
               "Post"
             )
+          }
+          trailing={
+            <DockRoundTool
+              title={showPreview ? "Hide preview" : "Show preview"}
+              onClick={() => setShowPreview((v) => !v)}
+              active={showPreview}
+            >
+              {showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />}
+            </DockRoundTool>
           }
           tools={
             <>
@@ -588,17 +665,10 @@ const NoteTemplateForm: React.FC<{
                   <AutoFixHighIcon />
                 </DockTool>
               )}
-              <DockTool
-                title={showPreview ? "Hide preview" : "Show preview"}
-                onClick={() => setShowPreview((v) => !v)}
-                active={showPreview}
-              >
-                {showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />}
-              </DockTool>
             </>
           }
         />
-      </Stack>
+      </Box>
 
       <PostEnhancementDialog
         open={showEnhancementDialog}
@@ -673,7 +743,7 @@ const NoteTemplateForm: React.FC<{
           }
         />
       )}
-    </form>
+    </Box>
   );
 };
 

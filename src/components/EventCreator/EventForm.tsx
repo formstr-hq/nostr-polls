@@ -65,8 +65,19 @@ const EventForm = () => {
   useEffect(() => () => clearItems(), [clearItems]);
 
   return (
-    <Box sx={{ maxWidth: 760, mx: "auto", px: { xs: 1.25, sm: 2 }, pt: 1.5, pb: 2 }}>
-      <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
+    // Full-height column: the form fills the rest and keeps its own scroll area
+    // above the composer dock, so the dock never floats over the fields.
+    <Box
+      sx={{
+        height: "100%",
+        width: "100%",
+        maxWidth: 760,
+        mx: "auto",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <Box sx={{ display: "flex", justifyContent: "flex-end", px: { xs: 1.25, sm: 2 }, pt: 1.5, pb: 1 }}>
         <Chip
           icon={<DescriptionIcon />}
           label={draftCount > 0 ? `Drafts · ${draftCount}` : "Drafts"}

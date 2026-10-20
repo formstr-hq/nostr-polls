@@ -5,7 +5,6 @@ import {
   Stack,
   TextField,
   Typography,
-  Collapse,
   Chip,
   LinearProgress,
 } from "@mui/material";
@@ -28,10 +27,13 @@ import {
   ComposerDock,
   ComposerLabel,
   ComposerSlab,
+  DockRoundTool,
   DockTool,
+  PreviewBanner,
   WhoLine,
   insertAtCursor,
 } from "./ComposerParts";
+import { useHeaderAction } from "../../contexts/HeaderActionContext";
 import { Option } from "../../interfaces";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { useNotification } from "../../contexts/notification-context";
@@ -122,7 +124,11 @@ const PollTemplateForm: React.FC<{
   onPublishResult?: (event: Event, result: import("@formstr/local-relay").PublishResult) => void;
   /** Hydrate the form from a previously saved local draft */
   initialDraft?: PollDraft;
-  /** Keep the tool/post dock floating (default). Off in the quote dialog. */
+  /**
+   * Full-page layout (default): the fields get their own scroll area and the
+   * dock becomes a fixed footer below it. Off in the quote dialog, where the
+   * form scrolls with the dialog instead.
+   */
   dockSticky?: boolean;
 }> = ({ eventContent, setEventContent, quotedEvent, onPublished, onPublishResult, initialDraft, dockSticky = true }) => {
   const [showPreview, setShowPreview] = useState(false);
@@ -353,8 +359,54 @@ const PollTemplateForm: React.FC<{
   const insertText = (text: string) =>
     insertAtCursor(questionRef.current, eventContentRef.current, text, setEventContent);
 
+  // On the /create page the form is a full-height column: the fields scroll in
+  // their own area above the dock, so the dock can never cover them. Inside a
+  // dialog (quote post) the form stays inline and scrolls with the dialog.
+  const pageLayout = !!dockSticky;
+  const canSubmit = !!eventContent.trim() && !options.some((o, i) => duplicateOf(options, i) >= 0);
+
+  // Post lives in the block header on /create, so it stays reachable while the
+  // keyboard is open and never floats over the fields. The quote dialog keeps
+  // its submit button in the inline dock.
+  useHeaderAction(
+    pageLayout
+      ? {
+          label: "Post",
+          onClick: () => publishPollEvent(user?.privateKey),
+          disabled: !canSubmit || isSubmitting,
+          submitting: isSubmitting,
+        }
+      : null
+  );
+
   return (
-    <form onSubmit={handleSubmit}>
+    <Box
+      component="form"
+      onSubmit={handleSubmit}
+      sx={pageLayout ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : undefined}
+    >
+      <Box
+        sx={
+          pageLayout
+            ? {
+                flex: 1,
+                minHeight: 0,
+                overflowY: "auto",
+                overscrollBehavior: "contain",
+                px: { xs: 1.25, sm: 2 },
+                pb: 2,
+              }
+            : undefined
+        }
+      >
+      {showPreview ? (
+        // Preview is a mode: it takes over the editor area (with a way back),
+        // rather than collapsing in below the buttons.
+        <Stack spacing={1.25}>
+          <PreviewBanner poll onEdit={() => setShowPreview(false)} />
+          <PollPreview pollEvent={previewEvent} />
+        </Stack>
+      ) : (
       <Stack spacing={1.25}>
         {/* Question slab — drag-and-drop zone */}
         <ComposerSlab
@@ -598,19 +650,38 @@ const PollTemplateForm: React.FC<{
           </Box>
         </ComposerSlab>
 
-        <Collapse in={showPreview} unmountOnExit>
-          <ComposerSlab>
-            <ComposerLabel>Preview</ComposerLabel>
-            <PollPreview pollEvent={previewEvent} />
-          </ComposerSlab>
-        </Collapse>
+      </Stack>
+      )}
+      </Box>
 
+      {/* The dock lives outside the scroll area, so it stays put below the
+          fields (above the keyboard) instead of floating over them. */}
+      <Box
+        sx={
+          pageLayout
+            ? {
+                flex: "none",
+                px: { xs: 1.25, sm: 2 },
+                pb: "calc(12px + env(safe-area-inset-bottom))",
+              }
+            : undefined
+        }
+      >
         <ComposerDock
           poll
-          sticky={dockSticky}
           submitting={isSubmitting}
-          disabled={!eventContent.trim() || options.some((o, i) => duplicateOf(options, i) >= 0)}
-          submitLabel="Post"
+          disabled={!canSubmit}
+          submitLabel={pageLayout ? undefined : "Post"}
+          trailing={
+            <DockRoundTool
+              poll
+              title={showPreview ? "Hide preview" : "Show preview"}
+              onClick={() => setShowPreview((v) => !v)}
+              active={showPreview}
+            >
+              {showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />}
+            </DockRoundTool>
+          }
           tools={
             <>
               <DockTool
@@ -634,17 +705,10 @@ const PollTemplateForm: React.FC<{
               <DockTool title="Add a hashtag" onClick={() => insertText("#")}>
                 <TagIcon />
               </DockTool>
-              <DockTool
-                title={showPreview ? "Hide preview" : "Show preview"}
-                onClick={() => setShowPreview((v) => !v)}
-                active={showPreview}
-              >
-                {showPreview ? <VisibilityOffIcon /> : <VisibilityIcon />}
-              </DockTool>
             </>
           }
         />
-      </Stack>
+      </Box>
       {publishResult && (
         <PublishDiagnosticModal
           open={diagnosticOpen}
@@ -665,7 +729,7 @@ const PollTemplateForm: React.FC<{
           onRetry={retry}
         />
       )}
-    </form>
+    </Box>
   );
 };
 
