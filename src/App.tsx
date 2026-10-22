@@ -44,15 +44,13 @@ import { ImmersiveScrollProvider } from "./contexts/ImmersiveScrollContext";
 import CollapsibleHeader from "./components/Shell/CollapsibleHeader";
 import { AppearanceProvider, useAppearance } from "./contexts/AppearanceContext";
 import NavSidebar from "./components/SidePane";
-import { DraggableCorner } from "./components/Common/DraggableCorner";
 import { VideoPlayerProvider } from "./contexts/VideoPlayerContext";
 import { FloatingVideoPlayer } from "./components/Common/FloatingVideoPlayer";
 import { useAndroidNotifications } from "./hooks/useAndroidNotifications";
 import { UpdateBanner } from "./components/UpdateBanner";
 
 import CssBaseline from "@mui/material/CssBaseline";
-import { ThemeProvider, Box, Fab, useMediaQuery, useTheme } from "@mui/material";
-import MenuOpenIcon from "@mui/icons-material/MenuOpen";
+import { ThemeProvider, Box, useMediaQuery, useTheme } from "@mui/material";
 import { buildTheme } from "./styles/theme";
 import { getFontPreset } from "./styles/themes";
 
@@ -65,6 +63,7 @@ import MoviesFeed from "./components/Feed/MoviesFeed";
 import FollowPacksFeed from "./components/Feed/FollowPacksFeed";
 import BookmarksFeed from "./components/Feed/BookmarksFeed";
 import FollowPackDetail from "./components/FollowPacks/FollowPackDetail";
+import FollowPackEditor from "./components/FollowPacks/FollowPackEditor";
 import ArticlesFeed from "./components/Feed/ArticlesFeed";
 import MusicFeed from "./components/Feed/MusicFeed";
 import PlaylistDetail from "./components/Music/PlaylistDetail";
@@ -97,7 +96,11 @@ import { SettingsScreen } from "./components/Settings/SettingsScreen";
 import DraftsList from "./components/Drafts/DraftsList";
 import NavDock, { useDockClearance } from "./components/Shell/NavDock";
 import ExploreHub from "./components/Shell/ExploreHub";
+import RightRail from "./components/Shell/RightRail";
 import { useSectionColor } from "./components/Shell/useSectionColor";
+
+/** Width of the desktop feed column (the block header spans just this). */
+const CENTER_MAX_WIDTH = 680;
 
 declare global {
   interface Window {
@@ -168,6 +171,7 @@ function AppContent() {
   const location = useLocation();
   const muiTheme = useTheme();
   const isDesktop = useMediaQuery(muiTheme.breakpoints.up("md"));
+  const isWide = useMediaQuery(muiTheme.breakpoints.up("lg"));
   const section = useSectionColor();
   const prevPubkeyRef = React.useRef<string | null | undefined>(undefined);
 
@@ -184,44 +188,7 @@ function AppContent() {
     prevPubkeyRef.current = next;
   }, [user?.pubkey, resetStore]);
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* The status-bar inset is painted with the block color so the header
-          block runs edge to edge under the system bar. */}
-      <Box
-        className="header-safe-area"
-        sx={{
-          // Only the status-bar inset is painted (in the section's color), so the
-          // header's rounded bottom corners show the page behind them.
-          background: `linear-gradient(${section.color}, ${section.color}) top / 100% calc(env(safe-area-inset-top) + 1px) no-repeat`,
-        }}
-      >
-        <CollapsibleHeader>
-          <Header />
-        </CollapsibleHeader>
-      </Box>
-      <UpdateBanner />
-
-      {/* Sidebar + routes side by side — both heights are constant */}
-      <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex" }}>
-        <NavSidebar open={sidebarOpen} onToggle={toggleSidebar} />
-        <Box key={user?.pubkey ?? 'anon'} sx={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-          {isDesktop && !sidebarOpen && (
-            <DraggableCorner
-              storageKey="pollerama:sidebarFabCorner"
-              defaultCorner="bl"
-              offset={{ x: 12, y: 20 }}
-              zIndex={1200}
-            >
-              {() => (
-                // DraggableCorner's wrapper is pointer-events:none; interactive
-                // children must re-assert auto (SpeedDial's fab does this itself).
-                <Fab size="small" onClick={toggleSidebar} sx={{ pointerEvents: "auto" }}>
-                  <MenuOpenIcon fontSize="small" />
-                </Fab>
-              )}
-            </DraggableCorner>
-          )}
+  const routes = (
           <ErrorBoundary resetKey={location.pathname}>
           <Routes>
           {/* The composer owns its scroll area so the tool/Post dock can sit
@@ -264,7 +231,9 @@ function AppContent() {
             </Route>
             <Route path="polls" element={<PollFeed />} />
             <Route path="follow-packs" element={<FollowPacksFeed />} />
+            <Route path="follow-packs/new" element={<FollowPackEditor />} />
             <Route path="follow-packs/:naddr" element={<FollowPackDetail />} />
+            <Route path="follow-packs/:naddr/edit" element={<FollowPackEditor />} />
             <Route path="bookmarks" element={<BookmarksFeed />} />
             <Route path="articles" element={<ArticlesFeed />} />
             <Route path="articles/:naddr" element={<ArticleDetail />} />
@@ -295,7 +264,58 @@ function AppContent() {
           />
         </Routes>
           </ErrorBoundary>
+  );
+
+  // Desktop: a centered frame — ink rail, the feed column (with the block header
+  // over it only), and a discovery column on wide screens.
+  if (isDesktop) {
+    return (
+      <Box sx={{ height: "100%", overflow: "hidden", display: "flex", justifyContent: "center", gap: 2, px: 2 }}>
+        <NavSidebar open={sidebarOpen} onToggle={toggleSidebar} />
+        <Box
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            maxWidth: CENTER_MAX_WIDTH,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          <CollapsibleHeader>
+            <Header />
+          </CollapsibleHeader>
+          <UpdateBanner />
+          {/* position:relative anchors the feed-actions button to this column. */}
+          <Box key={user?.pubkey ?? 'anon'} sx={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+            {routes}
+          </Box>
+          <MiniPlayer />
         </Box>
+        {isWide && <RightRail />}
+      </Box>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* The status-bar inset is painted with the block color so the header
+          block runs edge to edge under the system bar. */}
+      <Box
+        className="header-safe-area"
+        sx={{
+          // Only the status-bar inset is painted (in the section's color), so the
+          // header's rounded bottom corners show the page behind them.
+          background: `linear-gradient(${section.color}, ${section.color}) top / 100% calc(env(safe-area-inset-top) + 1px) no-repeat`,
+        }}
+      >
+        <CollapsibleHeader>
+          <Header />
+        </CollapsibleHeader>
+      </Box>
+      <UpdateBanner />
+      <Box key={user?.pubkey ?? 'anon'} sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+        {routes}
       </Box>
       {/* Docked at the bottom of the app column: it shrinks the content above
           rather than overlaying it, so it never hides feed items. */}

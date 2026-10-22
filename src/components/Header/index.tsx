@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Box, IconButton, Badge, ButtonBase, CircularProgress } from "@mui/material";
+import { Box, IconButton, Badge, ButtonBase, CircularProgress, useMediaQuery, useTheme } from "@mui/material";
 import MailIcon from "@mui/icons-material/MailRounded";
 import SearchIcon from "@mui/icons-material/SearchRounded";
 import ArrowBackIcon from "@mui/icons-material/ArrowBackRounded";
@@ -19,6 +19,8 @@ import { useHeaderActionState } from "../../contexts/HeaderActionContext";
  * holds whatever is in focus — the screen title and, on feeds, the sub-feed pills
  * (published by the mounted feed through SubNavContext).
  */
+export const HEADER_FEED_ACTIONS_ID = "header-feed-actions";
+
 const Header: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -28,6 +30,7 @@ const Header: React.FC = () => {
   const titleOverride = useHeaderTitleOverride();
   const headerAction = useHeaderActionState();
   const info = routeInfo(location.pathname);
+  const isDesktop = useMediaQuery(useTheme().breakpoints.up("md"));
   // Every section of the app owns a palette color; the block wears it.
   const section = useSectionColor();
   // Pages publish pills via SubNavContext (feeds: sub-feeds; composer: Note/Poll)
@@ -73,7 +76,8 @@ const Header: React.FC = () => {
       >
         <Box sx={{ display: "flex", alignItems: "center", minHeight: 56, gap: 0.5 }}>
           {info.topLevel ? (
-            <UserMenu />
+            // Desktop keeps the account in the sidebar rail.
+            !isDesktop && <UserMenu />
           ) : (
             <IconButton color="inherit" onClick={goBack} aria-label="Back" edge="start">
               <ArrowBackIcon />
@@ -132,6 +136,9 @@ const Header: React.FC = () => {
             </ButtonBase>
           ) : (
             <>
+              {/* Desktop: the mounted feed portals its actions (new items, back to
+                  top, refresh) in here — see CreateFAB. */}
+              <Box id={HEADER_FEED_ACTIONS_ID} sx={{ display: "flex", alignItems: "center" }} />
               <IconButton color="inherit" onClick={() => setSearchOpen(true)} aria-label="Search">
                 <SearchIcon />
               </IconButton>

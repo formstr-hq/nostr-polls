@@ -1,6 +1,7 @@
 import { useSectionColor } from "../Shell/useSectionColor";
 import React, { useRef, useState } from "react";
-import { Box, Typography, Paper, Chip, CircularProgress, Tooltip } from "@mui/material";
+import { Box, Typography, Paper, Chip, CircularProgress, Tooltip, IconButton } from "@mui/material";
+import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import ReplyIcon from "@mui/icons-material/Reply";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import TimerOffIcon from "@mui/icons-material/TimerOff";
@@ -143,7 +144,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       flexDirection="column"
       alignItems={isMine ? "flex-end" : "flex-start"}
     >
-      <Box sx={{ position: "relative", maxWidth: "85%" }}>
+      <Box sx={{ position: "relative", maxWidth: "85%", "&:hover .bubble-actions": { opacity: 1 } }}>
         {/* Swipe-to-reply indicator — revealed as the bubble slides right */}
         <div
           ref={indicatorRef}
@@ -225,10 +226,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             applySwipe(0, true); // snap back
             isHorizontalSwipe.current = false;
           }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            onLongPress(msg);
-          }}
           sx={{
             px: 2,
             py: 1.1,
@@ -238,8 +235,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             background: isMine ? sent.bg : undefined,
             bgcolor: isMine ? undefined : "cb.slab",
             cursor: "default",
-            userSelect: "none",
-            WebkitUserSelect: "none",
+            // Touch: no selection, so long-press opens the actions sheet. Mouse:
+            // text stays selectable and the browser's own right-click menu works.
+            "@media (hover: none)": { userSelect: "none", WebkitUserSelect: "none" },
           }}
         >
           {/* Quoted message preview */}
@@ -306,6 +304,25 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             {dayjs.unix(msg.created_at).format("HH:mm")}
           </Typography>
         </Paper>
+        {/* Mouse users reach the actions sheet from this hover button. */}
+        <IconButton
+          className="bubble-actions"
+          size="small"
+          aria-label="Message actions"
+          onClick={() => onLongPress(msg)}
+          sx={{
+            position: "absolute",
+            top: "50%",
+            transform: "translateY(-50%)",
+            [isMine ? "left" : "right"]: -36,
+            opacity: 0,
+            transition: "opacity .15s",
+            "&:focus-visible": { opacity: 1 },
+            "@media (hover: none)": { display: "none" },
+          }}
+        >
+          <MoreHorizIcon fontSize="small" />
+        </IconButton>
       </Box>
 
       {/* Reaction badges */}

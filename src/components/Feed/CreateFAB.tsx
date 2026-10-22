@@ -1,5 +1,7 @@
-import React, { useState } from "react";
-import { Badge, Box, SpeedDial, SpeedDialAction, SpeedDialIcon, useMediaQuery, useTheme } from "@mui/material";
+import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { Badge, Box, ButtonBase, IconButton, SpeedDial, SpeedDialAction, SpeedDialIcon, Tooltip, useMediaQuery, useTheme } from "@mui/material";
+import { HEADER_FEED_ACTIONS_ID } from "../Header";
 import AddIcon from "@mui/icons-material/Add";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -8,7 +10,6 @@ import DescriptionIcon from "@mui/icons-material/Description";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useNotification } from "../../contexts/notification-context";
-import { DraggableCorner } from "../Common/DraggableCorner";
 import { useDrafts } from "../../contexts/drafts-context";
 import { DOCK_BOTTOM, DOCK_FAB_SIZE } from "../Shell/NavDock";
 import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
@@ -168,18 +169,6 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
             onClick={handleOpenDrafts}
             sx={actionSx}
           />
-          {extraActions.map((action, index) => (
-            <SpeedDialAction
-              key={`extra-action-${index}`}
-              icon={action.icon}
-              tooltipTitle={action.name}
-              onClick={() => {
-                setOpen(false);
-                action.onClick();
-              }}
-              sx={actionSx}
-            />
-          ))}
           <SpeedDialAction
             icon={<AddIcon />}
             tooltipTitle="Create"
@@ -219,17 +208,63 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
     );
   }
 
-  return (
-    <DraggableCorner
-      storageKey="pollerama:createFabCorner"
-      defaultCorner="br"
-      offset={{ x: 24, y: 24 }}
-      zIndex={1000}
-      disableIdle={hasNewItems}
-      handle=".MuiSpeedDial-fab"
-    >
-      {(corner) => renderDial(corner)}
-    </DraggableCorner>
+  // Desktop: Create and Drafts live in the sidebar rail, and the feed actions
+  // sit in the block header next to search (a corner button would cover the
+  // cards, which fill the column on desktop).
+  return <HeaderFeedActions extraActions={extraActions} />;
+};
+
+const HeaderFeedActions: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
+  const { isScrolledDown, scrollToTop, refresh, newItemCount, newItemLabel, showNewItems } =
+    useFeedActions();
+  const section = useSectionColor();
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setSlot(document.getElementById(HEADER_FEED_ACTIONS_ID));
+  }, []);
+  if (!slot) return null;
+  return createPortal(
+    <>
+      {newItemCount > 0 && (
+        <ButtonBase
+          onClick={showNewItems}
+          sx={{
+            height: 32,
+            px: 1.5,
+            mr: 0.5,
+            borderRadius: 999,
+            fontFamily: "inherit",
+            fontWeight: 800,
+            fontSize: 13,
+            bgcolor: section.on,
+            color: section.color,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {newItemCount} new {newItemLabel}
+        </ButtonBase>
+      )}
+      {isScrolledDown && (
+        <Tooltip title="Back to top">
+          <IconButton color="inherit" onClick={scrollToTop} aria-label="Back to top">
+            <KeyboardArrowUpIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      <Tooltip title="Refresh">
+        <IconButton color="inherit" onClick={refresh} aria-label="Refresh">
+          <RefreshIcon />
+        </IconButton>
+      </Tooltip>
+      {extraActions.map((action) => (
+        <Tooltip key={action.name} title={action.name}>
+          <IconButton color="inherit" onClick={action.onClick} aria-label={action.name}>
+            {action.icon}
+          </IconButton>
+        </Tooltip>
+      ))}
+    </>,
+    slot,
   );
 };
 

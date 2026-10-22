@@ -12,6 +12,7 @@ import {
 import PeopleIcon from "@mui/icons-material/People";
 import BookmarkBorderIcon from "@mui/icons-material/BookmarkBorder";
 import BookmarkIcon from "@mui/icons-material/Bookmark";
+import EditIcon from "@mui/icons-material/EditRounded";
 import { Event, nip19 } from "nostr-tools";
 import { useNavigate } from "react-router-dom";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -22,24 +23,13 @@ import OverlappingAvatars from "../Common/OverlappingAvatars";
 import { calculateTimeAgo } from "../../utils/common";
 import { FollowPackMembersDialog } from "./FollowPackMembersDialog";
 import { openProfileTab } from "../../nostr";
+import { getPackMeta, packNaddr } from "./packUtils";
 
 interface FollowPackCardProps {
   event: Event;
 }
 
-export function getPackMeta(event: Event) {
-  const title =
-    event.tags.find((t) => t[0] === "title")?.[1] ||
-    event.tags.find((t) => t[0] === "d")?.[1] ||
-    "Unnamed Pack";
-  const description =
-    event.tags.find((t) => t[0] === "description")?.[1] ||
-    event.content ||
-    "";
-  const image = event.tags.find((t) => t[0] === "image")?.[1];
-  const members = event.tags.filter((t) => t[0] === "p").map((t) => t[1]);
-  return { title, description, image, members };
-}
+export { getPackMeta } from "./packUtils";
 
 export const FollowPackCard: React.FC<FollowPackCardProps> = ({ event }) => {
   const { profiles, fetchUserProfileThrottled } = useAppContext();
@@ -138,6 +128,21 @@ export const FollowPackCard: React.FC<FollowPackCardProps> = ({ event }) => {
             <Typography variant="subtitle1" fontWeight={700} sx={{ flex: 1, lineHeight: 1.3 }}>
               {title}
             </Typography>
+            {user?.pubkey === event.pubkey && (
+              <Tooltip title="Edit pack">
+                <IconButton
+                  size="small"
+                  aria-label="Edit pack"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`/feeds/follow-packs/${packNaddr(event)}/edit`);
+                  }}
+                  sx={{ mt: -0.25, flexShrink: 0, color: "text.secondary" }}
+                >
+                  <EditIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+            )}
             {user && (
               <Tooltip title={isBookmarked ? "Remove bookmark" : "Bookmark pack"}>
                 <IconButton

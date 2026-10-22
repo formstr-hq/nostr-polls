@@ -156,6 +156,16 @@ export const normalizeBookmarkRef = (ref: string): string => {
   return m[2];
 };
 
+export interface FollowPackInput {
+  identifier?: string;
+  title: string;
+  description: string;
+  image?: string;
+  members: string[];
+  /** The pack being edited, so tags this app doesn't manage are preserved. */
+  base?: Event;
+}
+
 interface ListContextInterface {
   lists: Map<string, Event> | undefined;
   selectedList: string | undefined;
@@ -186,6 +196,11 @@ interface ListContextInterface {
   bookmarkEvent: (event: Event) => Promise<void>;
   unbookmarkEvent: (event: Event) => Promise<void>;
   fetchAndHydratePacks: (adrefs: string[]) => void;
+  // Create or update one of the user's own follow packs (kind 39089). Pass the
+  // existing `identifier` to replace a pack in place; omit it to create one.
+  publishFollowPack: (pack: FollowPackInput) => Promise<Event>;
+  // Request deletion of one of the user's packs (NIP-09, by id and address).
+  deleteFollowPack: (packEvent: Event) => Promise<void>;
   // Which of the user's own follows follow `pubkey` (the "followed by" set).
   getNetworkFollowers: (pubkey: string) => string[];
   // Trust score for a pubkey: how many of the user's follows follow them (0 if
@@ -373,6 +388,10 @@ export function ListProvider({ children }: { children: ReactNode }) {
   const handleListEvent = (event: Event) => {
     setLists((prevMap) => {
       let a_tag = getATagFromEvent(event);
+      // Replaceable lists: a late replay of an older version must not clobber a
+      // newer one (e.g. right after the user edits their own pack).
+      const existing = prevMap?.get(a_tag);
+      if (existing && existing.created_at > event.created_at) return prevMap;
       const newMap = new Map(prevMap);
       newMap.set(a_tag, event);
       return newMap;
@@ -458,6 +477,52 @@ export function ListProvider({ children }: { children: ReactNode }) {
         { kinds: [39089], authors: [pubkey], "#d": [identifier], limit: 1 },
       ]).then((evts) => evts.forEach(handleListEvent));
     });
+  };
+
+  const publishFollowPack = async (pack: FollowPackInput): Promise<Event> => {
+    const identifier = pack.identifier || Math.random().toString(36).slice(2, 12);
+    const managed = new Set(["d", "title", "description", "image", "p"]);
+    const kept = (pack.base?.tags ?? []).filter((t) => !managed.has(t[0]));
+    const members = Array.from(new Set(pack.members));
+    const tags: string[][] = [
+      ["d", identifier],
+      ["title", pack.title.trim()],
+      ...(pack.description.trim() ? [["description", pack.description.trim()]] : []),
+      ...(pack.image?.trim() ? [["image", pack.image.trim()]] : []),
+      ...kept,
+      ...members.map((pk) => ["p", pk]),
+    ];
+    const signer = await signerManager.getSigner();
+    const signed = await signer.signEvent({
+      kind: 39089,
+      // Strictly newer than the version being replaced so relays keep this one.
+      created_at: Math.max(Math.floor(Date.now() / 1000), (pack.base?.created_at ?? 0) + 1),
+      tags,
+      content: "",
+    });
+    dataLayer.addEvent(signed);
+    handleListEvent(signed);
+    await dataLayer.publishEvent(signed);
+    return signed;
+  };
+
+  const deleteFollowPack = async (packEvent: Event): Promise<void> => {
+    const aTag = getATagFromEvent(packEvent);
+    const signer = await signerManager.getSigner();
+    const signed = await signer.signEvent({
+      kind: 5,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["e", packEvent.id], ["a", aTag], ["k", "39089"]],
+      content: "",
+    });
+    dataLayer.addEvent(signed);
+    setLists((prev) => {
+      if (!prev?.has(aTag)) return prev;
+      const next = new Map(prev);
+      next.delete(aTag);
+      return next;
+    });
+    await dataLayer.publishEvent(signed);
   };
 
   const processBookmarksEvent = async (event: Event) => {
@@ -1488,6 +1553,8 @@ export function ListProvider({ children }: { children: ReactNode }) {
         bookmarkEvent,
         unbookmarkEvent,
         fetchAndHydratePacks,
+        publishFollowPack,
+        deleteFollowPack,
         getNetworkFollowers,
         getTrustScore,
         rankByTrust,

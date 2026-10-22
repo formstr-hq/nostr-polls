@@ -51,7 +51,7 @@ const PollFeedItem = React.memo(
     // Dedupe by reposter so each person counts once.
     const repostedBy = Array.from(new Set(reposts.map((r) => r.pubkey)));
     return (
-      <Box sx={{ my: "20px", mx: { xs: 0, sm: "auto" }, width: "100%", maxWidth: { xs: "100%", sm: "600px" } }}>
+      <Box sx={{ my: "20px", mx: { xs: 0, sm: "auto" }, width: "100%", maxWidth: { xs: "100%", sm: "600px", md: "100%" } }}>
         {repostedBy.length > 0 && (
           <Box
             sx={{

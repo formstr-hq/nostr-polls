@@ -12,7 +12,7 @@ const FeedsLayout: React.FC = () => {
       <Box
         maxWidth={800}
         mx="auto"
-        px={{ xs: 0, sm: 2 }}
+        px={{ xs: 0, sm: 2, md: 0 }}
         sx={{
           ...dockClearance,
           height: "100%",

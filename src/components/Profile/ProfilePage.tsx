@@ -41,6 +41,10 @@ import { TextWithImages } from "../Common/Parsers/TextWithImages";
 import EditIcon from "@mui/icons-material/Edit";
 import LinkIcon from "@mui/icons-material/Link";
 import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
+import GroupsIcon from "@mui/icons-material/GroupsRounded";
+import GroupAddIcon from "@mui/icons-material/GroupAddRounded";
+import { AddToPackDialog } from "../FollowPacks/AddToPackDialog";
+import { safeSetItem } from "../../utils/localStorage";
 import { FeedActionsProvider } from "../../contexts/FeedActionsContext";
 import CreateFAB from "../Feed/CreateFAB";
 import { ProfileEditModal } from "./ProfileEditModal";
@@ -83,6 +87,7 @@ const ProfilePage: React.FC = () => {
   const [profile, setProfile] = useState<any>(null);
   const [tabValue, setTabValue] = useState(0);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [addToPackOpen, setAddToPackOpen] = useState(false);
   const [followsYou, setFollowsYou] = useState(false);
   const [showContactListWarning, setShowContactListWarning] = useState(false);
   const [pendingFollowKey, setPendingFollowKey] = useState<string | null>(null);
@@ -439,13 +444,26 @@ const ProfilePage: React.FC = () => {
             }}
           >
             {isOwnProfile ? (
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => setEditModalOpen(true)}
-              >
-                Edit Profile
-              </Button>
+              <>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => setEditModalOpen(true)}
+                >
+                  Edit Profile
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<GroupsIcon />}
+                  onClick={() => {
+                    safeSetItem("pollerama:followPacksSource", "mine");
+                    navigate("/feeds/follow-packs");
+                  }}
+                >
+                  My packs
+                </Button>
+              </>
             ) : user ? (
               <>
                 {user.follows?.includes(pubkey) ? (
@@ -483,6 +501,14 @@ const ProfilePage: React.FC = () => {
                   onClick={() => navigate(`/messages/${npub}`)}
                 >
                   Message
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<GroupAddIcon />}
+                  onClick={() => setAddToPackOpen(true)}
+                >
+                  Add to pack
                 </Button>
               </>
             ) : null}
@@ -672,6 +698,15 @@ const ProfilePage: React.FC = () => {
             : []
         }
       />
+
+      {user && !isOwnProfile && (
+        <AddToPackDialog
+          open={addToPackOpen}
+          pubkey={pubkey}
+          name={profile?.name || profile?.username || "them"}
+          onClose={() => setAddToPackOpen(false)}
+        />
+      )}
 
       {/* Profile Edit Modal */}
       <ProfileEditModal

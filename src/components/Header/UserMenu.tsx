@@ -3,6 +3,7 @@ import {
   Avatar,
   Badge,
   Box,
+  ButtonBase,
   Chip,
   Divider,
   ListItemAvatar,
@@ -34,7 +35,13 @@ function shortNpub(pubkey: string): string {
   return `${npub.slice(0, 10)}...${npub.slice(-4)}`;
 }
 
-export const UserMenu: React.FC = () => {
+interface UserMenuProps {
+  /** "rail": avatar + name row for the desktop sidebar; `compact` drops the name. */
+  variant?: "avatar" | "rail";
+  compact?: boolean;
+}
+
+export const UserMenu: React.FC<UserMenuProps> = ({ variant = "avatar", compact = false }) => {
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
   const [showKeysModal, setShowKeysModal] = React.useState(false);
   const [showContactsModal, setShowContactsModal] = React.useState(false);
@@ -85,9 +92,12 @@ export const UserMenu: React.FC = () => {
     requestLogin();
   };
 
+  const rail = variant === "rail";
+
   return (
     <div>
       <Tooltip
+        placement={rail ? "right" : undefined}
         title={
           user?.pubkey
             ? `${shortNpub(user.pubkey)}${user?.privateKey ? " · Guest key stored insecurely in browser" : ""}`
@@ -102,6 +112,39 @@ export const UserMenu: React.FC = () => {
           anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
           badgeContent={<WarningAmber fontSize="small" />}
         >
+          {rail ? (
+            <ButtonBase
+              onClick={(e) => setAnchorEl(e.currentTarget)}
+              aria-label="Account menu"
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1.25,
+                p: 0.5,
+                borderRadius: "16px",
+                fontFamily: "inherit",
+                textAlign: "left",
+                color: "inherit",
+                minWidth: 0,
+              }}
+            >
+              <Avatar src={profilePicture} sx={{ width: 36, height: 36 }}>
+                {!profilePicture && (profileName?.[0] ?? "?")}
+              </Avatar>
+              {!compact && (
+                <Box sx={{ minWidth: 0, lineHeight: 1.25 }}>
+                  <Box sx={{ fontWeight: 800, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {user ? profileName || "Anonymous" : "Log in"}
+                  </Box>
+                  {user && (
+                    <Box sx={{ fontSize: 12, opacity: 0.6, whiteSpace: "nowrap" }}>
+                      {shortNpub(user.pubkey)}
+                    </Box>
+                  )}
+                </Box>
+              )}
+            </ButtonBase>
+          ) : (
           <Avatar
             src={profilePicture}
             onClick={(e) => setAnchorEl(e.currentTarget)}
@@ -115,6 +158,7 @@ export const UserMenu: React.FC = () => {
           >
             {!profilePicture && (profileName?.[0] ?? "?")}
           </Avatar>
+          )}
         </Badge>
       </Tooltip>
 

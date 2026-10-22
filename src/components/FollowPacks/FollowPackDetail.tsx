@@ -12,6 +12,10 @@ import {
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import PeopleIcon from "@mui/icons-material/People";
+import EditIcon from "@mui/icons-material/EditRounded";
+import DeleteIcon from "@mui/icons-material/DeleteOutlineRounded";
+import { useUserContext } from "../../hooks/useUserContext";
+import { DeletePackDialog } from "./DeletePackDialog";
 import { Event, Filter, nip19 } from "nostr-tools";
 import { dataLayer } from "@formstr/local-relay";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -21,22 +25,9 @@ import PollResponseForm from "../PollResponse/PollResponseForm";
 import { FollowPackMembersDialog } from "./FollowPackMembersDialog";
 import { calculateTimeAgo } from "../../utils/common";
 import { openProfileTab } from "../../nostr";
+import { getPackMeta } from "./packUtils";
 
 const BATCH_SIZE = 20;
-
-function getPackMeta(event: Event) {
-  const title =
-    event.tags.find((t) => t[0] === "title")?.[1] ||
-    event.tags.find((t) => t[0] === "d")?.[1] ||
-    "Unnamed Pack";
-  const description =
-    event.tags.find((t) => t[0] === "description")?.[1] ||
-    event.content ||
-    "";
-  const image = event.tags.find((t) => t[0] === "image")?.[1];
-  const members = event.tags.filter((t) => t[0] === "p").map((t) => t[1]);
-  return { title, description, image, members };
-}
 
 const FollowPackDetail: React.FC = () => {
   const { naddr } = useParams<{ naddr: string }>();
@@ -46,6 +37,8 @@ const FollowPackDetail: React.FC = () => {
   const [packEvent, setPackEvent] = useState<Event | null>(null);
   const [packLoading, setPackLoading] = useState(true);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const { user } = useUserContext();
 
   const [feedEvents, setFeedEvents] = useState<Event[]>([]);
   const [feedLoading, setFeedLoading] = useState(false);
@@ -68,7 +61,12 @@ const FollowPackDetail: React.FC = () => {
     const { kind, pubkey, identifier } = decoded.data;
     const filter: Filter = { kinds: [kind], authors: [pubkey], "#d": [identifier], limit: 1 };
     const handle = dataLayer.observe([filter], {
-      onEvent: (e) => { setPackEvent(e); setPackLoading(false); },
+      onEvent: (e) => {
+        // Replaceable: keep the newest version (an older cached copy can arrive
+        // after the one just published by the editor).
+        setPackEvent((prev) => (!prev || e.created_at >= prev.created_at ? e : prev));
+        setPackLoading(false);
+      },
       // No onEose: the pack arrives via onEvent after the worker's upstream
       // fetch; the timeout below closes the interest.
     });
@@ -243,6 +241,22 @@ const FollowPackDetail: React.FC = () => {
               />
             </Tooltip>
           </Box>
+
+          {user?.pubkey === packEvent.pubkey && (
+            <Box sx={{ display: "flex", gap: 1, mt: 2 }}>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<EditIcon />}
+                onClick={() => navigate(`/feeds/follow-packs/${naddr}/edit`)}
+              >
+                Edit pack
+              </Button>
+              <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => setDeleteOpen(true)}>
+                Delete
+              </Button>
+            </Box>
+          )}
         </Box>
       </Box>
 
@@ -280,6 +294,12 @@ const FollowPackDetail: React.FC = () => {
         </>
       )}
 
+      <DeletePackDialog
+        open={deleteOpen}
+        pack={packEvent}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={() => navigate("/feeds/follow-packs", { replace: true })}
+      />
       <FollowPackMembersDialog
         open={membersOpen}
         onClose={() => setMembersOpen(false)}

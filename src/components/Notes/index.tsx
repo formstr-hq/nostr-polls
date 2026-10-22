@@ -246,27 +246,6 @@ export const Notes: React.FC<NotesProps> = ({
   };
 
 
-  const handleContextMenu = (event: React.MouseEvent) => {
-    const target = event.target as HTMLElement;
-    // Don't intercept context menu inside inputs/textareas/links — user needs
-    // native browser menu for paste, spell-check, open-in-new-tab, etc.
-    if (
-      target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA" ||
-      target.isContentEditable ||
-      target.closest("a")
-    ) {
-      return;
-    }
-    // On touch devices, don't intercept — the long-press context menu is how
-    // users start text selection. The ⋮ button provides the same actions.
-    if (navigator.maxTouchPoints > 0) {
-      return;
-    }
-    event.preventDefault();
-    setMenuAnchor(event.currentTarget as HTMLElement);
-  };
-
   const handleCloseMenu = () => {
     setMenuAnchor(null);
   };
@@ -460,7 +439,6 @@ export const Notes: React.FC<NotesProps> = ({
             opacity: hidden ? 0.5 : 1,
             pointerEvents: "auto",
           }}
-          onContextMenu={handleContextMenu}
         >
           {!hideActions && referencedEventId && (
             <Button
