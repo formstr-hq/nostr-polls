@@ -196,30 +196,30 @@ function AppContent() {
           <Route path="/create" element={<EventCreator />} />
           <Route
             path="/respond/:eventId"
-            element={<ScrollPage><PollResponse /></ScrollPage>}
+            element={<ByParams><ScrollPage><PollResponse /></ScrollPage></ByParams>}
           />
           <Route
             path="note/:eventId"
-            element={<PrepareNoteWrapper />}
+            element={<ByParams><PrepareNoteWrapper /></ByParams>}
           />
           <Route
             path="p/:nevent"
-            element={<PrivateNoteWrapper />}
+            element={<ByParams><PrivateNoteWrapper /></ByParams>}
           />
           <Route
             path="/profile/:npubOrNprofile"
-            element={<ProfilePage />}
+            element={<ByParams><ProfilePage /></ByParams>}
           />
           <Route
             path="/result/:eventId"
-            element={<ScrollPage><PollResults /></ScrollPage>}
+            element={<ByParams><ScrollPage><PollResults /></ScrollPage></ByParams>}
           />
           <Route path="/settings" element={<SettingsScreen />} />
           <Route path="/drafts" element={<ScrollPage><DraftsList /></ScrollPage>} />
           <Route path="/notifications" element={<ScrollPage><NotificationsPage /></ScrollPage>} />
           <Route path="/messages" element={<ScrollPage><ConversationList /></ScrollPage>} />
           <Route path="/messages/new" element={<ScrollPage><NewConversation /></ScrollPage>} />
-          <Route path="/messages/:npub" element={<ChatView />} />
+          <Route path="/messages/:npub" element={<ByParams><ChatView /></ByParams>} />
           <Route path="/ratings" element={<EventList />} />
 
           <Route path="/feeds" element={<FeedsLayout />}>
@@ -227,19 +227,19 @@ function AppContent() {
             <Route path="notes" element={<NotesFeed />} />
             <Route path="profiles" element={<ProfilesFeed />} />
             <Route path="topics" element={<TopicsFeed />}>
-              <Route path=":tag" element={<TopicExplorer />} />
+              <Route path=":tag" element={<ByParams><TopicExplorer /></ByParams>} />
             </Route>
             <Route path="polls" element={<PollFeed />} />
             <Route path="follow-packs" element={<FollowPacksFeed />} />
             <Route path="follow-packs/new" element={<FollowPackEditor />} />
-            <Route path="follow-packs/:naddr" element={<FollowPackDetail />} />
-            <Route path="follow-packs/:naddr/edit" element={<FollowPackEditor />} />
+            <Route path="follow-packs/:naddr" element={<ByParams><FollowPackDetail /></ByParams>} />
+            <Route path="follow-packs/:naddr/edit" element={<ByParams><FollowPackEditor /></ByParams>} />
             <Route path="bookmarks" element={<BookmarksFeed />} />
             <Route path="articles" element={<ArticlesFeed />} />
-            <Route path="articles/:naddr" element={<ArticleDetail />} />
+            <Route path="articles/:naddr" element={<ByParams><ArticleDetail /></ByParams>} />
             <Route path="music" element={<MusicFeed />} />
-            <Route path="music/shared/:naddr" element={<SharedPlaylistDetail />} />
-            <Route path="music/:playlistId" element={<PlaylistDetail />} />
+            <Route path="music/shared/:naddr" element={<ByParams><SharedPlaylistDetail /></ByParams>} />
+            <Route path="music/:playlistId" element={<ByParams><PlaylistDetail /></ByParams>} />
             <Route path="explore" element={<ExploreHub />} />
             <Route path="games" element={<GamesFeed />} />
             <Route path="games/2048" element={<Twenty48Board />} />
@@ -250,7 +250,7 @@ function AppContent() {
               <Route path="movies" element={<MoviesFeed />} />
               <Route
                 path="movies/:imdbId"
-                element={<MoviePage />}
+                element={<ByParams><MoviePage /></ByParams>}
               />
             </Route>
 
@@ -445,6 +445,19 @@ const App: React.FC = () => {
     </NotificationProvider>
   );
 };
+
+/**
+ * Remount a page when its URL parameters change. React Router reuses the mounted
+ * element when only a param changes (topic → topic, pack → pack, profile →
+ * profile), so pages that accumulate state — loaded notes, seen-ids, cursors,
+ * moderation maps — kept showing the previous item's content under the new
+ * title. A fresh mount per param also closes the old subscription before it can
+ * deliver late events into the new page.
+ */
+function ByParams({ children }: { children: React.ReactNode }) {
+  const params = useParams();
+  return <React.Fragment key={JSON.stringify(params)}>{children}</React.Fragment>;
+}
 
 // Standalone pages need their own overflow-y:auto container because the global
 // layout locks html/body overflow so Virtuoso can be the sole scroller on feeds.
