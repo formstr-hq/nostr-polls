@@ -51,15 +51,14 @@ export function collectOnce(
           if (quietTimer) clearTimeout(quietTimer);
           quietTimer = setTimeout(finish, quietMs);
         },
-        // Deliberately no onEose handler: local EOSE is not completion here.
+        // Networked reads: local EOSE is not completion (upstream streams in
+        // later). A pure cache read has no upstream, so its EOSE — the end of
+        // the store replay — is exactly completion. (Settling on a 0ms timer
+        // instead resolved before the worker's async replay arrived, so cache
+        // reads always came back empty.)
+        ...(localOnly ? { onEose: finish } : {}),
       },
       { localOnly }
     );
-
-    // A pure cache read (localOnly) has no upstream to wait for, so collapse the
-    // quiet window — if nothing streamed synchronously, settle on the next tick.
-    if (localOnly && !quietTimer) {
-      quietTimer = setTimeout(finish, 0);
-    }
   });
 }

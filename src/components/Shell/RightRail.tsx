@@ -74,24 +74,27 @@ function useTrendingTopics(hydrated: boolean, limit = 8) {
         { localOnly: true },
       ).then((events) => {
         if (!alive) return;
-        // Count each author once per tag, so one prolific poster can't trend a tag.
-        const byTag = new Map<string, Set<string>>();
+        // Rank by distinct authors (one prolific poster can't trend a tag on
+        // their own), then by total uses.
+        const byTag = new Map<string, { authors: Set<string>; uses: number }>();
         for (const e of events) {
           for (const t of e.tags) {
             if (t[0] !== "t" || !t[1]) continue;
             const tag = t[1].toLowerCase().replace(/^#/, "");
             if (tag.length < 2 || tag.length > 32) continue;
-            if (!byTag.has(tag)) byTag.set(tag, new Set());
-            byTag.get(tag)!.add(e.pubkey);
+            const entry = byTag.get(tag) ?? { authors: new Set<string>(), uses: 0 };
+            entry.authors.add(e.pubkey);
+            entry.uses += 1;
+            byTag.set(tag, entry);
           }
         }
-        setTags(
-          Array.from(byTag.entries())
-            .filter(([, authors]) => authors.size >= 2)
-            .sort((a, b) => b[1].size - a[1].size)
-            .slice(0, limit)
-            .map(([tag]) => tag),
+        const ranked = Array.from(byTag.entries()).sort(
+          (a, b) => b[1].authors.size - a[1].authors.size || b[1].uses - a[1].uses,
         );
+        const shared = ranked.filter(([, v]) => v.authors.size >= 2);
+        // Top up a thin list with tags one person used repeatedly.
+        const extra = ranked.filter(([, v]) => v.authors.size < 2 && v.uses >= 3);
+        setTags([...shared, ...extra].slice(0, Math.max(6, Math.min(limit, shared.length))).map(([tag]) => tag));
       });
     run();
     const id = setInterval(run, 5 * 60 * 1000);
