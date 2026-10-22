@@ -1,5 +1,6 @@
 import { useSectionColorAt } from "../Shell/useSectionColor";
-import React from "react";
+import React, { useEffect } from "react";
+import { nip19 } from "nostr-tools";
 import { Avatar, Box, ButtonBase, CircularProgress, IconButton, Tooltip, Typography, useTheme } from "@mui/material";
 import { readableOn } from "../../styles/theme";
 import CloudDoneIcon from "@mui/icons-material/CloudDoneRounded";
@@ -16,39 +17,71 @@ export const ComposerSlab: React.FC<{ children: React.ReactNode; sx?: object }> 
   <Box sx={{ bgcolor: "cb.slab", borderRadius: "26px", p: { xs: 1.75, sm: 2.25 }, ...sx }}>{children}</Box>
 );
 
-/** Author line with the draft autosave status. */
+/** Short, still-distinguishable npub: `npub1cgd35…9kfex`. */
+function shortNpub(pubkey: string): string {
+  const npub = nip19.npubEncode(pubkey);
+  return `${npub.slice(0, 10)}…${npub.slice(-5)}`;
+}
+
+/**
+ * Who is posting, with the draft autosave status. Always shows the account's
+ * npub — with several accounts, a name and picture alone (or the old "You"
+ * fallback before the profile loaded) left it unclear which one would post.
+ */
 export const WhoLine: React.FC<{
   autosaveStatus?: string;
   savedAt?: number;
 }> = ({ autosaveStatus, savedAt }) => {
   const { user } = useUserContext();
-  const { profiles } = useAppContext();
-  const profile = user?.pubkey ? profiles?.get(user.pubkey) : undefined;
-  const name = profile?.name || profile?.display_name || "You";
+  const { profiles, fetchUserProfileThrottled } = useAppContext();
+  const pubkey = user?.pubkey;
+  const profile = pubkey ? profiles?.get(pubkey) : undefined;
+
+  // Ask for the profile if it isn't loaded yet; until then fall back to the
+  // account's cached name/picture, then to the npub itself.
+  useEffect(() => {
+    if (pubkey && !profile) fetchUserProfileThrottled(pubkey);
+  }, [pubkey, profile, fetchUserProfileThrottled]);
+
+  const npub = pubkey ? shortNpub(pubkey) : "";
+  const name = profile?.display_name || profile?.name || user?.name || npub || "Not logged in";
+  const picture = profile?.picture || user?.picture || DEFAULT_IMAGE_URL;
   const saving = autosaveStatus === "pending" || autosaveStatus === "saving";
   const saved = autosaveStatus === "saved" && savedAt;
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, mb: 1 }}>
-      <Avatar src={profile?.picture || DEFAULT_IMAGE_URL} sx={{ width: 36, height: 36 }} />
-      <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{name}</Typography>
-      {(saving || saved) && (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, mb: 1, minWidth: 0 }}>
+      <Avatar src={picture} sx={{ width: 36, height: 36, flexShrink: 0 }} />
+      <Box sx={{ minWidth: 0, lineHeight: 1.25 }}>
+        <Typography noWrap sx={{ fontWeight: 700, fontSize: 15, lineHeight: 1.3 }}>
+          {name}
+        </Typography>
         <Typography
+          component="div"
           variant="caption"
           color="text.secondary"
-          sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
+          sx={{ display: "flex", alignItems: "center", gap: 0.5, flexWrap: "wrap" }}
           aria-live="polite"
         >
-          <span aria-hidden>·</span>
-          {saving ? (
-            "Saving draft…"
-          ) : (
+          {npub && name !== npub && (
+            <Box component="span" sx={{ fontFamily: "monospace" }} title={pubkey && nip19.npubEncode(pubkey)}>
+              {npub}
+            </Box>
+          )}
+          {(saving || saved) && (
             <>
-              <CloudDoneIcon sx={{ fontSize: 15 }} />
-              Draft saved {calculateTimeAgo(Math.floor((savedAt as number) / 1000))}
+              {npub && name !== npub && <span aria-hidden>·</span>}
+              {saving ? (
+                "Saving draft…"
+              ) : (
+                <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+                  <CloudDoneIcon sx={{ fontSize: 15 }} />
+                  Draft saved {calculateTimeAgo(Math.floor((savedAt as number) / 1000))}
+                </Box>
+              )}
             </>
           )}
         </Typography>
-      )}
+      </Box>
     </Box>
   );
 };
