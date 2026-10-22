@@ -1,3 +1,12 @@
+# 2.2.0
+
+- Your own follow packs: a new "Mine" tab on Packs shows the packs you made and the packs you're in, and updates live.
+- Create and edit packs: give a pack a name, description and cover image, and add people by searching who you follow, from suggestions, or by pasting an npub. Edit or delete your own packs from the pack page.
+- "Add to pack" on anyone's profile, and "My packs" on your own.
+- Steadier connections: the app now paces its requests to each relay and respects relay limits, so relays no longer start rate-limiting or blocking it after a while of use. Requests are much smaller, and the same relay is never connected to twice.
+- On the web, desktop gets a new layout: a sidebar with your account and Create, the feed in the middle, and a column with search, trending topics, polls closing soon and follow packs.
+- On the web, right-click now opens the normal browser menu. Message actions are on a hover button.
+
 # 2.1.1
 
 - Composer: Post now sits in the header, so it stays above the keyboard instead of covering the note or poll fields.
