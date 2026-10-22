@@ -42,8 +42,8 @@ reverse proxy → pollerama-web :8080
 | `PREVIEW_CACHE_MAX` | `5000` | max cached previews |
 | `DEFAULT_OG_IMAGE` | `${SITE_URL}/og-default.png` | override the fallback card |
 | `SITE_NAME` | `Pollerama` | `og:site_name` |
-| `APP_TITLE` | `Pollerama` | generic title |
-| `DEFAULT_DESCRIPTION` | `Polls On Nostr!` | generic description |
+| `APP_TITLE` | `Pollerama — The fun Nostr client` | title for the homepage and other non-event pages |
+| `DEFAULT_DESCRIPTION` | `Polls, notes, articles, music, movies, games and topics — all on Nostr.` | description for the homepage and other non-event pages |
 | `LINK_PREVIEW_TIMEOUT_MS` | `6000` | per-request timeout for `/api/link-preview` |
 | `LINK_PREVIEW_CACHE_MS` | `21600000` | in-memory link-preview TTL |
 | `LINK_PREVIEW_CACHE_MAX` | `5000` | max cached link previews |

@@ -22,8 +22,10 @@ const config = {
   siteUrl: (process.env.SITE_URL || "http://localhost:8080").replace(/\/$/, ""),
   defaultImage: (process.env.DEFAULT_OG_IMAGE || "").trim(),
   siteName: process.env.SITE_NAME || "Pollerama",
-  appTitle: process.env.APP_TITLE || "Pollerama",
-  defaultDescription: process.env.DEFAULT_DESCRIPTION || "Polls On Nostr!",
+  appTitle: process.env.APP_TITLE || "Pollerama — The fun Nostr client",
+  defaultDescription:
+    process.env.DEFAULT_DESCRIPTION ||
+    "Polls, notes, articles, music, movies, games and topics — all on Nostr.",
 };
 
 const MIME = {
@@ -344,7 +346,14 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  sendHtml(req, res, indexHtml, "public, max-age=0, must-revalidate");
+  // Every other app route — including the homepage — gets the default card, so
+  // sharing plain pollerama.fun (or /feeds/…) unfurls with a title and image too.
+  sendHtml(
+    req,
+    res,
+    renderHtml({ ...describe(null), url: `${config.siteUrl}${pathname}` }),
+    "public, max-age=0, must-revalidate"
+  );
 });
 
 await loadAssets();
