@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { Event, EventTemplate, Filter } from "nostr-tools";
-import { parseContacts, getATagFromEvent } from "../nostr";
+import { parseContacts, getATagFromEvent, defaultRelays } from "../nostr";
 import { useUserContext } from "../hooks/useUserContext";
 import { useAppContext } from "../hooks/useAppContext";
 import { User } from "./user-context";
@@ -256,6 +256,8 @@ export function ListProvider({ children }: { children: ReactNode }) {
   // Standing interest in the user's own contact list (kind 3). Kept open so the
   // worker's upstream fetch can stream it in after the local EOSE.
   const contactHandleRef = useRef<{ unobserve: () => void } | null>(null);
+  // Standing interest in the user's own packs and packs they're listed in.
+  const packsHandleRef = useRef<{ unobserve: () => void } | null>(null);
   // pubkey -> set of the user's follows who follow them. Lives in a ref (large,
   // mutated incrementally); `wotIndexVersion` bumps to notify consumers.
   const networkIndexRef = useRef<Map<string, Set<string>>>(new Map());
@@ -309,6 +311,8 @@ export function ListProvider({ children }: { children: ReactNode }) {
       setBookmarks10003(null);
       contactHandleRef.current?.unobserve();
       contactHandleRef.current = null;
+      packsHandleRef.current?.unobserve();
+      packsHandleRef.current = null;
       wotWorkerRef.current?.terminate();
       wotWorkerRef.current = null;
       wotInFlightRef.current = false;
@@ -324,11 +328,14 @@ export function ListProvider({ children }: { children: ReactNode }) {
     prevPubkeyRef.current = next;
   }, [user?.pubkey]);
 
-  // Tear down the WoT worker if the provider unmounts mid-computation.
+  // Tear down the WoT worker if the provider unmounts mid-computation, and the
+  // standing packs interest with it.
   useEffect(() => {
     return () => {
       wotWorkerRef.current?.terminate();
       wotWorkerRef.current = null;
+      packsHandleRef.current?.unobserve();
+      packsHandleRef.current = null;
     };
   }, []);
 
@@ -456,14 +463,22 @@ export function ListProvider({ children }: { children: ReactNode }) {
   };
 
   const fetchLists = () => {
-    // Packs I created + packs I'm mentioned in. collectOnce keeps the interest
-    // open across the worker's upstream fetch (local EOSE is not completion) and
-    // resolves once the stream goes quiet.
-    collectOnce([{ kinds: [39089], limit: 100, authors: [user!.pubkey] }]).then((evts) =>
-      evts.forEach(handleListEvent),
-    );
-    collectOnce([{ kinds: [39089], limit: 100, "#p": [user!.pubkey] }]).then((evts) =>
-      evts.forEach(handleListEvent),
+    // Packs I created + packs I'm listed in, as a standing interest: results
+    // keep streaming in however slowly relays answer (a one-shot read settled
+    // after a short quiet gap and could miss them), and edits — ours from
+    // another device, or someone adding us to a pack — arrive live.
+    // handleListEvent keeps only the newest version of each pack.
+    // The app's default relays are passed as hints: packs made in Pollerama
+    // were published there, which often isn't in the user's NIP-65 list, so an
+    // outbox-only lookup can miss the user's own packs entirely.
+    packsHandleRef.current?.unobserve();
+    packsHandleRef.current = dataLayer.observe(
+      [
+        { kinds: [39089], limit: 100, authors: [user!.pubkey] },
+        { kinds: [39089], limit: 100, "#p": [user!.pubkey] },
+      ],
+      { onEvent: handleListEvent },
+      { relays: defaultRelays },
     );
   };
 
@@ -1344,7 +1359,7 @@ export function ListProvider({ children }: { children: ReactNode }) {
     // pass instead of EOSE-ing cold and retrying after hydration.
     if (!hydrated) return;
     if (user) {
-      if (!lists) fetchLists();
+      if (!packsHandleRef.current) fetchLists();
       // Always keep a standing kind-3 subscription open to revalidate the
       // contact list against relays — NOT just when follows is empty. Cached
       // follows (seeded from localStorage on login) make `user.follows`
