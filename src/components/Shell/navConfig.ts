@@ -44,6 +44,9 @@ export function routeInfo(pathname: string): RouteInfo {
   if (root === "feeds") {
     const feed = sub || "polls";
     const isDetail = !!detail;
+    if (feed === "follow-packs" && (detail === "new" || parts[3] === "edit")) {
+      return { title: detail === "new" ? "New pack" : "Edit pack", topLevel: false, poll: false, hideDock: true };
+    }
     return {
       title: FEED_TITLES[feed] ?? "Pollerama",
       topLevel: !isDetail || feed === "topics",

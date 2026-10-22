@@ -1,15 +1,13 @@
-import React, { useState } from "react";
+import React from "react";
 import {
+  Badge,
   Box,
+  ButtonBase,
   IconButton,
-  Menu,
-  MenuItem,
   Tooltip,
-  Typography,
   useMediaQuery,
   useTheme,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import AllInclusiveIcon from "@mui/icons-material/AllInclusive";
 import HowToVoteIcon from "@mui/icons-material/HowToVote";
 import TagIcon from "@mui/icons-material/Tag";
@@ -20,73 +18,17 @@ import MusicNoteIcon from "@mui/icons-material/MusicNote";
 import PeopleIcon from "@mui/icons-material/People";
 import BookmarkIcon from "@mui/icons-material/Bookmark";
 import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
-import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import SettingsIcon from "@mui/icons-material/SettingsRounded";
+import DescriptionIcon from "@mui/icons-material/DescriptionRounded";
+import AddIcon from "@mui/icons-material/AddRounded";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeftRounded";
+import ChevronRightIcon from "@mui/icons-material/ChevronRightRounded";
 import { SvgIconComponent } from "@mui/icons-material";
 import { useNavigate, useLocation } from "react-router-dom";
-import { useSubNav } from "../../contexts/SubNavContext";
-import { safeSetItem } from "../../utils/localStorage";
 import { sectionIndex } from "../Shell/navConfig";
-import { sectionColorFrom } from "../Shell/useSectionColor";
-
-// Static sub-item definitions — used for the mobile popup regardless of which
-// feed is currently mounted. Active state is read from localStorage so we can
-// show the correct selection even for feeds that aren't mounted yet.
-const MOBILE_SUB_ITEMS: Record<string, { key: string; label: string }[]> = {
-  home: [
-    { key: "following", label: "Following" },
-    { key: "network", label: "Network" },
-  ],
-  polls: [
-    { key: "global", label: "Global" },
-    { key: "following", label: "Following" },
-    { key: "webOfTrust", label: "Web of Trust" },
-  ],
-  notes: [
-    { key: "discover", label: "Network" },
-    { key: "following", label: "Following" },
-    { key: "reacted", label: "Reacted" },
-    { key: "zapped", label: "Zapped" },
-  ],
-  topics: [
-    { key: "interests", label: "Interests feed" },
-    { key: "myTopics", label: "my topics" },
-    { key: "discover", label: "discover topics" },
-  ],
-  "follow-packs": [
-    { key: "global", label: "Global" },
-    { key: "following", label: "Following" },
-    { key: "bookmarked", label: "Bookmarked" },
-  ],
-  articles: [
-    { key: "global", label: "Global" },
-    { key: "following", label: "Following" },
-  ],
-  music: [
-    { key: "discover", label: "Discover" },
-    { key: "following", label: "Following" },
-    { key: "local", label: "Local" },
-  ],
-};
-
-const FEED_STORAGE_KEYS: Record<string, string> = {
-  home: "pollerama:homeSource",
-  polls: "pollerama:pollSource",
-  notes: "pollerama:lastNotesTab",
-  topics: "pollerama:lastTopicsTab",
-  "follow-packs": "pollerama:followPacksSource",
-  articles: "pollerama:articlesSource",
-  music: "pollerama:musicSource",
-};
-
-const FEED_DEFAULT_SUB: Record<string, string> = {
-  home: "following",
-  polls: "global",
-  notes: "discover",
-  topics: "interests",
-  "follow-packs": "global",
-  articles: "global",
-  music: "discover",
-};
+import { sectionColorFrom, useSectionColor } from "../Shell/useSectionColor";
+import { UserMenu } from "../Header/UserMenu";
+import { useDrafts } from "../../contexts/drafts-context";
 
 const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = [
   { value: "home",         label: "Home",         Icon: AllInclusiveIcon },
@@ -101,241 +43,200 @@ const feedOptions: { value: string; label: string; Icon: SvgIconComponent }[] = 
   { value: "games",        label: "Games",        Icon: SportsEsportsIcon },
 ];
 
+/** Composer target for the current location (poll on Polls, hashtag on a topic). */
+export function createPath(pathname: string): string {
+  if (pathname.startsWith("/feeds/polls")) return "/create?type=poll";
+  const topic = pathname.match(/\/feeds\/topics\/(.+)/);
+  if (topic) return `/create?hashtag=${encodeURIComponent(topic[1])}`;
+  return "/create";
+}
+
+export const RAIL_WIDTH = 236;
+export const RAIL_COMPACT_WIDTH = 76;
+
 interface NavSidebarProps {
   open: boolean;
   onToggle: () => void;
 }
 
+/**
+ * Desktop navigation: an ink rail (the phone's nav dock, stood up) with the
+ * account on top, every feed in its own palette color, and Create at the bottom.
+ * Collapses to icons only. Mobile uses the floating NavDock instead.
+ */
 const NavSidebar: React.FC<NavSidebarProps> = ({ open, onToggle }) => {
-  const navigate   = useNavigate();
-  const location   = useLocation();
-  const theme      = useTheme();
-  const isDesktop  = useMediaQuery(theme.breakpoints.up("md"));
-  const { items: subNavItems } = useSubNav();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const theme = useTheme();
+  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
+  const section = useSectionColor();
+  const { drafts } = useDrafts();
+  const draftCount = drafts?.size ?? 0;
 
-  // Mobile popup state — tracks which feed's sub-menu is open
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
-  const [menuFeed, setMenuFeed] = useState<string | null>(null);
+  if (!isDesktop) return null;
 
-  // Only feed routes highlight a sidebar item.
+  const compact = !open;
+  // Only feed routes highlight a rail item.
   const currentFeed = location.pathname.startsWith("/feeds")
     ? location.pathname.split("/")[2] || "polls"
     : "";
 
-  // Get the currently-active sub-key for any feed (from localStorage)
-  const getActiveSub = (feedValue: string): string => {
-    const storageKey = FEED_STORAGE_KEYS[feedValue];
-    return storageKey
-      ? (localStorage.getItem(storageKey) || FEED_DEFAULT_SUB[feedValue] || "")
-      : "";
+  const go = (feed: string) => {
+    localStorage.setItem("pollerama:lastFeed", feed);
+    navigate(`/feeds/${feed}`);
   };
 
-  const handleFeedClick = (
-    e: React.MouseEvent<HTMLElement>,
-    feedValue: string
-  ) => {
-    if (MOBILE_SUB_ITEMS[feedValue]) {
-      // Open sub-items popup (both mobile bottom nav and desktop sidebar)
-      if (!isDesktop) {
-        setMenuAnchor(e.currentTarget);
-        setMenuFeed(feedValue);
-        return;
-      }
-    }
-    // Desktop feed with no sub-items, or direct nav: navigate
-    localStorage.setItem("pollerama:lastFeed", feedValue);
-    navigate(`/feeds/${feedValue}`);
-  };
+  const itemSx = (active: boolean, accent?: string) => ({
+    display: "flex",
+    alignItems: "center",
+    justifyContent: compact ? "center" : "flex-start",
+    gap: 1.5,
+    height: 44,
+    px: compact ? 0 : 1.75,
+    width: "100%",
+    borderRadius: "16px",
+    fontFamily: "inherit",
+    fontSize: 14.5,
+    fontWeight: active ? 800 : 600,
+    whiteSpace: "nowrap",
+    color: active ? "#111" : "rgba(255,255,255,0.62)",
+    background: active ? accent : "transparent",
+    transition: "background-color .15s, color .15s",
+    "&:hover": {
+      background: active ? accent : "rgba(255,255,255,0.08)",
+      color: active ? "#111" : "#fff",
+    },
+  });
 
-  const handleMobileSubItemClick = (subKey: string) => {
-    if (!menuFeed) return;
+  const withTip = (label: string, node: React.ReactElement) =>
+    compact ? (
+      <Tooltip key={label} title={label} placement="right">
+        {node}
+      </Tooltip>
+    ) : (
+      <React.Fragment key={label}>{node}</React.Fragment>
+    );
 
-    const storageKey = FEED_STORAGE_KEYS[menuFeed];
-    if (storageKey) safeSetItem(storageKey, subKey);
-
-    if (menuFeed === currentFeed) {
-      // Feed is active — use the SubNavContext item's onClick to update live state
-      const contextItem = subNavItems.find((item) => item.key === subKey);
-      contextItem?.onClick();
-    } else {
-      // Feed is not active — navigate; it'll restore from localStorage on mount
-      localStorage.setItem("pollerama:lastFeed", menuFeed);
-      navigate(`/feeds/${menuFeed}`);
-    }
-
-    setMenuAnchor(null);
-    setMenuFeed(null);
-  };
-
-  // Mobile navigation is the floating NavDock (components/Shell); the sub-feed
-  // pills live in the block header.
-  if (!isDesktop) return null;
-  // ── Desktop: left sidebar ─────────────────────────────────────────────────
   return (
-    <>
+    <Box
+      component="nav"
+      aria-label="Primary"
+      sx={{
+        width: compact ? RAIL_COMPACT_WIDTH : RAIL_WIDTH,
+        flexShrink: 0,
+        my: 2,
+        borderRadius: "30px",
+        bgcolor: "cb.ink",
+        color: "#fff",
+        boxShadow: (t) => (t.palette.mode === "dark" ? "0 0 0 1px rgba(255,255,255,0.09)" : "none"),
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: 0.25,
+        p: compact ? 1.25 : 1.5,
+        overflowX: "hidden",
+        overflowY: "auto",
+        scrollbarWidth: "none",
+        transition: "width .2s ease",
+      }}
+    >
+      {/* Account + settings */}
       <Box
         sx={{
-          width: open ? 212 : 0,
-          flexShrink: 0,
-          height: "100%",
-          borderRight: "none",
           display: "flex",
-          flexDirection: "column",
-          py: 1,
-          overflowX: "hidden",
-          overflowY: "auto",
-          transition: "width 0.2s ease",
+          flexDirection: compact ? "column" : "row",
+          alignItems: "center",
+          gap: compact ? 1 : 0.5,
+          pb: 1.5,
+          minWidth: 0,
         }}
       >
-        {feedOptions.map(({ value, label, Icon }) => {
-          const active = currentFeed === value;
-          const itemColor = sectionColorFrom(theme.palette.cb, sectionIndex(`/feeds/${value}`));
-
-          return (
-            <React.Fragment key={value}>
-              <Box
-                onClick={(e) => handleFeedClick(e, value)}
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1.5,
-                  px: 2,
-                  py: 1.25,
-                  mx: 0.75,
-                  borderRadius: "16px",
-                  cursor: "pointer",
-                  // Each feed wears its own palette color when active.
-                  color: active ? itemColor.on : "text.secondary",
-                  background: active ? itemColor.fill : "transparent",
-                  fontWeight: active ? 800 : 500,
-                  "&:hover": {
-                    background: active
-                      ? itemColor.fill
-                      : alpha(theme.palette.text.primary, 0.06),
-                  },
-                  transition: "background-color 0.15s, color 0.15s",
-                }}
-              >
-                <Icon
-                  fontSize="small"
-                  sx={{ color: "inherit" }}
-                />
-                <Box
-                  component="span"
-                  sx={{
-                    fontSize: "0.875rem",
-                    fontWeight: "inherit",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {label}
-                </Box>
-              </Box>
-
-              {/* Sub-feeds are pills in the block header now. */}
-              {false && active && subNavItems.length > 0 && (
-                <Box sx={{ mb: 0.5 }}>
-                  {subNavItems.map((item) => (
-                    <Box
-                      key={item.key}
-                      onClick={() => !item.disabled && item.onClick()}
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        pl: 4.5,
-                        pr: 2,
-                        py: 0.75,
-                        mx: 0.75,
-                        borderRadius: 2,
-                        cursor: item.disabled ? "default" : "pointer",
-                        opacity: item.disabled ? 0.38 : 1,
-                        // Sub-nav uses the secondary accent (the top-level feed
-                        // selection above stays primary).
-                        color: item.active ? "secondary.main" : "text.secondary",
-                        fontWeight: item.active ? 600 : 400,
-                        bgcolor: item.active
-                          ? alpha(theme.palette.secondary.main, 0.08)
-                          : "transparent",
-                        "&:hover": item.disabled
-                          ? {}
-                          : {
-                              bgcolor: item.active
-                                ? alpha(theme.palette.secondary.main, 0.14)
-                                : alpha(theme.palette.text.primary, 0.05),
-                            },
-                        transition: "background-color 0.15s, color 0.15s",
-                      }}
-                    >
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          fontSize: "0.8rem",
-                          fontWeight: "inherit",
-                          color: "inherit",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {item.label}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </React.Fragment>
-          );
-        })}
-
-        {/* Collapse button — pinned to bottom */}
-        <Box sx={{ mt: "auto", display: "flex", justifyContent: "flex-end", px: 0.5, pb: 0.5 }}>
-          <Tooltip title="Hide sidebar" placement="right">
-            <IconButton size="small" onClick={onToggle}>
-              <ChevronLeftIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <UserMenu variant="rail" compact={compact} />
         </Box>
+        <Tooltip title="Settings" placement="right">
+          <IconButton
+            onClick={() => navigate("/settings")}
+            aria-label="Settings"
+            sx={{ color: location.pathname.startsWith("/settings") ? "#fff" : "rgba(255,255,255,0.6)" }}
+          >
+            <SettingsIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </Box>
 
-      {/* Desktop: sub-nav popup (only opened from desktop when hasSubItems) */}
-      <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
-        onClose={() => { setMenuAnchor(null); setMenuFeed(null); }}
-        anchorOrigin={{ vertical: "center", horizontal: "right" }}
-        transformOrigin={{ vertical: "center", horizontal: "left" }}
-        slotProps={{ paper: { sx: { minWidth: 180 } } }}
-      >
-        {menuFeed &&
-          (MOBILE_SUB_ITEMS[menuFeed] || []).map((item) => {
-            const contextItem =
-              menuFeed === currentFeed
-                ? subNavItems.find((s) => s.key === item.key)
-                : undefined;
-            const isActive = contextItem
-              ? contextItem.active
-              : getActiveSub(menuFeed) === item.key;
-            const isDisabled = contextItem ? !!contextItem.disabled : false;
+      {feedOptions.map(({ value, label, Icon }) => {
+        const active = currentFeed === value;
+        const accent = sectionColorFrom(theme.palette.cb, sectionIndex(`/feeds/${value}`)).accent;
+        return withTip(
+          label,
+          <ButtonBase
+            onClick={() => go(value)}
+            aria-label={label}
+            aria-current={active ? "page" : undefined}
+            sx={itemSx(active, accent)}
+          >
+            <Icon sx={{ fontSize: 21 }} />
+            {!compact && label}
+          </ButtonBase>,
+        );
+      })}
 
-            return (
-              <MenuItem
-                key={item.key}
-                selected={isActive}
-                disabled={isDisabled}
-                onClick={() => handleMobileSubItemClick(item.key)}
-                sx={{
-                  fontSize: "0.875rem",
-                  "&.Mui-selected": {
-                    color: "primary.main",
-                    fontWeight: 600,
-                    bgcolor: (t) => alpha(t.palette.primary.main, 0.1),
-                  },
-                }}
-              >
-                {item.label}
-              </MenuItem>
-            );
-          })}
-      </Menu>
-    </>
+      <Box sx={{ flex: 1, minHeight: 12 }} />
+
+      {withTip(
+        "Drafts",
+        <ButtonBase
+          onClick={() => navigate("/drafts")}
+          aria-label="Drafts"
+          sx={itemSx(location.pathname.startsWith("/drafts"), "#fff")}
+        >
+          <Badge badgeContent={draftCount} color="primary" invisible={!compact || draftCount === 0} max={99}>
+            <DescriptionIcon sx={{ fontSize: 21 }} />
+          </Badge>
+          {!compact && (
+            <>
+              Drafts
+              {draftCount > 0 && (
+                <Box component="span" sx={{ ml: "auto", fontSize: 12.5, opacity: 0.7 }}>
+                  {draftCount}
+                </Box>
+              )}
+            </>
+          )}
+        </ButtonBase>,
+      )}
+
+      {withTip(
+        "Create",
+        <ButtonBase
+          onClick={() => navigate(createPath(location.pathname))}
+          aria-label="Create"
+          sx={{
+            mt: 1,
+            height: 54,
+            borderRadius: "19px",
+            gap: 1,
+            fontFamily: "inherit",
+            fontWeight: 800,
+            fontSize: 15.5,
+            background: section.fill,
+            color: section.on,
+          }}
+        >
+          <AddIcon sx={{ fontSize: 26 }} />
+          {!compact && "Create"}
+        </ButtonBase>,
+      )}
+
+      <Box sx={{ display: "flex", justifyContent: compact ? "center" : "flex-end", pt: 0.5 }}>
+        <Tooltip title={compact ? "Expand sidebar" : "Collapse sidebar"} placement="right">
+          <IconButton size="small" onClick={onToggle} sx={{ color: "rgba(255,255,255,0.5)" }}>
+            {compact ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+      </Box>
+    </Box>
   );
 };
 

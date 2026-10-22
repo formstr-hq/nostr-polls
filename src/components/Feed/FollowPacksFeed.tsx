@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Event, Filter } from "nostr-tools";
-import { Box, Button, CircularProgress, Typography } from "@mui/material";
+import { Box, Button, ButtonBase, CircularProgress, Typography } from "@mui/material";
+import AddIcon from "@mui/icons-material/AddRounded";
+import { useNavigate } from "react-router-dom";
 import { dataLayer } from "@formstr/local-relay";
 import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import { useUserContext } from "../../hooks/useUserContext";
@@ -13,13 +15,14 @@ import { safeSetItem } from "../../utils/localStorage";
 const STORAGE_KEY = "pollerama:followPacksSource";
 const BATCH_SIZE = 20;
 
-type Source = "global" | "following" | "bookmarked";
+type Source = "global" | "following" | "mine" | "bookmarked";
 
 const FollowPacksFeed: React.FC = () => {
   const { user } = useUserContext();
   const { lists, bookmarkedPackKeys } = useListContext();
   const { setItems, clearItems } = useSubNav();
   const relayRefresh = useRelayRefresh();
+  const navigate = useNavigate();
   // Wait for the worker's cache before the first request, so it replays cached
   // packs instead of EOSE-ing on an empty store and re-fetching everything.
   const hydrated = useRelayHydrated();
@@ -36,6 +39,20 @@ const FollowPacksFeed: React.FC = () => {
   const bookmarkedPacks = Array.from(lists?.entries() || [])
     .filter(([key, e]) => e.kind === 39089 && bookmarkedPackKeys.has(key))
     .map(([, e]) => e)
+    .sort((a, b) => b.created_at - a.created_at);
+
+  // The user's own packs, and packs others have put them in. lists-context
+  // already fetches both on login (authors: me / #p: me).
+  const allPacks = Array.from(lists?.values() || []).filter((e) => e.kind === 39089);
+  const myPacks = allPacks
+    .filter((e) => e.pubkey === user?.pubkey)
+    .sort((a, b) => b.created_at - a.created_at);
+  const packsImIn = allPacks
+    .filter(
+      (e) =>
+        e.pubkey !== user?.pubkey &&
+        e.tags.some((t) => t[0] === "p" && t[1] === user?.pubkey),
+    )
     .sort((a, b) => b.created_at - a.created_at);
 
   // Register sub-nav items
@@ -64,6 +81,13 @@ const FollowPacksFeed: React.FC = () => {
         onClick: () => select("following"),
       },
       {
+        key: "mine",
+        label: "Mine",
+        active: source === "mine",
+        disabled: !user,
+        onClick: () => select("mine"),
+      },
+      {
         key: "bookmarked",
         label: "Bookmarked",
         active: source === "bookmarked",
@@ -77,7 +101,7 @@ const FollowPacksFeed: React.FC = () => {
   }, [source, user]);
 
   const fetchBatch = () => {
-    if (loading || source === "bookmarked") return;
+    if (loading || source === "bookmarked" || source === "mine") return;
     setLoading(true);
 
     const now = Math.floor(Date.now() / 1000);
@@ -135,13 +159,14 @@ const FollowPacksFeed: React.FC = () => {
 
   useEffect(() => {
     if (!hydrated) return; // wait for the cache before the first request
-    if (source !== "bookmarked") fetchBatch();
+    if (source !== "bookmarked" && source !== "mine") fetchBatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, hydrated, relayRefresh]);
 
+  const local = source === "bookmarked" || source === "mine";
   const displayPacks = source === "bookmarked" ? bookmarkedPacks : packs;
-  const isLoading = source === "bookmarked" ? false : loading;
-  const isDone = source === "bookmarked" ? true : initialLoadComplete;
+  const isLoading = local ? false : loading;
+  const isDone = local ? true : initialLoadComplete;
 
   const emptyMessage =
     source === "bookmarked"
@@ -149,6 +174,80 @@ const FollowPacksFeed: React.FC = () => {
       : source === "following"
       ? "No follow packs found from people you follow."
       : "No follow packs found.";
+
+  const grid = (children: React.ReactNode) => (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" },
+        alignItems: "start",
+        maxWidth: 900,
+        mx: "auto",
+      }}
+    >
+      {children}
+    </Box>
+  );
+
+  if (source === "mine") {
+    return (
+      <Box sx={{ height: "100%", overflowY: "auto", pb: 2 }}>
+        {grid(
+          <>
+            <ButtonBase
+              onClick={() => navigate("/feeds/follow-packs/new")}
+              sx={{
+                m: 1,
+                minHeight: 140,
+                borderRadius: "24px",
+                border: "2px dashed",
+                borderColor: "divider",
+                flexDirection: "column",
+                gap: 1,
+                fontFamily: "inherit",
+                fontWeight: 800,
+                fontSize: 15,
+                color: "text.secondary",
+                "&:hover": { borderColor: "text.secondary", color: "text.primary" },
+              }}
+            >
+              <AddIcon sx={{ fontSize: 32 }} />
+              New pack
+            </ButtonBase>
+            {myPacks.map((pack) => (
+              <FollowPackCard key={pack.id} event={pack} />
+            ))}
+          </>,
+        )}
+        {myPacks.length === 0 && (
+          <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ px: 3, py: 2 }}>
+            Packs you make show up here. A pack is a list of people others can follow in one tap.
+          </Typography>
+        )}
+        {packsImIn.length > 0 && (
+          <>
+            <Typography
+              sx={{
+                maxWidth: 900,
+                mx: "auto",
+                px: 2,
+                pt: 3,
+                pb: 0.5,
+                fontSize: 12,
+                fontWeight: 800,
+                letterSpacing: ".06em",
+                textTransform: "uppercase",
+                color: "text.secondary",
+              }}
+            >
+              Packs you're in
+            </Typography>
+            {grid(packsImIn.map((pack) => <FollowPackCard key={pack.id} event={pack} />))}
+          </>
+        )}
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ height: "100%", overflowY: "auto" }}>
@@ -167,19 +266,7 @@ const FollowPacksFeed: React.FC = () => {
           </Typography>
         </Box>
       ) : (
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "1fr 1fr 1fr" },
-            alignItems: "start",
-            maxWidth: 900,
-            mx: "auto",
-          }}
-        >
-          {displayPacks.map((pack) => (
-            <FollowPackCard key={pack.id} event={pack} />
-          ))}
-        </Box>
+        grid(displayPacks.map((pack) => <FollowPackCard key={pack.id} event={pack} />))
       )}
 
       {source !== "bookmarked" && initialLoadComplete && packs.length > 0 && (
