@@ -14,6 +14,8 @@ interface PollOptionsProps {
   disabled: boolean;
   showResults: boolean;
   results: Map<string, OptionResult>;
+  /** A results read is in flight and nothing is on screen yet. */
+  loading?: boolean;
   tags?: string[][];
   onVotersClick?: (optionId: string) => void;
 }
@@ -26,6 +28,7 @@ const PollOptions: React.FC<PollOptionsProps> = ({
   disabled,
   showResults,
   results,
+  loading = false,
   tags,
   onVotersClick,
 }) => {
@@ -152,7 +155,7 @@ const PollOptions: React.FC<PollOptionsProps> = ({
                       fontSize: 13.5,
                     }}
                   >
-                    {percentage.toFixed(0)}%
+                    {loading ? "…" : `${percentage.toFixed(0)}%`}
                   </Typography>
                 </Box>
               )}

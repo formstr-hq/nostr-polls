@@ -3,7 +3,7 @@ import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { useRelays } from "../../hooks/useRelays";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import { useUserContext } from "../../hooks/useUserContext";
 import { useSubNav } from "../../contexts/SubNavContext";
 import { useAppContext } from "../../hooks/useAppContext";
@@ -22,9 +22,6 @@ const ArticlesFeed: React.FC = () => {
   const { fetchUserProfileThrottled, profiles } = useAppContext();
   const { setItems, clearItems } = useSubNav();
   const relayRefresh = useRelayRefresh();
-  // Wait for the worker's cache before the first request, so it replays cached
-  // articles instead of EOSE-ing on an empty store and re-fetching everything.
-  const hydrated = useRelayHydrated();
 
   const savedSource = (localStorage.getItem(STORAGE_KEY) as Source) || "global";
   const [source, setSource] = useState<Source>(savedSource);
@@ -76,6 +73,32 @@ const ArticlesFeed: React.FC = () => {
 
     let settled = false;
     let quietTimer: ReturnType<typeof setTimeout> | null = null;
+    let paintScheduled = false;
+
+    const merge = () => {
+      if (newArticles.length === 0) return;
+      setArticles((prev) => {
+        const ids = new Set(prev.map((e) => e.id));
+        const merged = [...prev, ...newArticles.filter((e) => !ids.has(e.id))];
+        if (merged.length === prev.length) return prev;
+        merged.sort((a, b) => b.created_at - a.created_at);
+        return merged;
+      });
+      setInitialLoadDone(true);
+      setLoading(false);
+      setLoadingMore(false);
+    };
+
+    // Paint the cache replay as it streams instead of waiting for the 900ms
+    // quiet window. On a slow worker that window was the entire "blank feed".
+    const schedulePaint = () => {
+      if (paintScheduled) return;
+      paintScheduled = true;
+      Promise.resolve().then(() => {
+        paintScheduled = false;
+        merge();
+      });
+    };
 
     const handle = dataLayer.observe([filter], {
       onEvent: (event: Event) => {
@@ -85,7 +108,8 @@ const ArticlesFeed: React.FC = () => {
           if (!profiles?.get(event.pubkey)) fetchUserProfileThrottled(event.pubkey);
         }
         if (!oldestTs || event.created_at < oldestTs) oldestTs = event.created_at;
-        // Commit shortly after the stream goes quiet (local EOSE is not
+        schedulePaint();
+        // Commit again shortly after the stream goes quiet (local EOSE is not
         // completion under the dataLayer contract — upstream arrives later).
         if (quietTimer) clearTimeout(quietTimer);
         quietTimer = setTimeout(finalize, 900);
@@ -99,12 +123,7 @@ const ArticlesFeed: React.FC = () => {
       handle.unobserve();
       if (newArticles.length < BATCH_SIZE) setExhausted(true);
       if (oldestTs) cursorRef.current = oldestTs - 1;
-      setArticles((prev) => {
-        const ids = new Set(prev.map((e) => e.id));
-        const merged = [...prev, ...newArticles.filter((e) => !ids.has(e.id))];
-        merged.sort((a, b) => b.created_at - a.created_at);
-        return merged;
-      });
+      merge();
       setInitialLoadDone(true);
       setLoading(false);
       setLoadingMore(false);
@@ -116,10 +135,9 @@ const ArticlesFeed: React.FC = () => {
   }, [source, relays, exhausted]);
 
   useEffect(() => {
-    if (!hydrated) return; // wait for the cache before the first request
     fetchBatch(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, hydrated, relayRefresh]);
+  }, [source, relayRefresh]);
 
   const handleEndReached = useCallback(() => {
     if (!loadingMore && !loading && initialLoadDone && !exhausted) {

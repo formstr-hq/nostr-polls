@@ -43,7 +43,6 @@ import dayjs from "dayjs";
 import { useMiningWorker } from "../../hooks/useMiningWorker";
 import PollTimer from "./PollTimer";
 import { SlabContext, slabSx, useInsideSlab } from "../Common/SlabContext";
-import PollIcon from "@mui/icons-material/PollRounded";
 import { FeedbackMenu } from "../FeedbackMenu";
 import { useNotification } from "../../contexts/notification-context";
 import { NOTIFICATION_MESSAGES } from "../../constants/notifications";
@@ -143,7 +142,7 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
     pollEvent.tags.find((t) => t[0] === "label")?.[1] || pollEvent.content;
 
   // Fetch results lazily — only when the user wants to see them (or after voting)
-  const { results, totalVotes } = usePollResults(
+  const { results, totalVotes, loading: resultsLoading } = usePollResults(
     pollEvent,
     difficulty,
     filterPubkeys,
@@ -455,26 +454,6 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                   {!hideActions && user && !user.follows?.includes(pollEvent.pubkey) && (
                     <Button size="small" onClick={addToContacts}>Follow</Button>
                   )}
-                  {/* Content-type tag in the poll color (multi-color palettes give polls their own). */}
-                  <Box
-                    component="span"
-                    sx={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 0.5,
-                      height: 24,
-                      px: 1,
-                      borderRadius: "8px",
-                      bgcolor: "cb.poll",
-                      color: "cb.onPoll",
-                      fontSize: 11.5,
-                      fontWeight: 800,
-                      letterSpacing: "0.03em",
-                    }}
-                  >
-                    <PollIcon sx={{ fontSize: 14 }} />
-                    POLL
-                  </Box>
                   {!hideActions && (
                     <IconButton
                       onClick={(e) => {
@@ -619,9 +598,23 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                   disabled={!!(pollExpiration && Number(pollExpiration) * 1000 < now.valueOf())}
                   showResults={showResults}
                   results={results}
+                  loading={resultsLoading}
                   tags={pollEvent.tags}
                   onVotersClick={(optionId) => { setVotersFocusOption(optionId); setVotersModalOpen(true); }}
                 />
+
+                {showResults && resultsLoading && (
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 0.5, color: "text.secondary" }}>
+                    <CircularProgress size={12} />
+                    <Typography variant="caption">Loading results…</Typography>
+                  </Box>
+                )}
+
+                {showResults && !resultsLoading && totalVotes === 0 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                    No votes yet.
+                  </Typography>
+                )}
 
                 {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
 

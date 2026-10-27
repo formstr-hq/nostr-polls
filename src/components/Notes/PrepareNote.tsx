@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Event, nip19 } from "nostr-tools";
 import { Notes } from ".";
 import {
@@ -13,7 +13,7 @@ import { useNavigate } from "react-router-dom";
 import { dataLayer } from "@formstr/local-relay";
 import { EventPointer } from "nostr-tools/lib/types/nip19";
 import PollResponseForm from "../PollResponse/PollResponseForm";
-import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import {
   MAX_NOTE_DEPTH,
   NoteDepthContext,
@@ -36,9 +36,6 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
   // Re-attempt resolution once the worker hydrates its store, so a reference that
   // missed on a cold cache resolves without the user tapping Retry.
   const refresh = useRelayRefresh();
-  // A read before hydration would replay an empty store, clear the note, then
-  // need a re-run to find it — wait for the cache instead.
-  const hydrated = useRelayHydrated();
   const depth = useNoteDepth();
   const navigate = useNavigate();
 
@@ -48,10 +45,20 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
   const tooDeep = depth >= MAX_NOTE_DEPTH;
   const openInOwnView = () => navigate(`/note/${neventId}`);
 
+  // Only a genuinely different reference should blank the view. A refresh signal
+  // (cache hydration / worker restart) re-runs the read, and clearing on it used
+  // to make an already-visible note disappear right as the user opened it.
+  const lastReadIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!hydrated) return; // wait for the cache before reading
-    setLoading(true);
-    setEvent(null);
+    const isNewReference = lastReadIdRef.current !== neventId;
+    if (isNewReference) {
+      lastReadIdRef.current = neventId;
+      setEvent(null);
+      setLoading(true);
+    } else if (!event) {
+      setLoading(true);
+    }
 
     let pointer: EventPointer | undefined;
     try {
@@ -79,14 +86,21 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
     // network result arrives after the local EOSE, so a timeout — not EOSE —
     // bounds the wait before we surface the retry affordance.
     let settled = false;
-    const handle = dataLayer.observe([{ ids: [eventId], limit: 1 }], {
-      onEvent: (e) => {
-        settled = true;
-        setEvent(e);
-        setLoading(false);
-        handle.unobserve();
+    const handle = dataLayer.observe(
+      [{ ids: [eventId], limit: 1 }],
+      {
+        onEvent: (e) => {
+          settled = true;
+          setEvent(e);
+          setLoading(false);
+          handle.unobserve();
+        },
       },
-    });
+      // Opening a note from a notification is a user action. If it isn't cached
+      // (or the worker is busy), jump the relay queue instead of waiting behind
+      // every standing feed subscription.
+      { urgent: true }
+    );
 
     const timer = setTimeout(() => {
       if (!settled) setLoading(false);
@@ -96,7 +110,10 @@ export const PrepareNote: React.FC<PrepareNoteInterface> = ({ neventId }) => {
       clearTimeout(timer);
       handle.unobserve();
     };
-  }, [neventId, retryCount, hydrated, refresh]);
+    // `event` deliberately omitted: this effect must not re-run when a note
+    // arrives. It reads the latest value only to decide whether to show loading.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [neventId, retryCount, refresh]);
 
   const handleRetry = () => {
     setRetryCount((c) => c + 1);

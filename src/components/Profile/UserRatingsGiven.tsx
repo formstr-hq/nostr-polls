@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import { isRelayHydrated } from "../../dataLayer/relayRefresh";
 import ReviewCard from "../Ratings/ReviewCard";
 import UnifiedFeed from "../Feed/UnifiedFeed";
@@ -19,9 +19,6 @@ const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, scrollConta
   const [ratings, setRatings] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const relayRefresh = useRelayRefresh();
-  // Wait for the worker's cache before the first request, so it replays cached
-  // ratings instead of EOSE-ing on an empty store and re-fetching everything.
-  const hydrated = useRelayHydrated();
 
   const fetchRatings = useCallback(() => {
     if (!pubkey) return;
@@ -59,14 +56,13 @@ const UserRatingsGiven: React.FC<UserRatingsGivenProps> = ({ pubkey, scrollConta
     };
   }, [pubkey]);
 
-  // Hold the first request until hydration, then fetch. `relayRefresh` stays a
-  // dep so a worker restart (which drops its in-memory interests) also refetches.
+  // Declare immediately (cached ratings paint now). `relayRefresh` stays a dep
+  // so hydration and a worker restart both re-run the read.
   useEffect(() => {
-    if (!hydrated) return;
     const cleanup = fetchRatings();
     return cleanup;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchRatings, hydrated, relayRefresh]);
+  }, [fetchRatings, relayRefresh]);
 
   return (
     <UnifiedFeed

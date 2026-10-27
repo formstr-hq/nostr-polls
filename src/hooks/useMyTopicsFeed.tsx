@@ -5,7 +5,7 @@ import { Event } from "nostr-tools";
 import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 import { collectOnce } from "../dataLayer/collect";
 import { useRelays } from "./useRelays";
-import { useRelayHydrated, useRelayRefresh } from "../dataLayer/hooks";
+import { useRelayRefresh } from "../dataLayer/hooks";
 import { isRelayHydrated } from "../dataLayer/relayRefresh";
 import { useUserContext } from "./useUserContext";
 import { signEvent } from "../nostr";
@@ -35,7 +35,6 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
   const relayRefresh = useRelayRefresh();
   // Wait for the worker's cache before the first request, so topic feeds replay
   // cached events instead of EOSE-ing on an empty store.
-  const hydrated = useRelayHydrated();
 
   const [notes, setNotes] = useState<Map<string, TopicNote>>(new Map());
   const [feedMode, setFeedMode] = useState<FeedMode>("global");
@@ -241,9 +240,6 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
   const subRef = useRef<ObserveHandle | null>(null);
 
   const startSubscription = useCallback((fresh?: boolean) => {
-    // Wait for the worker's cache before subscribing, so the first pass replays
-    // cached topic events instead of EOSE-ing on an empty store.
-    if (!hydrated) return;
     if (!relays.length || myTopics.size === 0) {
       setLoading(false);
       return;
@@ -334,7 +330,7 @@ export function useMyTopicsFeed(myTopics: Set<string>) {
       moderationDirtyRef.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relays, myTopics, hydrated, relayRefresh]);
+  }, [relays, myTopics, relayRefresh]);
 
   useEffect(() => {
     const cleanup = startSubscription();

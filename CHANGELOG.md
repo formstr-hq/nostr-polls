@@ -1,3 +1,11 @@
+# 2.2.1
+
+- Feeds no longer get stuck when switching between them. Content already in your local store now appears immediately instead of waiting for the network or a background cache load.
+- Notifications open the referenced post right away, even if the worker is busy. Opening a note from a notification now jumps ahead of background feed requests.
+- Poll results show cached votes immediately. While a fresh count is loading you get a clear "Loading results…" indicator, and polls with no votes say so instead of showing misleading 0% bars.
+- Removed the redundant POLL badge from every poll.
+- Much lower background CPU use: the local relay no longer re-verifies duplicate events or re-scans huge follow lists for every cached event, so feeds stay responsive after long sessions.
+
 # 2.2.0
 
 - Your own follow packs: a new "Mine" tab on Packs shows the packs you made and the packs you're in, and updates live.
