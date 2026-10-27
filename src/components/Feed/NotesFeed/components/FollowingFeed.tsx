@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { Button } from "@mui/material";
+import { Box, Button, Typography } from "@mui/material";
 import FeedError from "../../FeedError";
 import { useUserContext } from "../../../../hooks/useUserContext";
 import RepostsCard from "./RepostedNoteCard";
@@ -60,12 +60,9 @@ const FollowingFeed = ({
     }
   }, [mergedNotes, requestReportCheck, requestUserReportCheck]);
 
-  useEffect(() => {
-    if (user) {
-      fetchNotes();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  // The data layer declares the initial interest itself; calling `fetchNotes`
+  // here would immediately re-declare the same head window (a wasted cache scan)
+  // before the first replay had even painted.
 
   if (!user) {
     return (
@@ -100,9 +97,17 @@ const FollowingFeed = ({
         onShowNewItems={mergeNewNotes}
         newItemLabel="notes"
         emptyState={
-          (loadFailed || (initialLoadDone && mergedNotes.length === 0))
-            ? <FeedError message="Couldn't load notes" onRetry={refreshNotes} />
-            : undefined
+          // An empty local replay is not a failure: upstream may still be
+          // streaming. Only a real load failure gets the error card.
+          loadFailed ? (
+            <FeedError message="Couldn't load notes" onRetry={refreshNotes} />
+          ) : initialLoadDone && mergedNotes.length === 0 ? (
+            <Box sx={{ p: 3, textAlign: "center" }}>
+              <Typography variant="body2" color="text.secondary">
+                Nothing here yet.
+              </Typography>
+            </Box>
+          ) : undefined
         }
         itemContent={(index, item) => (
           <RepostsCard

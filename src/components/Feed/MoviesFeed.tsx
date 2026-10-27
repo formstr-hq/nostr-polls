@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Filter } from "nostr-tools";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import MovieCard from "../Movies/MovieCard";
 import RateMovieModal from "../Ratings/RateMovieModal";
 import { Card, CardContent, Typography, CircularProgress, Box, Button } from "@mui/material";
@@ -22,7 +22,6 @@ const MoviesFeed: React.FC = () => {
   const relayRefresh = useRelayRefresh();
   // Wait for the worker's cache before the first request, so it replays cached
   // movies instead of rebuilding the feed from an empty store.
-  const hydrated = useRelayHydrated();
 
   // Keep refs in sync
   cursorRef.current = cursor;
@@ -116,7 +115,6 @@ const MoviesFeed: React.FC = () => {
   // finishes loading after startup — RelayContext starts with defaultRelays
   // and replaces them asynchronously).
   useEffect(() => {
-    if (!hydrated) return; // wait for the cache before the first request
     // Cancel any in-flight fetch so the new relays take effect immediately
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
@@ -136,7 +134,7 @@ const MoviesFeed: React.FC = () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, relayRefresh]);
+  }, [relayRefresh]);
 
   return (
     <Box sx={{ height: "100%", overflowY: "auto" }}>

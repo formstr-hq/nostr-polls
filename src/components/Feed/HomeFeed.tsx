@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Event, Filter, verifyEvent } from "nostr-tools";
+import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { useRelays } from "../../hooks/useRelays";
 import { useUserContext } from "../../hooks/useUserContext";
@@ -9,7 +9,7 @@ import { safeSetItem } from "../../utils/localStorage";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useAppContext } from "../../hooks/useAppContext";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import UnifiedFeed from "./UnifiedFeed";
 import { Notes } from "../Notes";
 import PollResponseForm from "../PollResponse/PollResponseForm";
@@ -85,9 +85,6 @@ const HomeFeed: React.FC = () => {
   const { setItems, clearItems } = useSubNav();
   const { registerRefresh } = useFeedActions();
   const relayRefresh = useRelayRefresh();
-  // Hold the first fetch until the worker has hydrated its cache, so the head
-  // request is served from it instead of an empty store.
-  const hydrated = useRelayHydrated();
 
   const [source, setSource] = useState<Source>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -263,7 +260,7 @@ const HomeFeed: React.FC = () => {
 
       const handle = dataLayer.observe(filters, {
         onEvent: (event: Event) => {
-          if (!verifyEvent(event)) return;
+          // Worker-validated; verifying again here only blocks the UI thread.
           if (event.kind === KIND_NOTE && !isRootNote(event)) return;
           const key = dedupeKey(event);
           if (displayedRef.current.has(key)) return; // already on screen
@@ -305,7 +302,6 @@ const HomeFeed: React.FC = () => {
 
     const handle = dataLayer.observe(filters, {
       onEvent: (event: Event) => {
-        if (!verifyEvent(event)) return;
         if (event.kind === KIND_NOTE && !isRootNote(event)) return;
         const key = dedupeKey(event);
         if (displayedRef.current.has(key)) return;
@@ -335,7 +331,9 @@ const HomeFeed: React.FC = () => {
       [{ kinds: KIND_RESPONSE, authors: [user.pubkey], limit: 100 }],
       {
         onEvent: (event: Event) => {
-          if (verifyEvent(event)) setUserResponses((prev) => [...prev, event]);
+          setUserResponses((prev) =>
+            prev.some((e) => e.id === event.id) ? prev : [...prev, event]
+          );
         },
       }
     );
@@ -450,13 +448,11 @@ const HomeFeed: React.FC = () => {
       setInitialLoadDone(cached.length > 0);
     }
 
-    // Wait for hydration before the first request, so it replays the cache
-    // instead of hitting an empty store and fetching everything again.
-    if (!hydrated) return;
-
+    // Paint from the cache immediately. A pre-hydration replay is harmless: the
+    // refresh signal re-runs this once the worker's store is populated.
     fetchBatch("initial");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, relays, hydrated, relayRefresh]);
+  }, [source, relays, relayRefresh]);
 
   // The user's follows / web-of-trust resolve asynchronously after login, so on
   // a cold start the initial fetch above often runs with an empty author set and
@@ -472,12 +468,9 @@ const HomeFeed: React.FC = () => {
   const prevHadAuthorsRef = useRef(false);
   useEffect(() => {
     const had = prevHadAuthorsRef.current;
-    // Authors only mean something once the cache is readable — before that the
-    // load effect above is still gated on hydration.
-    if (!hydrated) return;
     prevHadAuthorsRef.current = hasAuthors;
     if (!had && hasAuthors) fetchBatch("initial");
-  }, [hasAuthors, fetchBatch, hydrated]);
+  }, [hasAuthors, fetchBatch]);
 
   // Poll for newer items every 60s once we have a baseline; they buffer into
   // the "+N new" prompt.

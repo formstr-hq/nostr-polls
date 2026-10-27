@@ -24,6 +24,8 @@ import {
   type ScopeUser,
 } from "@formstr/local-relay";
 import { getRelayRefresh, subscribeRelayRefresh, isRelayHydrated } from "./relayRefresh";
+// `isRelayHydrated` is re-exported for callers that need a one-shot check; the
+// reactive hook below is kept for status surfaces but no longer gates reads.
 
 /**
  * Reactive read of the relay refresh signal — bumps when the worker can newly
@@ -37,14 +39,11 @@ export function useRelayRefresh(): number {
 /**
  * Reactive read of "has the worker finished hydrating its IndexedDB cache?".
  *
- * Feeds hold their FIRST interest until this flips true. An interest declared
- * before hydration replays an empty store and EOSEs on it — the worker serves
- * cache first, so that first REQ is wasted, and the real data only lands on a
- * second pass. Waiting means the initial REQ is served from the hydrated cache
- * and paints immediately.
- *
- * The counter is only a re-render trigger; the flag itself lives in
- * `relayRefresh` and is bumped in lockstep with it.
+ * Kept for status surfaces. Reads no longer WAIT on this: holding the first
+ * interest until hydration made every feed sit blank for as long as the worker
+ * took to boot, even when its cache was already warm. Declaring immediately is
+ * always safe — a pre-hydration interest is replayed again on the refresh signal
+ * (and the worker's hydration reset refreshes live subs).
  */
 export function useRelayHydrated(): boolean {
   React.useSyncExternalStore(subscribeRelayRefresh, getRelayRefresh, getRelayRefresh);
@@ -116,8 +115,6 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
   // Re-declare the interest when the worker can newly serve cached data, so a
   // feed that EOSE'd before hydration repaints from the now-populated store.
   const refresh = useRelayRefresh();
-  // ...and hold the very first interest until the cache is actually there.
-  const hydrated = useRelayHydrated();
 
   const [items, setItems] = React.useState<Event[]>([]);
   const [newCount, setNewCount] = React.useState(0);
@@ -194,12 +191,6 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
       return; // nothing to show (e.g. logged out / empty follows)
     }
 
-    // Hold the FIRST interest until the worker has hydrated its cache. Declaring
-    // before that replays an empty store and EOSEs on it, so the head request is
-    // wasted and cached notes only paint on a second pass. `hydrated` is a dep,
-    // so this re-runs the instant it flips.
-    if (!hydrated) return;
-
     const onEvent = (e: Event) => {
       allRef.current.set(e.id, e);
       const isRoot = !feedRootsOnly || isFeedRoot(e);
@@ -236,7 +227,7 @@ export function useEvents({ kinds, scope, includeNonRoots }: UseEventsOptions): 
       handleRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataLayer, scopeId, hydrated, refresh]);
+  }, [dataLayer, scopeId, refresh]);
 
   const showNew = React.useCallback(() => {
     pendingRef.current = new Map(); // events are already in allRef; just stop withholding

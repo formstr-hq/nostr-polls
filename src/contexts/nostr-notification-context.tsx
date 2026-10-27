@@ -50,6 +50,9 @@ export function NostrNotificationsProvider({
   const [unreadCount, setUnreadCount] = useState(0);
   const [lastSeen, setLastSeen] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Bumped when the background poll-id lookup lands, so labels ("Chose: …")
+  // can resolve even though the notifications themselves were already painted.
+  const [, setPollMapVersion] = useState(0);
   const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref so pushNotification always reads the current value without stale closure issues
   const lastSeenRef = useRef<number | null>(null);
@@ -228,14 +231,14 @@ export function NostrNotificationsProvider({
       lastSeenRef.current = stored;
       setLastSeen(stored);
 
-      // 2. fetch pollIds
-      await fetchPollIds(user.pubkey);
-
-      // 3. subscribe only after pollIds exist
-      const filters = buildFilters(user.pubkey, since);
-
       if (isCancelled) return;
-      subHandleRef.current = dataLayer.observe(filters, {
+
+      // 2. Subscribe IMMEDIATELY, without the poll-id lookup. Waiting for it
+      // (a network-ish collection with a multi-second cap) meant notifications
+      // already in the local store stayed invisible until that lookup finished.
+      // The `#p` filter catches votes that tag the user; the `#e` poll filters
+      // are added a moment later once `fetchPollIds` resolves.
+      subHandleRef.current = dataLayer.observe(buildFilters(user.pubkey, since), {
         onEvent: (event: Event) => {
           pushNotification(event);
         },
@@ -251,6 +254,18 @@ export function NostrNotificationsProvider({
       // Safety: relays that never send EOSE shouldn't leave the page in a
       // forever-loading state.
       loadingTimerRef.current = setTimeout(() => setIsLoading(false), 6000);
+
+      // 3. Fetch the user's poll ids in the background, then widen the standing
+      // interest to include old poll responses that only carry an `#e` tag.
+      fetchPollIds(user.pubkey)
+        .then(() => {
+          if (isCancelled || !subHandleRef.current) return;
+          subHandleRef.current.update(buildFilters(user.pubkey, since));
+          setPollMapVersion((v) => v + 1);
+        })
+        .catch(() => {
+          // Poll-id enrichment is best-effort; notifications already work.
+        });
     })();
 
     return () => {

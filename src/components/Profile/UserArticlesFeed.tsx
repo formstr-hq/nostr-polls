@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Event, Filter } from "nostr-tools";
 import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
-import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
+import { useRelayRefresh } from "../../dataLayer/hooks";
 import { isRelayHydrated } from "../../dataLayer/relayRefresh";
 import { useAppContext } from "../../hooks/useAppContext";
 import { ArticleCard } from "../Articles/ArticleCard";
@@ -19,9 +19,6 @@ const UserArticlesFeed: React.FC<UserArticlesFeedProps> = ({ pubkey, scrollConta
   const [loading, setLoading] = useState(true);
   const { fetchUserProfileThrottled, profiles } = useAppContext();
   const relayRefresh = useRelayRefresh();
-  // Wait for the worker's cache before the first request, so it replays cached
-  // articles instead of EOSE-ing on an empty store and re-fetching everything.
-  const hydrated = useRelayHydrated();
 
   const fetchArticles = useCallback(() => {
     if (!pubkey) return;
@@ -53,14 +50,13 @@ const UserArticlesFeed: React.FC<UserArticlesFeedProps> = ({ pubkey, scrollConta
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pubkey]);
 
-  // Hold the first request until hydration, then fetch. `relayRefresh` stays a
-  // dep so a worker restart (which drops its in-memory interests) also refetches.
+  // Declare immediately (cached articles paint now). `relayRefresh` stays a dep
+  // so hydration and a worker restart both re-run the read.
   useEffect(() => {
-    if (!hydrated) return;
     const cleanup = fetchArticles();
     return cleanup;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchArticles, hydrated, relayRefresh]);
+  }, [fetchArticles, relayRefresh]);
 
   return (
     <UnifiedFeed

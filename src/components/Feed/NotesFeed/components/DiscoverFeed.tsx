@@ -8,7 +8,6 @@ import { useDiscoverNotes } from "../hooks/useDiscoverNotes";
 import type { NoteMode } from "./index";
 import UnifiedFeed from "../../UnifiedFeed";
 import { useReports } from "../../../../hooks/useReports";
-import { useRelays } from "../../../../hooks/useRelays";
 
 const isRootNote = (event: { tags: string[][] }) =>
   !event.tags.some((t) => t[0] === "e");
@@ -23,7 +22,6 @@ const DiscoverFeed = ({
   const { user, requestLogin } = useUserContext();
   const { notes, pendingCount, fetchNotes, refreshNotes, checkForNewer, loadingMore, refreshing, mergeNewNotes } =
     useDiscoverNotes();
-  const { relays } = useRelays();
 
   // Register refresh with parent header button
   useEffect(() => {
@@ -32,12 +30,8 @@ const DiscoverFeed = ({
   }, [onRegisterRefresh, refreshNotes, user?.webOfTrust]);
   const { requestReportCheck, requestUserReportCheck } = useReports();
 
-  useEffect(() => {
-    if (user?.webOfTrust?.size) {
-      fetchNotes(user.webOfTrust);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, relays]);
+  // The data layer declares the initial interest itself (and re-declares when
+  // the web-of-trust scope changes), so there is no mount-time fetch to kick off.
 
   const mergedNotes = useMemo(() => {
     return Array.from(notes.values())
