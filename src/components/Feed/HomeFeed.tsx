@@ -16,11 +16,11 @@ import PollResponseForm from "../PollResponse/PollResponseForm";
 import { ArticleCard } from "../Articles/ArticleCard";
 import RepostsCard from "./NotesFeed/components/RepostedNoteCard";
 import { MusicCard, KIND_MUSIC } from "../Music/MusicCard";
+import { buildFeedItems, dedupeKey, FeedItem, KIND_REPOST } from "./repostItems";
 
 const KIND_NOTE = 1;
 const KIND_POLL = 1068;
 const KIND_ARTICLE = 30023;
-const KIND_REPOST = 6;
 const KIND_RESPONSE = [1018, 1070];
 const FEED_KINDS = [KIND_NOTE, KIND_POLL, KIND_ARTICLE, KIND_REPOST, KIND_MUSIC];
 
@@ -39,24 +39,6 @@ type Source = "following" | "network";
 // Root notes only — drop replies (any note carrying an "e" tag) so the home
 // stream stays a feed of top-level posts rather than conversation fragments.
 const isRootNote = (event: Event) => !event.tags.some((t) => t[0] === "e");
-
-// Stable identity for an event. Addressable (30000-39999) and replaceable
-// (10000-19999, plus 0/3) events keep the same coordinate across edits, so the
-// same article republished — or different versions returned by different relays
-// — must collapse to one entry. Everything else is unique by id.
-const isAddressableOrReplaceable = (kind: number) =>
-  (kind >= 30000 && kind < 40000) ||
-  (kind >= 10000 && kind < 20000) ||
-  kind === 0 ||
-  kind === 3;
-
-const dedupeKey = (event: Event): string => {
-  if (isAddressableOrReplaceable(event.kind)) {
-    const d = event.tags.find((t) => t[0] === "d")?.[1] ?? "";
-    return `${event.kind}:${event.pubkey}:${d}`;
-  }
-  return event.id;
-};
 
 // One unified item renderer keyed off the event kind. All kinds share the same
 // wrapper so notes, polls, and articles align to the same width in the feed
@@ -361,62 +343,10 @@ const HomeFeed: React.FC = () => {
   // the original event into the repost's `content`, so a repost of a note from
   // someone you don't follow still renders even though the note isn't fetched
   // directly. Non-repost events pass through unchanged, ordered by created_at.
-  type FeedItem =
-    | { type: "event"; event: Event; sortTime: number }
-    | { type: "repost"; note: Event; reposts: Event[]; sortTime: number };
-
-  const feedItems = useMemo<FeedItem[]>(() => {
-    const reposts = events.filter((e) => e.kind === KIND_REPOST);
-    const others = events.filter((e) => e.kind !== KIND_REPOST);
-
-    // Group reposts by original note id, recovering the embedded original body.
-    const groups = new Map<string, { note?: Event; reposts: Event[] }>();
-    for (const r of reposts) {
-      const originalId = r.tags.find((t) => t[0] === "e")?.[1];
-      if (!originalId) continue;
-      const g = groups.get(originalId) || { reposts: [] };
-      g.reposts.push(r);
-      if (!g.note && r.content) {
-        try {
-          const embedded = JSON.parse(r.content) as Event;
-          if (embedded?.id === originalId && embedded.kind === KIND_NOTE) {
-            g.note = embedded;
-          }
-        } catch {
-          // malformed repost content — skip, may still resolve via a direct copy
-        }
-      }
-      groups.set(originalId, g);
-    }
-
-    // A reposted note that's also directly in the feed should merge into the
-    // repost item instead of appearing twice.
-    const directByKey = new Map<string, Event>();
-    for (const e of others) directByKey.set(dedupeKey(e), e);
-
-    const items: FeedItem[] = [];
-    const consumed = new Set<string>();
-
-    groups.forEach((g, originalId) => {
-      const note = directByKey.get(originalId) || g.note;
-      if (!note) return; // can't render without the original body
-      consumed.add(originalId);
-      const latestRepost = Math.max(...g.reposts.map((r) => r.created_at));
-      items.push({
-        type: "repost",
-        note,
-        reposts: g.reposts,
-        sortTime: Math.max(note.created_at, latestRepost),
-      });
-    });
-
-    for (const e of others) {
-      if (consumed.has(dedupeKey(e))) continue;
-      items.push({ type: "event", event: e, sortTime: e.created_at });
-    }
-
-    return items.sort((a, b) => b.sortTime - a.sortTime);
-  }, [events]);
+  const feedItems = useMemo<FeedItem[]>(
+    () => buildFeedItems(events, [KIND_NOTE]),
+    [events]
+  );
 
   const refresh = useCallback(() => {
     cursorRef.current = undefined;

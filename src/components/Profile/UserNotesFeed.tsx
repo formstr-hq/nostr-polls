@@ -6,6 +6,8 @@ import { useRelayHydrated, useRelayRefresh } from "../../dataLayer/hooks";
 import { isRelayHydrated } from "../../dataLayer/relayRefresh";
 import { Notes } from "../Notes";
 import UnifiedFeed from "../Feed/UnifiedFeed";
+import RepostsCard from "../Feed/NotesFeed/components/RepostedNoteCard";
+import { buildFeedItems, FeedItem, KIND_REPOST } from "../Feed/repostItems";
 
 interface UserNotesFeedProps {
   pubkey: string;
@@ -35,11 +37,10 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
 
     setLoading(true);
     const filters: Filter[] = [
-      {
-        kinds: [KIND_NOTE],
-        authors: [pubkey],
-        limit: 50,
-      },
+      { kinds: [KIND_NOTE], authors: [pubkey], limit: 50 },
+      // Kind 6 = the user's own reposts of notes (NIP-18). Separate filter so a
+      // heavy reposter's reposts don't eat the notes' limit (and vice versa).
+      { kinds: [KIND_REPOST], authors: [pubkey], limit: 50 },
     ];
 
     const handle = dataLayer.observe(filters, {
@@ -75,8 +76,13 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchNotes, hydrated, relayRefresh]);
 
-  const posts = useMemo(() => notes.filter((n) => !isReply(n)), [notes]);
-  const conversations = useMemo(() => notes.filter(isReply), [notes]);
+  // Reposts fold into their original note; the reply/post split then looks at
+  // the original (a repost itself carries an `e` tag and would otherwise always
+  // land in Conversations).
+  const items = useMemo(() => buildFeedItems(notes, [KIND_NOTE]), [notes]);
+  const itemNote = (i: FeedItem) => (i.type === "repost" ? i.note : i.event);
+  const posts = useMemo(() => items.filter((i) => !isReply(itemNote(i))), [items]);
+  const conversations = useMemo(() => items.filter((i) => isReply(itemNote(i))), [items]);
 
   const data = subTab === 0 ? posts : conversations;
 
@@ -105,11 +111,17 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
             </Typography>
           </Box>
         }
-        itemContent={(index, note) => (
-          <Box key={note.id} sx={{ mb: 2 }}>
-            <Notes event={note} />
-          </Box>
-        )}
+        itemContent={(index, item) =>
+          item.type === "repost" ? (
+            <Box key={`repost:${item.note.id}`} sx={{ mb: 2 }}>
+              <RepostsCard note={item.note} reposts={item.reposts} />
+            </Box>
+          ) : (
+            <Box key={item.event.id} sx={{ mb: 2 }}>
+              <Notes event={item.event} />
+            </Box>
+          )
+        }
       />
     </Box>
   );
