@@ -19,7 +19,7 @@ const TILES = [
   { feed: "music", label: "Music", hint: "Playlists & tracks", Icon: MusicNoteIcon },
   { feed: "movies", label: "Movies", hint: "Rate & review", Icon: MovieIcon },
   { feed: "follow-packs", label: "Packs", hint: "Curated people", Icon: GroupsIcon },
-  { feed: "games", label: "Games", hint: "2048 · Tetris · Racer", Icon: GamesIcon },
+  { feed: "games", label: "Games", hint: "Daily puzzles", Icon: GamesIcon },
 ];
 
 /** Hub for the secondary feeds, reached from the nav dock's Explore tab. */

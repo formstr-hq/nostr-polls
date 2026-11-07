@@ -72,6 +72,7 @@ import GamesFeed from "./components/Games/GamesFeed";
 import Twenty48Board from "./games/twenty48/Board";
 import TetrisBoard from "./games/tetris/Board";
 import RacerBoard from "./games/racer/Board";
+import SudokuBoard from "./games/sudoku/Board";
 import { PlaybackProvider } from "./contexts/PlaybackContext";
 import { PlaylistsProvider } from "./contexts/playlists-context";
 import { DraftsProvider } from "./contexts/drafts-context";
@@ -245,6 +246,7 @@ function AppContent() {
             <Route path="games/2048" element={<Twenty48Board />} />
             <Route path="games/tetris" element={<TetrisBoard />} />
             <Route path="games/racer" element={<RacerBoard />} />
+            <Route path="games/sudoku" element={<SudokuBoard />} />
 
             <Route element={<Outlet />}>
               <Route path="movies" element={<MoviesFeed />} />

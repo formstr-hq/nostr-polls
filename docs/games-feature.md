@@ -1,10 +1,10 @@
 # Games feature — plan & status
 
-A "fun" section: daily-seeded 2048, Tetris, and Overdrive with a leaderboard
-that's provable without a server — scores are verified by replaying each run's
-recorded inputs against the day's seed, client-side, by anyone. Protocol spec:
-`docs/nip-game-scores.md` (kind 33404). Anti-bot hardening deliberately
-deferred (see below).
+A "fun" section: daily-seeded 2048, Tetris, Overdrive, and Sudoku with a
+leaderboard that's provable without a server — scores are verified by replaying
+each run's recorded inputs against the day's seed, client-side, by anyone.
+Protocol spec: `docs/nip-game-scores.md` (kind 33404). Anti-bot hardening
+deliberately deferred (see below).
 
 ## Nostr kinds
 - **Game score = kind 33404** (addressable) — one event per `(pubkey, gameId, dateIso)`
@@ -178,11 +178,42 @@ recorded input log — applied to continuous motion instead of a grid.
 - `src/games/racer/Replay.tsx` — same `useReplayPlayback` pattern as the
   other two games.
 
+## Phase 7 — Sudoku — DONE
+
+A daily 9x9 puzzle with the same deterministic seed/replay/leaderboard wiring.
+The engine generates the puzzle and its unique solution from the daily seed:
+a seeded permutation of a valid base grid, then givens are removed one at a
+time while a small bitmask backtracking solver confirms the puzzle still has
+exactly one solution (memoized per seed so live play and every leaderboard
+verification share the same board).
+
+- **Input actions** are compact `"<row>,<col>,<digit>"` strings — one entry per
+  digit attempt. Incorrect digits are rejected by the engine, counted as a
+  mistake, and recorded too, so the replay carries the same penalty.
+- **Scoring** is completion-only: `10,000 − 2 × seconds − 150 × mistakes`,
+  clamped at 0. There is deliberately no pause: the clock is wall-clock-ish
+  game time, so pausing to think can't be used to farm a near-perfect time.
+  Pauses are also excluded from the other games' input recorder, but those
+  games' scores don't depend on elapsed time. No passive state changes after
+  the final digit, so live play and verification agree.
+- **UI** is a shared 9x9 grid (`Grid.tsx`) used by live play and replay, with
+  click/tap cell selection, an on-screen 1–9 pad, and arrow-key navigation.
+
+**Files (new)**
+- `src/games/sudoku/engine.ts` — `SudokuEngine`, seeded unique-puzzle
+  generator, uniqueness solver, scoring.
+- `src/games/sudoku/Grid.tsx` — shared board renderer.
+- `src/games/sudoku/Board.tsx` — live play with timer/mistakes and publishing.
+- `src/games/sudoku/Replay.tsx` — visual replay via `useReplayPlayback`.
+- `src/games/sudoku/format.ts` — elapsed-time formatting.
+- `src/games/sudoku/__tests__/engine.test.ts` — determinism, solve, mistake,
+  and live-vs-replay tests.
+
 ## Routing & nav
-- `src/components/Games/GamesFeed.tsx` — lists all three games with today's
+- `src/components/Games/GamesFeed.tsx` — lists all four games with today's
   personal best (offline-safe, clickable) and a leaderboard-modal trigger.
 - `src/App.tsx` — `feeds/games`, `feeds/games/2048`, `feeds/games/tetris`,
-  `feeds/games/racer`.
+  `feeds/games/racer`, `feeds/games/sudoku`.
 - `src/components/SidePane/index.tsx` — "Games" nav entry (`SportsEsportsIcon`).
 
 ## Deferred

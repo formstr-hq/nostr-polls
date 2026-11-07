@@ -9,9 +9,11 @@ import { getMyTodayScore, todayUtcIso } from "../../games/core/scoreEvents";
 import { Twenty48Engine } from "../../games/twenty48/engine";
 import { TetrisEngine } from "../../games/tetris/engine";
 import { RacerEngine } from "../../games/racer/engine";
+import { SudokuEngine } from "../../games/sudoku/engine";
 import Twenty48Replay from "../../games/twenty48/Replay";
 import TetrisReplay from "../../games/tetris/Replay";
 import RacerReplay from "../../games/racer/Replay";
+import SudokuReplay from "../../games/sudoku/Replay";
 import GameLeaderboardModal from "./GameLeaderboardModal";
 
 // Module-level so the factory reference is stable across renders — the
@@ -38,6 +40,13 @@ const GAMES = [
     path: "racer",
     factory: () => new RacerEngine(),
     ReplayView: RacerReplay,
+  },
+  {
+    id: "sudoku",
+    label: "Sudoku",
+    path: "sudoku",
+    factory: () => new SudokuEngine(),
+    ReplayView: SudokuReplay,
   },
 ] as const;
 
