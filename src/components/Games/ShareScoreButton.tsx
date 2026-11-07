@@ -11,17 +11,26 @@ interface ShareScoreButtonProps {
   gameId: string;
   score: number;
   dateIso: string;
+  /** Optional custom share text (e.g. streaks don't read well as "I scored N"). */
+  shareText?: string;
 }
 
-const ShareScoreButton: React.FC<ShareScoreButtonProps> = ({ gameLabel, gameId, score, dateIso }) => {
+const ShareScoreButton: React.FC<ShareScoreButtonProps> = ({
+  gameLabel,
+  gameId,
+  score,
+  dateIso,
+  shareText,
+}) => {
   const { user } = useUserContext();
   const { showNotification } = useNotification();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const text = shareText ?? buildScoreShareText(gameLabel, gameId, score, dateIso);
 
   const handlePost = async () => {
     setAnchorEl(null);
     try {
-      await publishScoreNote(buildScoreShareText(gameLabel, gameId, score, dateIso), user?.privateKey);
+      await publishScoreNote(text, user?.privateKey);
       showNotification("Posted to Nostr!", "success");
     } catch (err) {
       console.error("Failed to publish score note", err);
@@ -31,7 +40,7 @@ const ShareScoreButton: React.FC<ShareScoreButtonProps> = ({ gameLabel, gameId, 
 
   const handleCopy = async () => {
     setAnchorEl(null);
-    await copyToClipboard(buildScoreShareText(gameLabel, gameId, score, dateIso));
+    await copyToClipboard(text);
     showNotification("Copied to clipboard!", "success");
   };
 

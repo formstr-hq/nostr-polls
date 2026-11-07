@@ -7,11 +7,21 @@ export interface SudokuCell {
   col: number;
 }
 
+/** Key into the pencil-note map. */
+export function sudokuNoteKey(row: number, col: number): string {
+  return `${row},${col}`;
+}
+
+/** Candidate digits currently pencilled into each cell, keyed by
+ *  `sudokuNoteKey(row, col)`. Notes are UI-only — they never affect the
+ *  puzzle state, score, or replayed input log. */
+export type SudokuNotes = Map<string, Set<number>>;
+
 export interface SudokuGridProps {
   board: number[][];
   givens: number[][];
   selected?: SudokuCell | null;
-  wrongCell?: SudokuCell | null;
+  notes?: SudokuNotes;
   onSelect?: (row: number, col: number) => void;
   disabled?: boolean;
 }
@@ -21,7 +31,7 @@ export default function SudokuGrid({
   board,
   givens,
   selected,
-  wrongCell,
+  notes,
   onSelect,
   disabled = false,
 }: SudokuGridProps) {
@@ -46,7 +56,7 @@ export default function SudokuGrid({
         const value = board[row]?.[col] ?? 0;
         const given = (givens[row]?.[col] ?? 0) !== 0;
         const isSelected = selected?.row === row && selected?.col === col;
-        const isWrong = wrongCell?.row === row && wrongCell?.col === col;
+        const cellNotes = notes?.get(sudokuNoteKey(row, col));
 
         return (
           <ButtonBase
@@ -70,18 +80,12 @@ export default function SudokuGrid({
               ...(row % 3 === 2 && row < SUDOKU_SIZE - 1
                 ? { borderBottomWidth: 2, borderBottomColor: "text.secondary" }
                 : {}),
-              bgcolor: isWrong
-                ? "error.main"
-                : isSelected
+              bgcolor: isSelected
                 ? "action.selected"
                 : given
                 ? "action.hover"
                 : "background.paper",
-              color: isWrong
-                ? "error.contrastText"
-                : given
-                ? "text.primary"
-                : "primary.main",
+              color: given ? "text.primary" : "primary.main",
               fontWeight: given ? 700 : 500,
               fontSize: { xs: 18, sm: 21 },
               lineHeight: 1,
@@ -93,7 +97,35 @@ export default function SudokuGrid({
               ...(isSelected ? { boxShadow: "inset 0 0 0 2px", color: "primary.main" } : {}),
             }}
           >
-            {value || ""}
+            {value ? (
+              value
+            ) : cellNotes && cellNotes.size > 0 ? (
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  width: "100%",
+                  height: "100%",
+                  p: "2px",
+                }}
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => (
+                  <Box
+                    key={digit}
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: { xs: 7, sm: 8 },
+                      lineHeight: 1,
+                      color: "text.secondary",
+                    }}
+                  >
+                    {cellNotes.has(digit) ? digit : ""}
+                  </Box>
+                ))}
+              </Box>
+            ) : null}
           </ButtonBase>
         );
       })}

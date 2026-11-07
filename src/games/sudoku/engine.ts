@@ -4,9 +4,12 @@ import { DeterministicGame } from "../core/types";
 import { Rng, randInt, rngFromHexSeed } from "../core/prng";
 
 /** A digit-entry action, encoded as `"<row>,<col>,<digit>"` (all 0-based
- *  except the digit). Kept as one compact string so the shared input-log codec
- *  dedupes it down to a tiny dictionary. */
+ *  except the digit), or the literal `"submit"` to check the finished grid.
+ *  Kept as compact strings so the shared input-log codec dedupes them down to
+ *  a tiny dictionary. */
 export type SudokuAction = string;
+
+export const SUDOKU_SUBMIT_ACTION = "submit";
 
 export const SUDOKU_SIZE = 9;
 /** How many cells stay filled in the daily puzzle. Fewer givens = harder. */
@@ -14,8 +17,8 @@ const TARGET_GIVENS = 36;
 const BASE_SCORE = 10_000;
 /** Score lost per whole second spent on the puzzle. */
 const SECONDS_PENALTY = 2;
-/** Score lost per rejected (incorrect) digit. */
-const MISTAKE_PENALTY = 150;
+/** Score lost per failed Submit check. */
+const FAILED_CHECK_PENALTY = 150;
 /** Stop penalizing after 30 minutes. The shared replay harness only simulates
  *  ~60 minutes of ticks, so capping scoring well inside that keeps a very slow
  *  live solve's score reproducible instead of diverging past the tick bound. */
@@ -195,7 +198,7 @@ export function getSudokuPuzzle(seed: string): SudokuPuzzle {
 export class SudokuEngine implements DeterministicGame<SudokuAction> {
   private daily: SudokuPuzzle = { puzzle: [], solution: [] };
   private board: number[][] = [];
-  private mistakes = 0;
+  private failedChecks = 0;
   private elapsedMs = 0;
   private gameOver = false;
   private finalScore = 0;
@@ -205,7 +208,7 @@ export class SudokuEngine implements DeterministicGame<SudokuAction> {
   init(seed: string): void {
     this.daily = getSudokuPuzzle(seed);
     this.board = this.daily.puzzle.map((row) => [...row]);
-    this.mistakes = 0;
+    this.failedChecks = 0;
     this.elapsedMs = 0;
     this.gameOver = false;
     this.finalScore = 0;
@@ -214,6 +217,19 @@ export class SudokuEngine implements DeterministicGame<SudokuAction> {
 
   applyInput(action: SudokuAction, _t: number): void {
     if (this.gameOver) return;
+
+    if (action === SUDOKU_SUBMIT_ACTION) {
+      this.version++;
+      if (this.isCorrect()) {
+        this.gameOver = true;
+        this.finalScore = this.computeScore();
+      } else {
+        // No per-cell reveal: a failed check only tells the player the puzzle
+        // isn't solved yet, and costs a fixed score penalty.
+        this.failedChecks++;
+      }
+      return;
+    }
 
     const [row, col, digit] = action.split(",").map(Number);
     if (
@@ -230,38 +246,30 @@ export class SudokuEngine implements DeterministicGame<SudokuAction> {
       return;
     }
 
-    // Givens and already-solved cells are immutable.
-    if (this.board[row][col] !== 0) return;
-
-    this.version++;
-    if (digit !== this.daily.solution[row][col]) {
-      this.mistakes++;
-      return;
-    }
+    // Givens are immutable. Every other cell is freely editable so players can
+    // fill in their best guess and correct it before submitting.
+    if (this.daily.puzzle[row][col] !== 0) return;
+    if (this.board[row][col] === digit) return;
 
     this.board[row][col] = digit;
-    if (this.isSolved()) {
-      this.gameOver = true;
-      this.finalScore = this.computeScore();
-    }
+    this.version++;
   }
 
-  private isSolved(): boolean {
+  private isCorrect(): boolean {
     for (let r = 0; r < SUDOKU_SIZE; r++) {
       for (let c = 0; c < SUDOKU_SIZE; c++) {
-        if (this.board[r][c] === 0) return false;
+        if (this.board[r][c] !== this.daily.solution[r][c]) return false;
       }
     }
     return true;
   }
 
-  /** Time only matters so far; mistakes cost a fixed amount. Pauses don't
-   *  count because the input recorder freezes the clock they share. */
+  /** Time only matters so far; failed Submit checks cost a fixed amount. */
   private computeScore(): number {
     const seconds = Math.floor(Math.min(this.elapsedMs, MAX_SCORED_MS) / 1000);
     return Math.max(
       0,
-      BASE_SCORE - seconds * SECONDS_PENALTY - this.mistakes * MISTAKE_PENALTY
+      BASE_SCORE - seconds * SECONDS_PENALTY - this.failedChecks * FAILED_CHECK_PENALTY
     );
   }
 
@@ -279,7 +287,7 @@ export class SudokuEngine implements DeterministicGame<SudokuAction> {
   }
 
   getStateHash(): string {
-    const flat = `${this.board.flat().join("")}|${this.mistakes}|${this.elapsedMs}|${this.finalScore}`;
+    const flat = `${this.board.flat().join("")}|${this.failedChecks}|${this.elapsedMs}|${this.finalScore}`;
     return bytesToHex(sha256(new TextEncoder().encode(flat))).slice(0, 16);
   }
 
@@ -291,8 +299,8 @@ export class SudokuEngine implements DeterministicGame<SudokuAction> {
     return this.daily.puzzle.map((row) => [...row]);
   }
 
-  getMistakes(): number {
-    return this.mistakes;
+  getFailedChecks(): number {
+    return this.failedChecks;
   }
 
   getElapsedMs(): number {

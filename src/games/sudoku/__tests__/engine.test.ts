@@ -1,4 +1,4 @@
-import { SudokuEngine, getSudokuPuzzle } from "../engine";
+import { SUDOKU_SUBMIT_ACTION, SudokuEngine, getSudokuPuzzle } from "../engine";
 import { verifyReplay } from "../../core/replayEngine";
 import { GameInput } from "../../core/types";
 import { TickSync } from "../../core/tickSync";
@@ -16,6 +16,8 @@ function solutionInputs(seed: string, startMs = 0, stepMs = 900): GameInput[] {
       log.push({ t, a: `${row},${col},${solution[row][col]}` });
     }
   }
+  t += stepMs;
+  log.push({ t, a: SUDOKU_SUBMIT_ACTION });
   return log;
 }
 
@@ -82,7 +84,7 @@ describe("SudokuEngine", () => {
     expect(replay.stateHash).toBe(engine.getStateHash());
   });
 
-  test("wrong digits are rejected, counted, and cost score", () => {
+  test("digits stay editable until Submit, and failed checks cost score", () => {
     const { puzzle, solution } = getSudokuPuzzle(SEED);
     let blankRow = -1;
     let blankCol = -1;
@@ -98,19 +100,37 @@ describe("SudokuEngine", () => {
     const correct = solution[blankRow][blankCol];
     const wrong = correct === 9 ? 1 : correct + 1;
 
+    // Wrong digits are placed verbatim — nothing is checked per cell.
+    const probe = new SudokuEngine();
+    probe.init(SEED);
+    probe.applyInput(`${blankRow},${blankCol},${wrong}`, 100);
+    expect(probe.getBoard()[blankRow][blankCol]).toBe(wrong);
+    expect(probe.getFailedChecks()).toBe(0);
+    expect(probe.isGameOver()).toBe(false);
+
+    // ...and can be overwritten before submitting.
+    probe.applyInput(`${blankRow},${blankCol},${correct}`, 200);
+    expect(probe.getBoard()[blankRow][blankCol]).toBe(correct);
+
+    // A failed Submit only increments the check counter, with no cell reveal.
+    probe.applyInput(SUDOKU_SUBMIT_ACTION, 300);
+    expect(probe.isGameOver()).toBe(false);
+    expect(probe.getFailedChecks()).toBe(1);
+
     const clean = new SudokuEngine();
     clean.init(SEED);
     for (const input of solutionInputs(SEED)) clean.applyInput(input.a, input.t);
 
-    const withMistake = new SudokuEngine();
-    withMistake.init(SEED);
-    withMistake.applyInput(`${blankRow},${blankCol},${wrong}`, 100);
-    expect(withMistake.getBoard()[blankRow][blankCol]).toBe(0);
-    expect(withMistake.getMistakes()).toBe(1);
-    for (const input of solutionInputs(SEED)) withMistake.applyInput(input.a, input.t);
+    const penalized = new SudokuEngine();
+    penalized.init(SEED);
+    penalized.applyInput(SUDOKU_SUBMIT_ACTION, 50);
+    for (const input of solutionInputs(SEED)) {
+      penalized.applyInput(input.a, input.t);
+    }
 
-    expect(clean.getScore() - withMistake.getScore()).toBe(150);
-    expect(withMistake.isGameOver()).toBe(true);
+    expect(clean.isGameOver()).toBe(true);
+    expect(penalized.isGameOver()).toBe(true);
+    expect(clean.getScore() - penalized.getScore()).toBe(150);
   });
 
   test("live TickSync playback matches headless replay", () => {

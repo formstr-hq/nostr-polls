@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { dataLayer } from "@formstr/local-relay";
+import { dataLayer, type Event } from "@formstr/local-relay";
 import { DeterministicGame, GameInput } from "./types";
 import { verifyReplay } from "./replayEngine";
-import { KIND_GAME_SCORE, getDailySeed, parseScoreEvent, scoreDTag } from "./scoreEvents";
+import {
+  KIND_GAME_SCORE,
+  StoredScore,
+  getDailySeed,
+  parseScoreEvent,
+  scoreDTag,
+} from "./scoreEvents";
 
 export interface LeaderboardEntry {
   pubkey: string;
@@ -18,6 +24,17 @@ export interface LeaderboardEntry {
   inputLog: GameInput[];
 }
 
+/** Optional game-specific verification, for metrics that replay alone can't
+ *  certify (e.g. Sudoku's consecutive-day streak). The default verifier is
+ *  the score-equality check below. */
+export type LeaderboardVerifier = (args: {
+  event: Event;
+  parsed: StoredScore;
+  expectedSeed: string;
+  gameId: string;
+  dateIso: string;
+}) => boolean | Promise<boolean>;
+
 /**
  * Self-verifying leaderboard: subscribes to every score event for
  * (gameId, dateIso) — local cache first, then whatever the sync engine pulls
@@ -28,11 +45,14 @@ export interface LeaderboardEntry {
 export function useDailyLeaderboard<TAction extends string = string>(
   gameId: string,
   dateIso: string,
-  gameFactory: () => DeterministicGame<TAction>
+  gameFactory: () => DeterministicGame<TAction>,
+  verifyEntry?: LeaderboardVerifier
 ): LeaderboardEntry[] {
   const [entries, setEntries] = useState<Map<string, LeaderboardEntry>>(new Map());
   const gameFactoryRef = useRef(gameFactory);
   gameFactoryRef.current = gameFactory;
+  const verifierRef = useRef(verifyEntry);
+  verifierRef.current = verifyEntry;
 
   useEffect(() => {
     setEntries(new Map());
@@ -46,30 +66,48 @@ export function useDailyLeaderboard<TAction extends string = string>(
           const parsed = parseScoreEvent(event);
           if (!parsed) return;
 
-          let verified = false;
-          if (parsed.seed === expectedSeed) {
-            try {
-              const result = verifyReplay(gameFactoryRef.current, parsed.seed, parsed.inputLog);
-              verified = result.score === parsed.score;
-            } catch {
-              verified = false;
+          const evaluate = async () => {
+            let verified = false;
+            if (parsed.seed === expectedSeed) {
+              try {
+                if (verifierRef.current) {
+                  verified = await verifierRef.current({
+                    event,
+                    parsed,
+                    expectedSeed,
+                    gameId,
+                    dateIso,
+                  });
+                } else {
+                  const result = verifyReplay(
+                    gameFactoryRef.current,
+                    parsed.seed,
+                    parsed.inputLog
+                  );
+                  verified = result.score === parsed.score;
+                }
+              } catch {
+                verified = false;
+              }
             }
-          }
 
-          setEntries((prev) => {
-            const existing = prev.get(parsed.pubkey);
-            if (existing && existing.createdAt >= event.created_at) return prev;
-            const next = new Map(prev);
-            next.set(parsed.pubkey, {
-              pubkey: parsed.pubkey,
-              score: parsed.score,
-              verified,
-              createdAt: event.created_at,
-              seed: parsed.seed,
-              inputLog: parsed.inputLog,
+            setEntries((prev) => {
+              const existing = prev.get(parsed.pubkey);
+              if (existing && existing.createdAt >= event.created_at) return prev;
+              const next = new Map(prev);
+              next.set(parsed.pubkey, {
+                pubkey: parsed.pubkey,
+                score: parsed.score,
+                verified,
+                createdAt: event.created_at,
+                seed: parsed.seed,
+                inputLog: parsed.inputLog,
+              });
+              return next;
             });
-            return next;
-          });
+          };
+
+          void evaluate();
         },
       },
       {}

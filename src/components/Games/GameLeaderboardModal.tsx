@@ -5,7 +5,11 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import CloseIcon from "@mui/icons-material/Close";
 import LeaderboardPanel from "./LeaderboardPanel";
 import { DeterministicGame, GameInput } from "../../games/core/types";
-import { LeaderboardEntry, useDailyLeaderboard } from "../../games/core/useDailyLeaderboard";
+import {
+  LeaderboardEntry,
+  LeaderboardVerifier,
+  useDailyLeaderboard,
+} from "../../games/core/useDailyLeaderboard";
 
 export interface GameLeaderboardModalProps<TAction extends string = string> {
   open: boolean;
@@ -15,6 +19,10 @@ export interface GameLeaderboardModalProps<TAction extends string = string> {
   dateIso: string;
   gameFactory: () => DeterministicGame<TAction>;
   ReplayView: React.ComponentType<{ seed: string; inputLog: GameInput[] }>;
+  /** Game-specific verification for metrics replay alone can't certify. */
+  verifyEntry?: LeaderboardVerifier;
+  /** Optional unit appended to each score, e.g. "days" for Sudoku streaks. */
+  scoreSuffix?: string;
 }
 
 /**
@@ -31,10 +39,12 @@ export default function GameLeaderboardModal<TAction extends string = string>({
   dateIso,
   gameFactory,
   ReplayView,
+  verifyEntry,
+  scoreSuffix,
 }: GameLeaderboardModalProps<TAction>) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const leaderboard = useDailyLeaderboard(gameId, dateIso, gameFactory);
+  const leaderboard = useDailyLeaderboard(gameId, dateIso, gameFactory, verifyEntry);
   const [replayEntry, setReplayEntry] = useState<LeaderboardEntry | null>(null);
 
   const content = (
@@ -45,7 +55,11 @@ export default function GameLeaderboardModal<TAction extends string = string>({
           <CloseIcon fontSize="small" />
         </IconButton>
       </Box>
-      <LeaderboardPanel entries={leaderboard} onReplay={setReplayEntry} />
+      <LeaderboardPanel
+        entries={leaderboard}
+        onReplay={setReplayEntry}
+        scoreSuffix={scoreSuffix}
+      />
     </>
   );
 

@@ -6,6 +6,8 @@ import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
 import { useUserContext } from "../../hooks/useUserContext";
 import { getMyTodayScore, todayUtcIso } from "../../games/core/scoreEvents";
+import type { DeterministicGame, GameInput } from "../../games/core/types";
+import type { LeaderboardVerifier } from "../../games/core/useDailyLeaderboard";
 import { Twenty48Engine } from "../../games/twenty48/engine";
 import { TetrisEngine } from "../../games/tetris/engine";
 import { RacerEngine } from "../../games/racer/engine";
@@ -14,12 +16,24 @@ import Twenty48Replay from "../../games/twenty48/Replay";
 import TetrisReplay from "../../games/tetris/Replay";
 import RacerReplay from "../../games/racer/Replay";
 import SudokuReplay from "../../games/sudoku/Replay";
+import { SUDOKU_GAME_ID, hasStreak, verifySudokuStreak } from "../../games/sudoku/streak";
 import GameLeaderboardModal from "./GameLeaderboardModal";
+
+interface GameDefinition {
+  id: string;
+  label: string;
+  path: string;
+  factory: () => DeterministicGame;
+  ReplayView: React.ComponentType<{ seed: string; inputLog: GameInput[] }>;
+  verifyEntry?: LeaderboardVerifier;
+  scoreLabel?: string;
+  scoreSuffix?: string;
+}
 
 // Module-level so the factory reference is stable across renders — the
 // leaderboard hook keys off it via a ref, not a dependency, but a stable
 // reference still avoids handing it a fresh closure every render for no reason.
-const GAMES = [
+const GAMES: GameDefinition[] = [
   {
     id: "2048",
     label: "2048",
@@ -47,10 +61,22 @@ const GAMES = [
     path: "sudoku",
     factory: () => new SudokuEngine(),
     ReplayView: SudokuReplay,
+    verifyEntry: verifySudokuStreak,
+    scoreLabel: "Your streak today",
+    scoreSuffix: "days",
   },
-] as const;
+];
 
-function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[number]) {
+function GameCard({
+  id,
+  label,
+  path,
+  factory,
+  ReplayView,
+  verifyEntry,
+  scoreLabel,
+  scoreSuffix,
+}: GameDefinition) {
   const { user } = useUserContext();
   const navigate = useNavigate();
   const dateIso = todayUtcIso();
@@ -63,7 +89,12 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
     if (!user?.pubkey) return;
     let alive = true;
     getMyTodayScore(id, dateIso, user.pubkey).then((s) => {
-      if (alive) setMyBest(s?.score ?? null);
+      if (!alive) return;
+      // Ignore pre-streak Sudoku events (timed scores) — they aren't valid
+      // streak values and shouldn't show as a giant personal best.
+      const usable =
+        s && (id !== SUDOKU_GAME_ID || hasStreak(s.event)) ? s : null;
+      setMyBest(usable?.score ?? null);
     });
     return () => {
       alive = false;
@@ -95,7 +126,8 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
           </Stack>
         </Stack>
         <Typography variant="body2" color="text.secondary">
-          Your best today: {myBest ?? "—"}
+          {scoreLabel ?? "Your best today"}: {myBest ?? "—"}
+          {myBest !== null && scoreSuffix ? ` ${scoreSuffix}` : ""}
         </Typography>
       </CardContent>
 
@@ -107,6 +139,8 @@ function GameCard({ id, label, path, factory, ReplayView }: (typeof GAMES)[numbe
         dateIso={dateIso}
         gameFactory={factory}
         ReplayView={ReplayView}
+        verifyEntry={verifyEntry}
+        scoreSuffix={scoreSuffix}
       />
     </Card>
   );

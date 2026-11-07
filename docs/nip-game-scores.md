@@ -114,6 +114,7 @@ A client can resolve its own best score for `(gameId, dateIso)` from local cache
 ## Client Behavior
 
 - Clients SHOULD verify every leaderboard entry themselves before displaying it as legitimate; this NIP defines no attestation authority, so trusting an unverified `score` tag defeats the purpose.
+- Clients MAY use a game-specific verifier when the published metric is not the engine's replay score (e.g. Sudoku ranks by a consecutive-day solve streak). The verifier still checks that the input log solves the day's puzzle, then validates whatever additional cross-day evidence the metric requires (for Sudoku, the previous days' events with counting-down streak values).
 - Clients SHOULD reject events where `game_version` refers to an engine revision they don't recognize, rather than guessing compatibility.
 - Clients MAY cache verification results locally (keyed by event id) to avoid re-replaying unchanged leaderboard entries on every load.
 - Clients choosing their own `gameId` slugs SHOULD pick short, stable, lowercase identifiers, since it's part of the addressable coordinate and changing it orphans prior scores.

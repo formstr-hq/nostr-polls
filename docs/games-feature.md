@@ -187,27 +187,41 @@ time while a small bitmask backtracking solver confirms the puzzle still has
 exactly one solution (memoized per seed so live play and every leaderboard
 verification share the same board).
 
-- **Input actions** are compact `"<row>,<col>,<digit>"` strings — one entry per
-  digit attempt. Incorrect digits are rejected by the engine, counted as a
-  mistake, and recorded too, so the replay carries the same penalty.
-- **Scoring** is completion-only: `10,000 − 2 × seconds − 150 × mistakes`,
-  clamped at 0. There is deliberately no pause: the clock is wall-clock-ish
-  game time, so pausing to think can't be used to farm a near-perfect time.
-  Pauses are also excluded from the other games' input recorder, but those
-  games' scores don't depend on elapsed time. No passive state changes after
-  the final digit, so live play and verification agree.
+- **Input actions** are compact `"<row>,<col>,<digit>"` strings — one per digit
+  entry (`digit` 0 erases) — plus the literal `"submit"` action. Digits are
+  never validated per cell: any value can be placed or overwritten, so the
+  puzzle isn't revealed while playing.
+- **Pencil notes** are UI-only candidate marks, toggled with the Notes button
+  (or N) and entered with the number pad. They never enter the input log,
+  engine state, score, or replay.
+- **Submit** checks the completed grid once. A failed check only increments a
+  counter and does not reveal which cells are wrong.
+- **Scoring is the daily streak**, not time: solve today's puzzle and the
+  published score is `yesterday's verified streak + 1` (or `1` if yesterday
+  wasn't solved). The event carries a `streak` tag and the leaderboard ranks by
+  it. Elapsed time is displayed and replayed, but is not the metric.
+- **Streak verification** (Sudoku-specific, passed into
+  `useDailyLeaderboard` as `verifyEntry`) replays today's solve, then fetches
+  the previous `N−1` UTC days' events in one author-scoped query and checks
+  each one solves its own day with a streak counting down `N−1 … 1`. The
+  chain walk is bounded (366 days) and verified event ids are cached for the
+  session.
 - **UI** is a shared 9x9 grid (`Grid.tsx`) used by live play and replay, with
-  click/tap cell selection, an on-screen 1–9 pad, and arrow-key navigation.
+  click/tap cell selection, notes, an erase button, an on-screen 1–9 pad,
+  Submit, and arrow-key navigation.
 
 **Files (new)**
 - `src/games/sudoku/engine.ts` — `SudokuEngine`, seeded unique-puzzle
-  generator, uniqueness solver, scoring.
-- `src/games/sudoku/Grid.tsx` — shared board renderer.
-- `src/games/sudoku/Board.tsx` — live play with timer/mistakes and publishing.
+  generator, uniqueness solver, submit validation.
+- `src/games/sudoku/streak.ts` — streak computation, event-chain verification,
+  and the Sudoku `LeaderboardVerifier`.
+- `src/games/sudoku/Grid.tsx` — shared board renderer with pencil notes.
+- `src/games/sudoku/Board.tsx` — live play, submit, and streak publishing.
 - `src/games/sudoku/Replay.tsx` — visual replay via `useReplayPlayback`.
 - `src/games/sudoku/format.ts` — elapsed-time formatting.
-- `src/games/sudoku/__tests__/engine.test.ts` — determinism, solve, mistake,
-  and live-vs-replay tests.
+- `src/games/sudoku/__tests__/engine.test.ts` — determinism, submit, and
+  live-vs-replay tests.
+- `src/games/sudoku/__tests__/streak.test.ts` — streak chain verification tests.
 
 ## Routing & nav
 - `src/components/Games/GamesFeed.tsx` — lists all four games with today's

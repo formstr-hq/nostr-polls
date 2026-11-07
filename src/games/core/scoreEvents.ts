@@ -71,7 +71,8 @@ export async function publishDailyScore(
   dateIso: string,
   seed: string,
   score: number,
-  inputLog: GameInput[]
+  inputLog: GameInput[],
+  extraTags: string[][] = []
 ): Promise<Event> {
   const template: EventTemplate = {
     kind: KIND_GAME_SCORE,
@@ -81,6 +82,7 @@ export async function publishDailyScore(
       ["seed", seed],
       ["score", String(score)],
       ["game_version", GAME_VERSION],
+      ...extraTags,
     ],
     content: JSON.stringify(encodeInputLog(inputLog)),
   };

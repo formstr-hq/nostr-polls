@@ -19,17 +19,15 @@ export default function SudokuReplay({ seed, inputLog }: SudokuReplayProps) {
   const engine = playback.engine;
   const board = engine?.getBoard() ?? [];
   const givens = engine?.getGivens() ?? [];
-  const score = engine?.getScore() ?? 0;
-  const mistakes = engine?.getMistakes() ?? 0;
+  const failedChecks = engine?.getFailedChecks() ?? 0;
   const elapsedMs = engine?.getElapsedMs() ?? 0;
   const progress = playback.durationMs > 0 ? (playback.clockMs / playback.durationMs) * 100 : 0;
 
   return (
     <Stack alignItems="center" spacing={2} sx={{ p: 2 }}>
       <Stack direction="row" spacing={2}>
-        <Typography variant="body1">Score: {score}</Typography>
         <Typography variant="body1">Time: {formatElapsed(elapsedMs)}</Typography>
-        <Typography variant="body1">Mistakes: {mistakes}</Typography>
+        <Typography variant="body1">Failed checks: {failedChecks}</Typography>
       </Stack>
       <SudokuGrid board={board} givens={givens} disabled />
       <Box sx={{ width: 320 }}>
