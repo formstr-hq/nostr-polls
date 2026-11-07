@@ -241,9 +241,19 @@ const ZapModal: React.FC<ZapModalProps> = ({
   };
 
   const openWallet = () => {
-    const text = method === "monero" ? moneroUri : invoice;
-    if (text) {
-      window.location.assign(text);
+    // Monero URIs already carry their scheme; Lightning invoices are bare
+    // BOLT11 strings and need one, or the browser treats them as a relative
+    // path and navigates to a bogus in-app route.
+    const uri =
+      method === "monero"
+        ? moneroUri
+        : invoice
+        ? invoice.startsWith("lightning:")
+          ? invoice
+          : `lightning:${invoice}`
+        : null;
+    if (uri) {
+      window.location.assign(uri);
     }
   };
 
