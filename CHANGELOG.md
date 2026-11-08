@@ -1,3 +1,9 @@
+# 2.3.1
+
+- Sudoku: Erase now works on filled cells, Backspace/Delete clears the selected cell, and tapping the same digit again removes it.
+- Sudoku: the board now stays perfectly square on narrow mobile screens instead of being vertically compressed.
+- Sudoku: the daily puzzle board is centred correctly at small widths.
+
 # 2.3.0
 
 - Sudoku is here: a new daily game with pencil notes, a single Submit check at the end, Easy/Medium/Hard labels, and a verified consecutive-day streak leaderboard.
