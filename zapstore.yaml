@@ -11,14 +11,14 @@ tags:
   - moderation
 license: MIT
 website: pollerama.fun
-icon: assets/icon.png
+icon: https://cdn.zapstore.dev/22f0ad92bd831154a68e2149ee54272d1d965df3253761aa0e6784176d43742e
 images:
-  - assets/polls.png
-  - assets/home.png
-  - assets/create.png
-  - assets/explore.png
-  - assets/movies.png
-  - assets/appearance.png
+  - https://cdn.zapstore.dev/40a9073f8bac299e3a84f676c29549fdc9e75ca182a35deda2b677b7613c40a0
+  - https://cdn.zapstore.dev/54d11a6315646a01cf577770945cf1743531d2da165ee39df7f74b199c934fbc
+  - https://cdn.zapstore.dev/8608d2b6ae0c88800a09c063550c4c969c57594e2cdb22d3e49cee23729b8c06
+  - https://cdn.zapstore.dev/7f6f5a6022c45d52e4f7fb09f7d01271d1ceee931eb791871ef100bfcaaf156f
+  - https://cdn.zapstore.dev/483f4e494180119e8f9205bb73cb8d7ce61abb8e8acf5096cd92cb1e9b148d9e
+  - https://cdn.zapstore.dev/1e450641c40cb99339f10b80f502c01e1f09f3a79b92517ac9085d0f2fc41423
 release_notes: CHANGELOG.md
 changelog: CHANGELOG.md
 release_source: ./android/app/build/outputs/apk/release/app-release.apk
