@@ -1,3 +1,8 @@
+# 2.3.2
+
+- Sudoku: your in-progress puzzle is now saved automatically. Switching feeds, backgrounding the app, a WebView reload or a full restart restores the board, pencil notes, selected cell and timer instead of wiping the run.
+- Sudoku: Restart still clears the saved run and starts today's puzzle fresh.
+
 # 2.3.1
 
 - Sudoku: Erase now works on filled cells, Backspace/Delete clears the selected cell, and tapping the same digit again removes it.
