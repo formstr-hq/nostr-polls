@@ -12,7 +12,7 @@ import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
 export interface HandlerApp {
   name: string;
   picture?: string;
-  urlTemplate: string; // e.g. "https://habla.news/a/<naddr>" — naddr substituted by the consumer
+  urlTemplate: string; // e.g. "https://habla.news/a/<bech32>" — bech32 substituted by the consumer
   publishers: string[]; // pubkeys of everyone who published this handler
 }
 

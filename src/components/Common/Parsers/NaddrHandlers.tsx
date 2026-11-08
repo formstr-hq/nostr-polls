@@ -204,6 +204,8 @@ export const NaddrHandlers: React.FC<{ encoded: string }> = ({ encoded }) => {
           <Box display="flex" flexDirection="column" gap={1}>
             {apps.map((app) => {
               const webUrl = app.urlTemplate
+                .replace("<bech32>", encoded)
+                .replace("{bech32}", encoded)
                 .replace("<naddr>", encoded)
                 .replace("{naddr}", encoded);
 
