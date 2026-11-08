@@ -18,6 +18,18 @@ export class InputRecorder {
     this.pausedTotal = 0;
   }
 
+  /**
+   * Rehydrate a saved session: keep its log, and make `elapsedNow()` continue
+   * from the saved game time so newly recorded inputs are timestamped after
+   * the restored ones.
+   */
+  restore(log: GameInput[], elapsedMs: number) {
+    this.startedAt = performance.now() - Math.max(0, elapsedMs);
+    this.log = log.map((input) => ({ ...input }));
+    this.pausedAt = null;
+    this.pausedTotal = 0;
+  }
+
   record(action: string) {
     this.log.push({ t: Math.round(this.elapsedNow()), a: action });
   }

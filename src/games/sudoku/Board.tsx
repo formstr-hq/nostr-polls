@@ -24,6 +24,13 @@ import SudokuGrid, { SudokuCell, SudokuNotes, sudokuNoteKey } from "./Grid";
 import SudokuReplay from "./Replay";
 import { formatElapsed } from "./format";
 import {
+  clearSudokuProgress,
+  deserializeNotes,
+  loadSudokuProgress,
+  saveSudokuProgress,
+  serializeNotes,
+} from "./progress";
+import {
   SUDOKU_GAME_ID,
   getSudokuStreakForToday,
   hasStreak,
@@ -111,26 +118,93 @@ export default function SudokuBoard() {
     }
   }, []);
 
-  const resetGame = useCallback(() => {
-    const engine = engineRef.current!;
-    engine.init(seed);
-    recorderRef.current!.reset();
-    tickSyncRef.current = new TickSync();
-    setGameOver(false);
-    setPublishedThisRun(false);
-    setWatchingReplay(false);
-    setFinishedLog(null);
-    setNotes(new Map());
-    setNoteMode(false);
-    clearCheckMessage();
-    setSelected(firstEditableCell(engine.getGivens(), engine.getBoard()));
-    syncFromEngine();
-  }, [seed, syncFromEngine, clearCheckMessage]);
+  const resetGame = useCallback(
+    (restore = true) => {
+      const engine = engineRef.current!;
+      const recorder = recorderRef.current!;
+      engine.init(seed);
+      recorder.reset();
+      tickSyncRef.current = new TickSync();
+      setGameOver(false);
+      setPublishedThisRun(false);
+      setWatchingReplay(false);
+      setFinishedLog(null);
+      clearCheckMessage();
+
+      let restored = false;
+      let restoredNotes: SudokuNotes = new Map();
+      let restoredSelected: SudokuCell | null = null;
+      let restoredNoteMode = false;
+
+      if (restore) {
+        const saved = loadSudokuProgress(seed, dateIso);
+        if (saved) {
+          try {
+            // Rebuild the exact engine state from the recorded input log. The
+            // log is also what gets published, so this is the same simulation
+            // a verifier would run.
+            for (const input of saved.log) {
+              tickSyncRef.current!.catchUpTo(engine, input.t);
+              engine.applyInput(input.a, input.t);
+            }
+            const lastInputMs = saved.log.length
+              ? saved.log[saved.log.length - 1].t
+              : 0;
+            const restoredElapsed = Math.max(saved.elapsedMs, lastInputMs);
+            tickSyncRef.current!.catchUpTo(engine, restoredElapsed);
+            recorder.restore(saved.log, restoredElapsed);
+            restoredNotes = deserializeNotes(saved.notes);
+            restoredSelected = saved.selected;
+            restoredNoteMode = saved.noteMode;
+            restored = true;
+          } catch (error) {
+            console.error("Failed to restore Sudoku progress", error);
+            engine.init(seed);
+            recorder.reset();
+            tickSyncRef.current = new TickSync();
+            clearSudokuProgress();
+          }
+        }
+      }
+
+      if (restored) {
+        setNotes(restoredNotes);
+        setNoteMode(restoredNoteMode);
+        setSelected(
+          restoredSelected ?? firstEditableCell(engine.getGivens(), engine.getBoard())
+        );
+      } else {
+        clearSudokuProgress();
+        setNotes(new Map());
+        setNoteMode(false);
+        setSelected(firstEditableCell(engine.getGivens(), engine.getBoard()));
+      }
+
+      syncFromEngine();
+    },
+    [seed, dateIso, syncFromEngine, clearCheckMessage]
+  );
 
   useEffect(() => {
-    resetGame();
+    resetGame(true);
     return clearCheckMessage;
   }, [resetGame, clearCheckMessage]);
+
+  // Keep the current run on disk so a route change, app background/restart or
+  // WebView reload doesn't wipe hours of progress. The input log is replayed on
+  // restore; notes/selection are UI-only and saved alongside it.
+  useEffect(() => {
+    if (!board.length) return;
+    saveSudokuProgress({
+      seed,
+      dateIso,
+      log: [...recorderRef.current!.getLog()],
+      elapsedMs: engineRef.current!.getElapsedMs(),
+      notes: serializeNotes(notes),
+      selected,
+      noteMode,
+    });
+  }, [seed, dateIso, board, notes, selected, noteMode, elapsedMs, failedChecks]);
 
   useEffect(() => {
     if (!user?.pubkey) return;
@@ -497,7 +571,7 @@ export default function SudokuBoard() {
             {watchingReplay ? "Back to board" : "Watch replay"}
           </Button>
         )}
-        <Button variant="outlined" onClick={resetGame}>
+        <Button variant="outlined" onClick={() => resetGame(false)}>
           Restart today's puzzle
         </Button>
         {gameOver && streak !== null && (
