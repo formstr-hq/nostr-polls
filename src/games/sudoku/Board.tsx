@@ -221,11 +221,15 @@ export default function SudokuBoard() {
     (digit: number) => {
       const cell = selectedRef.current;
       if (!cell) return;
+      // Tapping the same digit again clears the cell, in addition to the
+      // explicit Erase button / Backspace.
+      const current = board[cell.row]?.[cell.col] ?? 0;
+      const value = digit !== 0 && current === digit ? 0 : digit;
       clearCheckMessage();
-      applyAction(`${cell.row},${cell.col},${digit}`);
-      clearNotesForPlacement(cell.row, cell.col, digit);
+      applyAction(`${cell.row},${cell.col},${value}`);
+      clearNotesForPlacement(cell.row, cell.col, value);
     },
-    [applyAction, clearCheckMessage, clearNotesForPlacement]
+    [applyAction, clearCheckMessage, clearNotesForPlacement, board]
   );
 
   const toggleNote = useCallback(

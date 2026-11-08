@@ -261,7 +261,7 @@ export class SudokuEngine implements DeterministicGame<SudokuAction> {
       row >= SUDOKU_SIZE ||
       col < 0 ||
       col >= SUDOKU_SIZE ||
-      digit < 1 ||
+      digit < 0 ||
       digit > 9
     ) {
       return;

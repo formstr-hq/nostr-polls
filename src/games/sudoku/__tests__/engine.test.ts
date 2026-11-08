@@ -138,6 +138,35 @@ describe("SudokuEngine", () => {
     expect(clean.getScore() - penalized.getScore()).toBe(150);
   });
 
+  test("erase clears editable cells and leaves givens alone", () => {
+    const { puzzle, solution } = getSudokuPuzzle(SEED);
+    const blank: [number, number] = [0, 0];
+    const given: [number, number] = [0, 0];
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        if (puzzle[r][c] === 0) blank.splice(0, 2, r, c);
+        else given.splice(0, 2, r, c);
+      }
+    }
+
+    const engine = new SudokuEngine();
+    engine.init(SEED);
+    engine.applyInput(`${blank[0]},${blank[1]},${solution[blank[0]][blank[1]]}`, 10);
+    expect(engine.getBoard()[blank[0]][blank[1]]).toBe(
+      solution[blank[0]][blank[1]]
+    );
+
+    // The old bug rejected digit 0 outright; it must clear the cell.
+    engine.applyInput(`${blank[0]},${blank[1]},0`, 20);
+    expect(engine.getBoard()[blank[0]][blank[1]]).toBe(0);
+    expect(engine.getFailedChecks()).toBe(0);
+
+    // Givens are immutable.
+    const givenBefore = engine.getBoard()[given[0]][given[1]];
+    engine.applyInput(`${given[0]},${given[1]},0`, 30);
+    expect(engine.getBoard()[given[0]][given[1]]).toBe(givenBefore);
+  });
+
   test("live TickSync playback matches headless replay", () => {
     for (const frameInterval of [16, 16.7, 17.3]) {
       const inputs = solutionInputs(SEED, 0, 337);

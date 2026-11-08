@@ -37,11 +37,14 @@ export default function SudokuGrid({
 }: SudokuGridProps) {
   return (
     <Box
+      data-sudoku-grid
       sx={{
         display: "grid",
         gridTemplateColumns: `repeat(${SUDOKU_SIZE}, 1fr)`,
-        width: "min(92vw, 380px)",
-        aspectRatio: "1 / 1",
+        gridTemplateRows: `repeat(${SUDOKU_SIZE}, 1fr)`,
+        width: "min(92vw, 70vh, 380px)",
+        height: "min(92vw, 70vh, 380px)",
+        flexShrink: 0,
         border: "2px solid",
         borderColor: "text.primary",
         borderRadius: 1.5,
@@ -70,6 +73,8 @@ export default function SudokuGrid({
               position: "relative",
               width: "100%",
               height: "100%",
+              minWidth: 0,
+              minHeight: 0,
               borderRadius: 0,
               borderRight: col < SUDOKU_SIZE - 1 ? "1px solid" : 0,
               borderBottom: row < SUDOKU_SIZE - 1 ? "1px solid" : 0,
