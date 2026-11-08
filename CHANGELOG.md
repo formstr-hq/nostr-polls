@@ -1,3 +1,13 @@
+# 2.3.0
+
+- Sudoku is here: a new daily game with pencil notes, a single Submit check at the end, Easy/Medium/Hard labels, and a verified consecutive-day streak leaderboard.
+- See who bookmarked a post: tap the bookmark count in the feedback menu.
+- Profiles now have a Reposts tab, so you can see what someone has boosted.
+- The composer now shows the name, picture and npub of the account you're posting as.
+- Zap invoices now open the wallet properly, and hold-to-zap no longer fires while you scroll.
+- Unsupported-kind links now open the correct app-handler URL.
+- Detail pages now remount when their URL changes, and the "The fun Nostr client" share card appears on every page.
+
 # 2.2.1
 
 - Feeds no longer get stuck when switching between them. Content already in your local store now appears immediately instead of waiting for the network or a background cache load.
