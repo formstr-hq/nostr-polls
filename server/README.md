@@ -24,7 +24,7 @@ reverse proxy → pollerama-web :8080
 | `/feeds/articles/:naddr` | kind 30023 preview |
 | `/result/:id`, `/respond/:id` | poll preview |
 | `/p/:id` | `noindex,nofollow`, no preview |
-| `/api/link-preview?url=` | OG metadata (JSON) for links inside notes; used by the web app |
+| `/api/link-preview?url=` | OG metadata (JSON) for links inside notes; includes direct video files when the page exposes one |
 | `/og-default.png` | bundled fallback card |
 | `/healthz` | `{"ok":true}` |
 | everything else | the SPA shell / static assets |
@@ -76,6 +76,8 @@ configuration are committed here.
 - resolved preview: `x-preview: hit`, `Cache-Control: public, s-maxage=300, stale-while-revalidate=86400`
 - miss/timeout: generic branded head, `Cache-Control: no-store` (so it is retried)
 - injected values are HTML-escaped; images must be `http(s)`
+- share previews for notes/articles/polls include `og:video` when the content
+  contains a direct video URL (`.mp4`, `.webm`, `.ogv`, `.ogg`, `.mov`, `.m4v`)
 - private `/p/...` is `noindex,nofollow`
 - previews are cached in memory for `PREVIEW_CACHE_MS`
 - `/api/link-preview` only fetches public `http(s)` hosts: private, loopback and

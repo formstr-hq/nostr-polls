@@ -81,6 +81,29 @@ const truncate = (value, max) => {
 const absoluteImage = (value) =>
   typeof value === "string" && /^https?:\/\//i.test(value) ? value : undefined;
 
+const VIDEO_URL_RE =
+  /https?:\/\/[^\s<>"']+\.(mp4|webm|ogv|ogg|mov|m4v)(?:[?#][^\s<>"']*)?/i;
+
+const directVideo = (text) => {
+  const match = String(text || "").match(VIDEO_URL_RE);
+  return match ? match[0] : "";
+};
+
+const videoMimeType = (url) => {
+  const ext = String(url).match(/\.(mp4|webm|ogv|ogg|mov|m4v)(?:[?#]|$)/i)?.[1];
+  switch ((ext || "").toLowerCase()) {
+    case "webm":
+      return "video/webm";
+    case "ogv":
+    case "ogg":
+      return "video/ogg";
+    case "mov":
+      return "video/quicktime";
+    default:
+      return "video/mp4";
+  }
+};
+
 let indexHtml = "";
 let defaultImage = null;
 
@@ -116,10 +139,13 @@ const describe = (preview) => {
     title: config.appTitle,
     description: config.defaultDescription,
     image: defaultImageUrl(),
+    video: "",
   };
   if (!preview) return fallback;
 
   const image = absoluteImage(preview.image) || defaultImageUrl();
+  const video = directVideo(preview.content || "");
+  const base = { image, video };
 
   if (preview.kind === 1068 && preview.poll) {
     const options = (preview.poll.options || [])
@@ -127,32 +153,32 @@ const describe = (preview) => {
       .filter(Boolean)
       .join(" · ");
     return {
+      ...base,
       title: truncate(preview.poll.question || preview.title || "Poll", 100),
       description: options || "Vote on this poll on Pollerama",
-      image,
     };
   }
 
   if (preview.kind === 30023) {
     return {
+      ...base,
       title: truncate(preview.title || "Article", 100),
       description:
         truncate(preview.summary || preview.content, 200) ||
         config.defaultDescription,
-      image,
     };
   }
 
   // Short text notes (kind 1) and anything else.
   const content = truncate(preview.content, 200);
   return {
+    ...base,
     title: truncate(preview.title || content || "Note on Pollerama", 100),
     description: content || config.defaultDescription,
-    image,
   };
 };
 
-const metaTags = ({ title, description, url, image, noindex }) => {
+const metaTags = ({ title, description, url, image, video, noindex }) => {
   const tags = [
     `<meta name="description" content="${escapeHtml(description)}"/>`,
     `<meta property="og:site_name" content="${escapeHtml(config.siteName)}"/>`,
@@ -173,12 +199,17 @@ const metaTags = ({ title, description, url, image, noindex }) => {
     tags.push(`<meta name="twitter:image" content="${escapeHtml(image)}"/>`);
     tags.push(`<meta name="twitter:image:alt" content="${escapeHtml(title)}"/>`);
   }
+  if (video) {
+    tags.push(`<meta property="og:video" content="${escapeHtml(video)}"/>`);
+    tags.push(`<meta property="og:video:secure_url" content="${escapeHtml(video)}"/>`);
+    tags.push(`<meta property="og:video:type" content="${videoMimeType(video)}"/>`);
+  }
   if (noindex) tags.push(`<meta name="robots" content="noindex,nofollow"/>`);
   return tags.join("");
 };
 
-const renderHtml = ({ title, description, url, image, noindex }) => {
-  const tags = metaTags({ title, description, url, image, noindex });
+const renderHtml = ({ title, description, url, image, video, noindex }) => {
+  const tags = metaTags({ title, description, url, image, video, noindex });
   return indexHtml
     .replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeHtml(title)}</title>`)
     .replace(/<meta\s+name=["']description["'][^>]*>/i, "")
@@ -317,7 +348,7 @@ const server = createServer(async (req, res) => {
   if (identifier) {
     const preview = await fetchPreview(identifier);
     const hit = preview !== null;
-    const { title, description, image } = describe(preview);
+    const { title, description, image, video } = describe(preview);
     sendHtml(
       req,
       res,
@@ -325,6 +356,7 @@ const server = createServer(async (req, res) => {
         title,
         description,
         image,
+        video,
         url: `${config.siteUrl}${pathname}`,
       }),
       // Only cache real previews. A miss must not be cached, or an upstream

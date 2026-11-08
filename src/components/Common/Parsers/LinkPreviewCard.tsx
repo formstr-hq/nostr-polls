@@ -7,6 +7,8 @@ interface LinkPreviewData {
   title: string;
   description: string;
   image: string;
+  video: string;
+  videoType: string;
   favicon: string;
   siteName: string;
 }
@@ -53,8 +55,15 @@ function faviconFor(url: string): string {
   }
 }
 
+function isDirectVideo(url: string, type: string): boolean {
+  return (
+    /^video\//i.test(type) ||
+    /\.(mp4|webm|ogv|ogg|mov|m4v)(?:[?#]|$)/i.test(url)
+  );
+}
+
 function hasContent(data: LinkPreviewData | null): data is LinkPreviewData {
-  return !!data && !!(data.title || data.description || data.image);
+  return !!data && !!(data.title || data.description || data.image || data.video);
 }
 
 // Native: CapacitorHttp makes the request outside the WebView, so CORS doesn't
@@ -89,10 +98,32 @@ async function fetchNative(url: string): Promise<LinkPreviewData | null> {
       image = "";
     }
   }
+
+  const videoType = getMeta(
+    "og:video:type",
+    "twitter:player:stream:content_type"
+  );
+  let video = getMeta(
+    "og:video:secure_url",
+    "og:video:url",
+    "og:video",
+    "twitter:player:stream"
+  );
+  if (video) {
+    try {
+      video = new URL(video, res.url || url).toString();
+    } catch {
+      video = "";
+    }
+  }
+  if (!isDirectVideo(video, videoType)) video = "";
+
   return {
     title: getMeta("og:title", "twitter:title") || doc.title.trim(),
     description: getMeta("og:description", "twitter:description", "description"),
     image,
+    video,
+    videoType: video ? videoType : "",
     siteName: getMeta("og:site_name"),
     favicon: faviconFor(url),
   };
@@ -113,6 +144,8 @@ async function fetchViaGateway(url: string): Promise<LinkPreviewData | null> {
       title: String(json.title || ""),
       description: String(json.description || ""),
       image: String(json.image || ""),
+      video: String(json.video || ""),
+      videoType: String(json.videoType || ""),
       siteName: String(json.siteName || ""),
       favicon: faviconFor(url),
     };
@@ -144,9 +177,11 @@ export const LinkPreviewCard: React.FC<LinkPreviewCardProps> = ({ url }) => {
   const [preview, setPreview] = useState<LinkPreviewData | null | "loading">(
     "loading"
   );
+  const [videoFailed, setVideoFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setVideoFailed(false);
     fetchLinkPreview(url).then((data) => {
       if (!cancelled) setPreview(data);
     });
@@ -157,20 +192,32 @@ export const LinkPreviewCard: React.FC<LinkPreviewCardProps> = ({ url }) => {
 
   if (preview === "loading") return null;
   if (!preview) return null;
-  if (!preview.title && !preview.description && !preview.image) return null;
+  if (!preview.title && !preview.description && !preview.image && !preview.video)
+    return null;
 
   let hostname = "";
   try {
     hostname = new URL(url).hostname;
   } catch {}
 
+  const openLink = () => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const showVideo = Boolean(preview.video) && !videoFailed;
+
   return (
     <Box
-      component="a"
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={(e: React.MouseEvent) => e.stopPropagation()}
+      role="link"
+      tabIndex={0}
+      aria-label={preview.title || url}
+      onClick={openLink}
+      onKeyDown={(e: React.KeyboardEvent) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openLink();
+        }
+      }}
       sx={{
         display: "block",
         border: "1px solid",
@@ -185,18 +232,39 @@ export const LinkPreviewCard: React.FC<LinkPreviewCardProps> = ({ url }) => {
         maxWidth: "100%",
       }}
     >
-      {preview.image && (
-        <Box sx={{ position: "relative", overflow: "hidden" }}>
+      {showVideo ? (
+        <Box sx={{ bgcolor: "black", lineHeight: 0 }}>
           <Box
-            component="img"
-            src={preview.image}
-            alt=""
-            sx={{ width: "100%", maxHeight: 200, objectFit: "cover", display: "block" }}
-            onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
-              e.currentTarget.style.display = "none";
+            component="video"
+            src={preview.video}
+            poster={preview.image || undefined}
+            controls
+            playsInline
+            preload="metadata"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            onError={() => setVideoFailed(true)}
+            sx={{
+              width: "100%",
+              maxHeight: 240,
+              display: "block",
+              bgcolor: "black",
             }}
           />
         </Box>
+      ) : (
+        preview.image && (
+          <Box sx={{ position: "relative", overflow: "hidden" }}>
+            <Box
+              component="img"
+              src={preview.image}
+              alt=""
+              sx={{ width: "100%", maxHeight: 200, objectFit: "cover", display: "block" }}
+              onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
+          </Box>
+        )
       )}
       <Box sx={{ p: 1.5 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>

@@ -179,6 +179,19 @@ const clean = (value, max) => {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 };
 
+const absoluteUrl = (value, pageUrl) => {
+  if (!value) return "";
+  try {
+    const resolved = new URL(value, pageUrl).toString();
+    return /^https?:/i.test(resolved) ? resolved : "";
+  } catch {
+    return "";
+  }
+};
+
+const isDirectVideo = (url, type) =>
+  /^video\//i.test(type) || /\.(mp4|webm|ogv|ogg|mov|m4v)(?:[?#]|$)/i.test(url);
+
 export const parseMeta = (html, pageUrl) => {
   const head = html.split(/<\/head>/i)[0];
   const meta = {};
@@ -193,20 +206,39 @@ export const parseMeta = (html, pageUrl) => {
   const title = pick("og:title", "twitter:title") ||
     (titleTag ? decodeEntities(titleTag[1]) : "");
 
-  let image = pick("og:image:secure_url", "og:image", "og:image:url", "twitter:image", "twitter:image:src");
-  if (image) {
-    try {
-      image = new URL(image, pageUrl).toString();
-      if (!/^https?:/i.test(image)) image = "";
-    } catch {
-      image = "";
-    }
-  }
+  const image = absoluteUrl(
+    pick(
+      "og:image:secure_url",
+      "og:image",
+      "og:image:url",
+      "twitter:image",
+      "twitter:image:src"
+    ),
+    pageUrl
+  );
+
+  const videoType = pick(
+    "og:video:type",
+    "twitter:player:stream:content_type"
+  );
+  const videoCandidate = absoluteUrl(
+    pick(
+      "og:video:secure_url",
+      "og:video:url",
+      "og:video",
+      "twitter:player:stream"
+    ),
+    pageUrl
+  );
+  // Only surface direct video files; `og:video` is often an embed page.
+  const video = isDirectVideo(videoCandidate, videoType) ? videoCandidate : "";
 
   return {
     title: clean(title, 300),
     description: clean(pick("og:description", "twitter:description", "description"), 500),
     image,
+    video,
+    videoType: video ? videoType : "",
     siteName: clean(pick("og:site_name", "application-name"), 100),
   };
 };
@@ -233,7 +265,9 @@ export const getLinkPreview = async (raw) => {
       const { html, url } = await fetchHtml(target);
       const data = html ? parseMeta(html, url) : null;
       const value =
-        data && (data.title || data.description || data.image) ? data : null;
+        data && (data.title || data.description || data.image || data.video)
+          ? data
+          : null;
       remember(key, value);
       return value;
     } catch {
