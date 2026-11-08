@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Tooltip, Typography } from "@mui/material";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { Event } from "nostr-tools/lib/types/core";
@@ -45,6 +45,8 @@ const HOLD_GROWTH = 1.18;
 // Once the ramp climbs past this, the zap modal opens automatically.
 const HOLD_MAX_SATS = 100_000;
 const HOLD_MAX_SCALE = 1.9;
+/** Movement (px) that turns a press into a scroll/drag and cancels the hold. */
+const HOLD_CANCEL_MOVE_PX = 12;
 
 const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   const { profiles, addEventToMap } = useAppContext();
@@ -71,6 +73,8 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
   // Touch devices synthesize a mouse/click after a touch; suppress the click
   // that trails a committed hold so the modal doesn't reopen at the default.
   const suppressClickRef = useRef(false);
+  // Where the current touch began, so a scroll gesture can cancel the hold.
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const recipient = profiles?.get(pollEvent.pubkey);
   const zapInfos = getZapInfos(pollEvent.id);
@@ -115,7 +119,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
     setZapModalOpen(true);
   };
 
-  const stopRamp = () => {
+  const stopRamp = useCallback(() => {
     if (holdStartTimer.current) {
       clearTimeout(holdStartTimer.current);
       holdStartTimer.current = null;
@@ -127,7 +131,7 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
     setIsHolding(false);
     setHoldSats(0);
     holdSatsRef.current = 0;
-  };
+  }, []);
 
   // Open the zap modal at the ramped amount and stop ramping. Suppresses the
   // synthetic click that trails a touch release so the modal doesn't reopen.
@@ -175,13 +179,65 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
     }
   };
 
-  // Pointer left the button mid-hold → abort without zapping.
-  const cancelHold = () => {
-    stopRamp();
-  };
+  // Pointer left the button mid-hold (or the gesture became a scroll) → abort
+  // without zapping. When the abort was caused by movement, suppress the
+  // trailing synthesized click so it doesn't open the modal at the default.
+  const cancelHold = useCallback(
+    (suppressClick = false) => {
+      const wasHolding = Boolean(holdStartTimer.current || holdInterval.current);
+      if (!wasHolding) return;
+      stopRamp();
+      if (suppressClick) {
+        suppressClickRef.current = true;
+        setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 500);
+      }
+    },
+    [stopRamp]
+  );
+
+  // Any scroll gesture should abort a press-in-progress. Scroll events don't
+  // bubble, so listen in the capture phase to catch feed/container scrolling.
+  useEffect(() => {
+    const onScroll = () => cancelHold(true);
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [cancelHold]);
 
   // Clean up timers if the component unmounts mid-hold.
-  useEffect(() => () => stopRamp(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => stopRamp(), [stopRamp]);
+
+  const handleTouchStart = (event: React.TouchEvent) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    startHold();
+  };
+
+  // A finger that moves before the ramp starts is scrolling, not zapping.
+  const handleTouchMove = (event: React.TouchEvent) => {
+    const start = touchStartRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch) return;
+    if (
+      Math.hypot(touch.clientX - start.x, touch.clientY - start.y) >=
+      HOLD_CANCEL_MOVE_PX
+    ) {
+      touchStartRef.current = null;
+      cancelHold(true);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchStartRef.current = null;
+    endHold();
+  };
+
+  const handleTouchCancel = () => {
+    touchStartRef.current = null;
+    cancelHold(true);
+  };
 
   const handleClick = () => {
     if (suppressClickRef.current || didHold.current) return; // hold already opened the modal
@@ -262,10 +318,11 @@ const Zap: React.FC<ZapProps> = ({ pollEvent }) => {
             style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
             onMouseDown={startHold}
             onMouseUp={endHold}
-            onMouseLeave={cancelHold}
-            onTouchStart={startHold}
-            onTouchEnd={endHold}
-            onTouchCancel={cancelHold}
+            onMouseLeave={() => cancelHold()}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchCancel}
             onClick={handleClick}
           >
             <FlashOn
