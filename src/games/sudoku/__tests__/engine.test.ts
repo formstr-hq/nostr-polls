@@ -45,8 +45,13 @@ describe("SudokuEngine", () => {
     const a = getSudokuPuzzle(SEED);
     const b = getSudokuPuzzle(SEED);
     expect(a).toBe(b); // memoized for the same day
-    expect(countGivens(SEED)).toBeGreaterThanOrEqual(36);
-    expect(countGivens(SEED)).toBeLessThan(81);
+    const givens = countGivens(SEED);
+    expect(givens).toBeGreaterThanOrEqual(30);
+    expect(givens).toBeLessThanOrEqual(42);
+    expect(["easy", "medium", "hard"]).toContain(a.difficulty);
+    expect(a.difficulty).toBe(
+      givens >= 40 ? "easy" : givens >= 34 ? "medium" : "hard"
+    );
     expect(isValidSolution(a.solution)).toBe(true);
 
     // Every given matches the solution.

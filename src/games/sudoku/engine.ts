@@ -1,7 +1,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { DeterministicGame } from "../core/types";
-import { Rng, randInt, rngFromHexSeed } from "../core/prng";
+import { Rng, randInt, rngFromHexSeed, seedToUint32 } from "../core/prng";
 
 /** A digit-entry action, encoded as `"<row>,<col>,<digit>"` (all 0-based
  *  except the digit), or the literal `"submit"` to check the finished grid.
@@ -12,9 +12,14 @@ export type SudokuAction = string;
 export const SUDOKU_SUBMIT_ACTION = "submit";
 
 export const SUDOKU_SIZE = 9;
-/** How many cells stay filled in the daily puzzle. Fewer givens = harder. */
-const TARGET_GIVENS = 36;
-const BASE_SCORE = 10_000;
+export type SudokuDifficulty = "easy" | "medium" | "hard";
+/** Givens to aim for per difficulty. Fewer givens = harder puzzle. */
+const TARGET_GIVENS: Record<SudokuDifficulty, number> = {
+  easy: 42,
+  medium: 36,
+  hard: 30,
+};
+const DIFFICULTIES: SudokuDifficulty[] = ["easy", "medium", "hard"];
 /** Score lost per whole second spent on the puzzle. */
 const SECONDS_PENALTY = 2;
 /** Score lost per failed Submit check. */
@@ -23,12 +28,21 @@ const FAILED_CHECK_PENALTY = 150;
  *  ~60 minutes of ticks, so capping scoring well inside that keeps a very slow
  *  live solve's score reproducible instead of diverging past the tick bound. */
 const MAX_SCORED_MS = 30 * 60 * 1000;
+const BASE_SCORE = 10_000;
 
 export interface SudokuPuzzle {
   /** 9x9 grid of givens, 0 = blank. */
   puzzle: number[][];
   /** The unique solution the givens were generated from. */
   solution: number[][];
+  /** Difficulty implied by the number of remaining givens. */
+  difficulty: SudokuDifficulty;
+}
+
+function classifyGivens(givens: number): SudokuDifficulty {
+  if (givens >= 40) return "easy";
+  if (givens >= 34) return "medium";
+  return "hard";
 }
 
 function shuffle<T>(arr: readonly T[], rng: Rng): T[] {
@@ -152,7 +166,10 @@ function countSolutions(grid: number[][], limit: number): number {
 }
 
 /** Remove givens one at a time, keeping the puzzle uniquely solvable. */
-function generatePuzzle(rng: Rng): SudokuPuzzle {
+function generatePuzzle(seed: string): SudokuPuzzle {
+  const difficulty = DIFFICULTIES[seedToUint32(seed) % DIFFICULTIES.length];
+  const targetGivens = TARGET_GIVENS[difficulty];
+  const rng = rngFromHexSeed(seed);
   const solution = buildSolution(rng);
   const puzzle = solution.map((row) => [...row]);
   const cells = shuffle(
@@ -162,7 +179,7 @@ function generatePuzzle(rng: Rng): SudokuPuzzle {
   let givens = SUDOKU_SIZE * SUDOKU_SIZE;
 
   for (const index of cells) {
-    if (givens <= TARGET_GIVENS) break;
+    if (givens <= targetGivens) break;
     const r = Math.floor(index / SUDOKU_SIZE);
     const c = index % SUDOKU_SIZE;
     const backup = puzzle[r][c];
@@ -174,7 +191,7 @@ function generatePuzzle(rng: Rng): SudokuPuzzle {
     }
   }
 
-  return { puzzle, solution };
+  return { puzzle, solution, difficulty: classifyGivens(givens) };
 }
 
 /** Generating a puzzle involves a uniqueness solver, so memoize by seed: the
@@ -186,7 +203,7 @@ export function getSudokuPuzzle(seed: string): SudokuPuzzle {
   const cached = puzzleCache.get(seed);
   if (cached) return cached;
 
-  const puzzle = generatePuzzle(rngFromHexSeed(seed));
+  const puzzle = generatePuzzle(seed);
   if (puzzleCache.size >= MAX_CACHED_PUZZLES) {
     const oldest = puzzleCache.keys().next().value;
     if (oldest !== undefined) puzzleCache.delete(oldest);
@@ -196,7 +213,11 @@ export function getSudokuPuzzle(seed: string): SudokuPuzzle {
 }
 
 export class SudokuEngine implements DeterministicGame<SudokuAction> {
-  private daily: SudokuPuzzle = { puzzle: [], solution: [] };
+  private daily: SudokuPuzzle = {
+    puzzle: [],
+    solution: [],
+    difficulty: "medium",
+  };
   private board: number[][] = [];
   private failedChecks = 0;
   private elapsedMs = 0;
@@ -297,6 +318,10 @@ export class SudokuEngine implements DeterministicGame<SudokuAction> {
 
   getGivens(): number[][] {
     return this.daily.puzzle.map((row) => [...row]);
+  }
+
+  getDifficulty(): SudokuDifficulty {
+    return this.daily.difficulty;
   }
 
   getFailedChecks(): number {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Button, IconButton, Stack, Typography } from "@mui/material";
+import { Box, Button, Chip, IconButton, Stack, Typography } from "@mui/material";
 import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
 import { useUserContext } from "../../hooks/useUserContext";
 import { GameInput } from "../core/types";
@@ -13,7 +13,13 @@ import {
   publishDailyScore,
   todayUtcIso,
 } from "../core/scoreEvents";
-import { SUDOKU_SIZE, SUDOKU_SUBMIT_ACTION, SudokuAction, SudokuEngine } from "./engine";
+import {
+  SUDOKU_SIZE,
+  SUDOKU_SUBMIT_ACTION,
+  SudokuAction,
+  SudokuDifficulty,
+  SudokuEngine,
+} from "./engine";
 import SudokuGrid, { SudokuCell, SudokuNotes, sudokuNoteKey } from "./Grid";
 import SudokuReplay from "./Replay";
 import { formatElapsed } from "./format";
@@ -62,6 +68,7 @@ export default function SudokuBoard() {
 
   const [board, setBoard] = useState<number[][]>([]);
   const [givens, setGivens] = useState<number[][]>([]);
+  const [difficulty, setDifficulty] = useState<SudokuDifficulty | null>(null);
   const [selected, setSelected] = useState<SudokuCell | null>(null);
   const selectedRef = useRef<SudokuCell | null>(null);
   selectedRef.current = selected;
@@ -95,6 +102,7 @@ export default function SudokuBoard() {
     const engine = engineRef.current!;
     setBoard(engine.getBoard());
     setGivens(engine.getGivens());
+    setDifficulty(engine.getDifficulty());
     setFailedChecks(engine.getFailedChecks());
     setElapsedMs(engine.getElapsedMs());
     if (engine.isGameOver()) {
@@ -364,6 +372,14 @@ export default function SudokuBoard() {
     <Stack alignItems="center" spacing={2} sx={{ p: 2, height: "100%", overflowY: "auto" }}>
       <Stack direction="row" spacing={1} alignItems="center">
         <Typography variant="h5">Sudoku — {dateIso}</Typography>
+        {difficulty && (
+          <Chip
+            size="small"
+            variant="outlined"
+            color="primary"
+            label={difficulty[0].toUpperCase() + difficulty.slice(1)}
+          />
+        )}
         <IconButton size="small" onClick={() => setLeaderboardOpen(true)} aria-label="Leaderboard">
           <EmojiEventsIcon />
         </IconButton>

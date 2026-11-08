@@ -194,6 +194,9 @@ verification share the same board).
 - **Pencil notes** are UI-only candidate marks, toggled with the Notes button
   (or N) and entered with the number pad. They never enter the input log,
   engine state, score, or replay.
+- **Daily difficulty label**: the seed picks a target of 42 (easy), 36
+  (medium) or 30 (hard) givens; the finished puzzle is labelled from its final
+  given count and shown as a chip on the game screen and Games card.
 - **Submit** checks the completed grid once. A failed check only increments a
   counter and does not reveal which cells are wrong.
 - **Scoring is the daily streak**, not time: solve today's puzzle and the

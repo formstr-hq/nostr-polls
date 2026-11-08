@@ -1,17 +1,17 @@
 import { useSectionColorAt } from "../Shell/useSectionColor";
-import React, { useEffect, useState } from "react";
-import { Box, Button, Card, CardContent, Stack, Typography } from "@mui/material";
+import React, { useEffect, useMemo, useState } from "react";
+import { Box, Button, Card, CardContent, Chip, Stack, Typography } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
 import { useUserContext } from "../../hooks/useUserContext";
-import { getMyTodayScore, todayUtcIso } from "../../games/core/scoreEvents";
+import { getMyTodayScore, getDailySeed, todayUtcIso } from "../../games/core/scoreEvents";
 import type { DeterministicGame, GameInput } from "../../games/core/types";
 import type { LeaderboardVerifier } from "../../games/core/useDailyLeaderboard";
 import { Twenty48Engine } from "../../games/twenty48/engine";
 import { TetrisEngine } from "../../games/tetris/engine";
 import { RacerEngine } from "../../games/racer/engine";
-import { SudokuEngine } from "../../games/sudoku/engine";
+import { SudokuEngine, getSudokuPuzzle } from "../../games/sudoku/engine";
 import Twenty48Replay from "../../games/twenty48/Replay";
 import TetrisReplay from "../../games/tetris/Replay";
 import RacerReplay from "../../games/racer/Replay";
@@ -80,6 +80,13 @@ function GameCard({
   const { user } = useUserContext();
   const navigate = useNavigate();
   const dateIso = todayUtcIso();
+  const sudokuDifficulty = useMemo(
+    () =>
+      id === SUDOKU_GAME_ID
+        ? getSudokuPuzzle(getDailySeed(id, dateIso)).difficulty
+        : null,
+    [id, dateIso]
+  );
   const [myBest, setMyBest] = useState<number | null>(null);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   // Each game gets its own palette color.
@@ -110,6 +117,15 @@ function GameCard({
               <SportsEsportsIcon />
             </Box>
             <Typography variant="h6">{label}</Typography>
+            {sudokuDifficulty && (
+              <Chip
+                size="small"
+                variant="outlined"
+                label={
+                  sudokuDifficulty[0].toUpperCase() + sudokuDifficulty.slice(1)
+                }
+              />
+            )}
           </Box>
           <Stack direction="row" spacing={1}>
             <Button
