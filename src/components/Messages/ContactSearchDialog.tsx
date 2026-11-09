@@ -261,7 +261,7 @@ const ContactSearchDialog: React.FC<ContactSearchDialogProps> = ({
       fullWidth
       maxWidth="xs"
       PaperProps={{
-        sx: { maxHeight: "70vh" },
+        sx: { maxHeight: "70dvh" },
         onWheel: (e: React.WheelEvent) => e.stopPropagation(),
         onTouchMove: (e: React.TouchEvent) => e.stopPropagation(),
       }}

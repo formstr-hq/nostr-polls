@@ -213,7 +213,8 @@ export const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ sr
             onClick={(e) => e.stopPropagation()}
             sx={{
               position: "absolute",
-              top: 12,
+              // The app is edge-to-edge: keep the buttons below the status bar.
+              top: "calc(12px + env(safe-area-inset-top))",
               left: 12,
               display: "flex",
               gap: 1,
@@ -249,7 +250,7 @@ export const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ sr
             size="small"
             sx={{
               position: "absolute",
-              top: 12,
+              top: "calc(12px + env(safe-area-inset-top))",
               right: 12,
               color: "white",
               bgcolor: "rgba(0,0,0,0.45)",
@@ -260,8 +261,10 @@ export const ImageWithLightbox: React.FC<{ src: string; index: number }> = ({ sr
           </IconButton>
           <div
             style={{
-              width: "92vw",
-              height: "88vh",
+              // Percent of the fixed overlay, not vw/vh: tracks the real visible
+              // viewport as the URL bar shows and hides.
+              width: "92%",
+              height: "88%",
               touchAction: "none",
             }}
           >

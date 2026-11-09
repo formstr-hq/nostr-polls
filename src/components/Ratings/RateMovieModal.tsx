@@ -123,14 +123,17 @@ const RateMovieModal: React.FC<RateMovieModalProps> = ({ open, onClose, onRated 
     <Modal open={open} onClose={handleClose}>
       <Box
         sx={{
-          p: 4,
+          p: { xs: 2, sm: 4 },
           bgcolor: "background.paper",
           borderRadius: 2,
           boxShadow: 24,
+          // Side margins on phones (it used to run edge to edge), and dvh so the
+          // on-screen keyboard / URL bar don't push it off screen.
+          width: "calc(100% - 32px)",
           maxWidth: 500,
           mx: "auto",
           mt: "10%",
-          maxHeight: "80vh",
+          maxHeight: "80dvh",
           overflowY: "auto",
         }}
       >
