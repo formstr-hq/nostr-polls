@@ -140,8 +140,8 @@ const ArticlesFeed: React.FC = () => {
       data={articles}
       itemContent={renderItem}
       computeItemKey={computeKey}
-      loading={false}
-      loadingMore={loading || loadingMore}
+      loading={loading}
+      loadingMore={loadingMore}
       onEndReached={handleEndReached}
       emptyState={
         initialLoadDone ? (

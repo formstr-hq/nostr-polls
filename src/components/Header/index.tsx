@@ -13,6 +13,8 @@ import { routeInfo } from "../Shell/navConfig";
 import { useSectionColor } from "../Shell/useSectionColor";
 import { useHeaderTitleOverride } from "../../contexts/HeaderTitleContext";
 import { useHeaderActionState } from "../../contexts/HeaderActionContext";
+import { useHeaderLoading } from "../../contexts/HeaderLoading";
+import HeaderLoadingEdge from "./HeaderLoadingEdge";
 
 /**
  * Color Block header: a solid block of the theme color with a rounded bottom. It
@@ -30,7 +32,10 @@ const Header: React.FC = () => {
   const titleOverride = useHeaderTitleOverride();
   const headerAction = useHeaderActionState();
   const info = routeInfo(location.pathname);
-  const isDesktop = useMediaQuery(useTheme().breakpoints.up("md"));
+  const theme = useTheme();
+  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
+  const feedLoading = useHeaderLoading();
+  const [headerEl, setHeaderEl] = useState<HTMLElement | null>(null);
   // Every section of the app owns a palette color; the block wears it.
   const section = useSectionColor();
   // Pages publish pills via SubNavContext (feeds: sub-feeds; composer: Note/Poll)
@@ -58,7 +63,9 @@ const Header: React.FC = () => {
       <Box
         component="header"
         data-testid="block-header"
+        ref={setHeaderEl}
         sx={{
+          position: "relative",
           background: section.fill,
           color: section.on,
           borderBottomLeftRadius: 30,
@@ -195,6 +202,11 @@ const Header: React.FC = () => {
             ))}
           </Box>
         )}
+        <HeaderLoadingEdge
+          target={headerEl}
+          active={feedLoading}
+          color={theme.palette.mode === "dark" ? section.accent : section.color}
+        />
       </Box>
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </>
