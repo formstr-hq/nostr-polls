@@ -148,6 +148,33 @@ function buildDMBody(conversations: Map<string, Conversation>, userPubkey: strin
   return `${total} new messages from ${unreadConvs.length} people`;
 }
 
+/** Only messages this recent can trigger an OS notification. Rumor timestamps
+ *  are the real send time (NIP-59 only backdates the outer wrap), so anything
+ *  older is backlog, not news. */
+const DM_NOTIFY_MAX_AGE_SEC = 2 * 24 * 60 * 60;
+
+/** Ids of unread, recent, not-yet-notified messages from other people. */
+export function freshUnreadDMIds(
+  conversations: Map<string, Conversation>,
+  userPubkey: string | undefined,
+  alreadyNotified: Set<string>,
+  nowSec = Math.floor(Date.now() / 1000)
+): string[] {
+  const out: string[] = [];
+  conversations.forEach(conv => {
+    if (conv.unreadCount <= 0) return;
+    const fromOthers = conv.messages
+      .filter(m => m.pubkey !== userPubkey)
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, conv.unreadCount);
+    for (const m of fromOthers) {
+      if (nowSec - m.created_at > DM_NOTIFY_MAX_AGE_SEC) continue;
+      if (!alreadyNotified.has(m.id)) out.push(m.id);
+    }
+  });
+  return out;
+}
+
 /** Resolve the npub of the other participant if there's exactly one unread DM conversation */
 function getSingleDMNpub(conversations: Map<string, Conversation>, userPubkey: string | undefined): string | undefined {
   const unreadConvs = Array.from(conversations.values()).filter(c => c.unreadCount > 0);
@@ -225,12 +252,15 @@ async function handleDeepLink(
 export function useAndroidNotifications() {
   const navigate = useNavigate();
   const { unreadCount, notifications, lastSeen, pollMap, seedFromCache } = useNostrNotifications();
-  const { unreadTotal: dmUnread, conversations } = useDMContext();
+  const { conversations, readStateReady: dmReadStateReady } = useDMContext();
   const { user, accounts, switchAccount } = useUserContext();
   const { getProfile } = useAppContext();
   const { relays } = useRelays();
   const permitted = useRef(false);
-  const prevDMs    = useRef(0);
+  // Rumor ids we've already raised (or deliberately skipped) a DM notification
+  // for this session — keyed by message, not by unread total, so a read-state
+  // reload that bumps the count can never re-announce an old message.
+  const notifiedDMIds = useRef(new Set<string>());
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
   // Stable ref to switchAccount so the worker deep-link handler (registered once)
@@ -504,12 +534,19 @@ export function useAndroidNotifications() {
 
   // Fire when new DMs arrive while backgrounded
   useEffect(() => {
-    if (!permitted.current) { prevDMs.current = dmUnread; return; }
-    if (dmUnread > prevDMs.current && document.hidden) {
-      const npub = getSingleDMNpub(conversations, user?.pubkey);
-      const extra: NotifExtra = npub ? { target: 'messages', npub } : { target: 'messages' };
-      fireNotification(NOTIF_ID_DMS, 'Pollerama', buildDMBody(conversations, user?.pubkey), extra);
-    }
-    prevDMs.current = dmUnread;
-  }, [dmUnread, conversations, user?.pubkey]);
+    // Unread counts aren't trustworthy until the read-state watermarks load.
+    if (!dmReadStateReady) return;
+    const fresh = freshUnreadDMIds(conversations, user?.pubkey, notifiedDMIds.current);
+    if (fresh.length === 0) return;
+    fresh.forEach(id => notifiedDMIds.current.add(id));
+    if (!permitted.current || !document.hidden) return;
+    const npub = getSingleDMNpub(conversations, user?.pubkey);
+    const extra: NotifExtra = npub ? { target: 'messages', npub } : { target: 'messages' };
+    fireNotification(NOTIF_ID_DMS, 'Pollerama', buildDMBody(conversations, user?.pubkey), extra);
+  }, [dmReadStateReady, conversations, user?.pubkey]);
+
+  // Account switch: a different inbox, start fresh.
+  useEffect(() => {
+    notifiedDMIds.current = new Set();
+  }, [user?.pubkey]);
 }

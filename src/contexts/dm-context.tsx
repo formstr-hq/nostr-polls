@@ -72,6 +72,9 @@ interface DMContextInterface {
   markAsRead: (conversationId: string) => void;
   markAllAsRead: () => void;
   unreadTotal: number;
+  /** True once the read-state watermarks have been loaded (or definitively
+   *  failed to load) — unread counts before this are not trustworthy. */
+  readStateReady: boolean;
   loading: boolean;
 }
 
@@ -112,6 +115,16 @@ function clearLegacyDmCaches(): void {
   pendingReactions.clear();
 }
 
+/** Max clock skew we'll honour when a message is dated in the future. */
+const MAX_FUTURE_SKEW_SEC = 60 * 60;
+
+/** Watermark for "read up to now": covers a message whose sender's clock is
+ *  slightly ahead, but never jumps far into the future (a bogus far-future
+ *  timestamp must not silently swallow every message that arrives later). */
+function readWatermark(newestMessageAt: number, now = Math.floor(Date.now() / 1000)): number {
+  return Math.max(now, Math.min(newestMessageAt, now + MAX_FUTURE_SKEW_SEC));
+}
+
 export function DMProvider({ children }: { children: ReactNode }) {
   const { user } = useUserContext();
   const [conversations, setConversations] = useState<Map<string, Conversation>>(
@@ -119,6 +132,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
   );
 
   const [loading, setLoading] = useState(false);
+  const [readStateReady, setReadStateReady] = useState(false);
   const seenRumorIds = useRef<Set<string>>(new Set());
   // Gift-wrap event ids already processed — dedup BEFORE decrypt so a re-observe
   // (after worker hydration) doesn't re-decrypt known wraps and, for external
@@ -299,14 +313,16 @@ export function DMProvider({ children }: { children: ReactNode }) {
       setConversations(new Map());
       seenRumorIds.current.clear();
       seenWrapIds.current.clear();
+      // Drop this tab's in-memory read-state + any pending 30078 publish.
+      // (Must run before lastUserKey is nulled.)
+      if (lastUserKey.current) clearReadState(lastUserKey.current);
       lastUserKey.current = null;
       decryptionRejected.current = false;
+      setReadStateReady(false);
       subRef.current?.unobserve();
       subRef.current = null;
       // Shed legacy localStorage DM caches + the in-memory reaction buffer
       clearLegacyDmCaches();
-      // Drop this tab's in-memory read-state + any pending 30078 publish.
-      if (lastUserKey.current) clearReadState(lastUserKey.current);
       return;
     }
 
@@ -316,30 +332,36 @@ export function DMProvider({ children }: { children: ReactNode }) {
     const myPubkey = user.pubkey;
     const privateKey = user.privateKey;
 
-    // Hydrate read-state (lastSeen watermarks) from the signed kind-30078
-    // event + one-time migration off legacy localStorage keys. Non-blocking:
-    // the first few messages may flash unread until this settles — harmless,
-    // and markAsRead from that instant still works (memory is authoritative).
-    loadReadState(myPubkey)
-      .then(() => {
-        // Re-derive unread counts against the freshly-loaded watermark so a
-        // conversation that was read on another device reads as read now.
-        applyReadStateToConversations(myPubkey);
-      })
-      .catch(() => {
-        // Worker still hydrating — next markAsRead republishes and wins.
-      });
-
     // Reset accumulated state only on a genuine account switch — NOT on a
     // refresh-driven re-observe for the same user (that would drop conversations
     // and force every wrap to be re-decrypted/re-prompted).
     if (lastUserKey.current !== myPubkey) {
+      if (lastUserKey.current) clearReadState(lastUserKey.current);
       lastUserKey.current = myPubkey;
+      setReadStateReady(false);
       setConversations(new Map());
       seenRumorIds.current.clear();
       seenWrapIds.current.clear();
       decryptionRejected.current = false;
     }
+
+    // Hydrate read-state (lastSeen watermarks) from our d-scoped kind-30078
+    // event + legacy localStorage keys. Non-blocking; the unread badge stays
+    // hidden (`readStateReady`) until it settles so old messages don't flash
+    // as new. Re-runs on worker refresh so a load that failed while the
+    // worker/signer was still warming up gets another chance.
+    let cancelled = false;
+    loadReadState(myPubkey)
+      .then(() => {
+        if (cancelled) return;
+        // Re-derive unread counts against the freshly-loaded watermark so a
+        // conversation that was read on another device reads as read now.
+        applyReadStateToConversations(myPubkey);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setReadStateReady(true);
+      });
 
     const startSubscription = async () => {
       setLoading(true);
@@ -389,6 +411,7 @@ export function DMProvider({ children }: { children: ReactNode }) {
     // ids) is reset at the top of the effect on an account switch, and on logout
     // by the `!user` branch. This lets a refresh-driven re-observe keep state.
     return () => {
+      cancelled = true;
       subRef.current?.unobserve();
       subRef.current = null;
     };
@@ -437,18 +460,24 @@ export function DMProvider({ children }: { children: ReactNode }) {
   const markAsRead = useCallback(
     (conversationId: string) => {
       if (!user) return;
-      setLastSeen(user.pubkey, conversationId, Math.floor(Date.now() / 1000));
+      const conv = conversations.get(conversationId);
+      // Cover the newest message even if the sender's clock runs ahead of ours,
+      // otherwise a future-dated message would stay unread forever.
+      const newest = conv?.messages.reduce(
+        (max, m) => Math.max(max, m.created_at),
+        0
+      ) ?? 0;
+      setLastSeen(user.pubkey, conversationId, readWatermark(newest));
 
       setConversations((prev) => {
+        const c = prev.get(conversationId);
+        if (!c || c.unreadCount === 0) return prev;
         const next = new Map(prev);
-        const conv = next.get(conversationId);
-        if (conv && conv.unreadCount > 0) {
-          next.set(conversationId, { ...conv, unreadCount: 0 });
-        }
+        next.set(conversationId, { ...c, unreadCount: 0 });
         return next;
       });
     },
-    [user]
+    [user, conversations]
   );
 
   const markAllAsRead = useCallback(() => {
@@ -456,7 +485,11 @@ export function DMProvider({ children }: { children: ReactNode }) {
     const now = Math.floor(Date.now() / 1000);
     // Persist a single account-wide watermark — this is what makes mark-all stick
     // across reloads even for conversations that decrypt/arrive later.
-    setMarkAllTs(user.pubkey, now);
+    const newest = Array.from(conversations.values()).reduce(
+      (max, c) => Math.max(max, c.lastMessageAt),
+      0
+    );
+    setMarkAllTs(user.pubkey, readWatermark(newest, now));
 
     setConversations((prev) => {
       const next = new Map(prev);
@@ -467,16 +500,18 @@ export function DMProvider({ children }: { children: ReactNode }) {
       });
       return next;
     });
-  }, [user]);
+  }, [user, conversations]);
 
-  const unreadTotal = Array.from(conversations.values()).reduce(
-    (sum, c) => sum + c.unreadCount,
-    0
-  );
+  const unreadTotal = readStateReady
+    ? Array.from(conversations.values()).reduce(
+        (sum, c) => sum + c.unreadCount,
+        0
+      )
+    : 0;
 
   return (
     <DMContext.Provider
-      value={{ conversations, sendMessage, sendReaction, markAsRead, markAllAsRead, unreadTotal, loading }}
+      value={{ conversations, sendMessage, sendReaction, markAsRead, markAllAsRead, unreadTotal, readStateReady, loading }}
     >
       {children}
     </DMContext.Provider>
