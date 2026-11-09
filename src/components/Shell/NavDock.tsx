@@ -24,16 +24,21 @@ const DESTINATIONS = [
 export const DOCK_CLEARANCE = 96;
 
 /**
- * Bottom padding that keeps content clear of the dock. Collapses while the dock
- * is hidden for immersive scrolling so no empty band is left behind.
+ * Bottom padding that keeps content clear of the dock. Constant on purpose: it
+ * used to collapse while the dock hid for immersive scrolling, but that changes
+ * the scroller's height mid-scroll, which clamps scrollTop near the bottom and
+ * re-triggers the chrome (the page bobbed up and down). The quiet band under the
+ * last item while the dock is hidden is the cheaper price.
  */
 export function useDockClearance() {
-  const hidden = useImmersiveHidden();
   return {
-    pb: { xs: hidden ? "0px" : `${DOCK_CLEARANCE}px`, md: 0 },
-    transition: "padding-bottom .28s cubic-bezier(.2,0,0,1)",
+    pb: { xs: `${DOCK_CLEARANCE}px`, md: 0 },
   };
 }
+
+// One timing for everything that slides/fades with the dock, so a quick
+// hide/show never catches one piece mid-fade (looked like ghosting).
+export const DOCK_TRANSITION = ".28s cubic-bezier(.2,0,0,1)";
 
 /** Size/offset shared with CreateFAB, which occupies the dock's right-hand slot on feeds. */
 export const DOCK_BOTTOM = 18;
@@ -68,11 +73,12 @@ const NavDock: React.FC = () => {
         right: 0,
         bottom: 0,
         height: `calc(${DOCK_CLEARANCE + 12}px + env(safe-area-inset-bottom))`,
-        background: `linear-gradient(${alpha(t.palette.cb.page, 0)}, ${alpha(t.palette.cb.page, 0.92)} 55%)`,
+        background: `linear-gradient(${alpha(t.palette.cb.page, 0)}, ${alpha(t.palette.cb.page, 1)} 55%)`,
         pointerEvents: "none",
         zIndex: 1099,
         opacity: hidden ? 0 : 1,
-        transition: "opacity .25s ease",
+        transition: `opacity ${DOCK_TRANSITION}`,
+        "@media (prefers-reduced-motion: reduce)": { transition: "none" },
       })}
     />
     <Box
@@ -96,7 +102,7 @@ const NavDock: React.FC = () => {
         // Immersive scrolling: slide away while reading, back on scroll up.
         transform: hidden ? "translateY(calc(100% + 40px))" : "none",
         opacity: hidden ? 0 : 1,
-        transition: "transform .28s cubic-bezier(.2,0,0,1), opacity .2s ease",
+        transition: `transform ${DOCK_TRANSITION}, opacity ${DOCK_TRANSITION}`,
         "@media (prefers-reduced-motion: reduce)": { transition: "none" },
       }}
     >

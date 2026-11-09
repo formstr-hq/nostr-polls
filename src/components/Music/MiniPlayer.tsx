@@ -2,7 +2,6 @@ import { useLocation } from "react-router-dom";
 import { useMediaQuery, useTheme } from "@mui/material";
 import { DOCK_CLEARANCE } from "../Shell/NavDock";
 import { routeInfo } from "../Shell/navConfig";
-import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
 import React, { useState } from "react";
 import {
   Box,
@@ -41,7 +40,6 @@ const MiniPlayer: React.FC = () => {
   const location = useLocation();
   const muiTheme = useTheme();
   const isDesktop = useMediaQuery(muiTheme.breakpoints.up("md"));
-  const immersiveHidden = useImmersiveHidden();
   const {
     current,
     playing,
@@ -93,7 +91,9 @@ const MiniPlayer: React.FC = () => {
 
   // Color Block: an ink capsule. On mobile it floats just above the nav dock
   // (still a flow sibling, so content shrinks rather than being covered).
-  const dockVisible = !isDesktop && !routeInfo(location.pathname).hideDock && !immersiveHidden;
+  // Deliberately NOT tied to the immersive-hidden state: changing this margin
+  // resizes the scroller above and feeds back into the hide/show logic.
+  const dockVisible = !isDesktop && !routeInfo(location.pathname).hideDock;
 
   return (
     <Box
@@ -101,8 +101,9 @@ const MiniPlayer: React.FC = () => {
         flexShrink: 0,
         mx: { xs: 1.25, md: 2 },
         mt: 1,
-        mb: dockVisible ? `calc(${DOCK_CLEARANCE - 8}px + env(safe-area-inset-bottom))` : 1.25,
-        transition: "margin-bottom .28s cubic-bezier(.2,0,0,1)",
+        // The body already pads the bottom safe-area inset, so only the dock's
+        // own height is added here (the inset was being counted twice).
+        mb: dockVisible ? `${DOCK_CLEARANCE - 8}px` : 1.25,
         borderRadius: "22px",
         bgcolor: "cb.ink",
         color: "cb.onInk",

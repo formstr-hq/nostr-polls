@@ -11,7 +11,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useFeedActions } from "../../contexts/FeedActionsContext";
 import { useNotification } from "../../contexts/notification-context";
 import { useDrafts } from "../../contexts/drafts-context";
-import { DOCK_BOTTOM, DOCK_FAB_SIZE } from "../Shell/NavDock";
+import { DOCK_BOTTOM, DOCK_FAB_SIZE, DOCK_TRANSITION } from "../Shell/NavDock";
 import { useImmersiveHidden } from "../../contexts/ImmersiveScrollContext";
 import { useSectionColor } from "../Shell/useSectionColor";
 
@@ -191,7 +191,7 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
           // Leaves with the nav dock during immersive scrolling.
           transform: immersiveHidden && !open ? "translateY(calc(100% + 40px))" : "none",
           opacity: immersiveHidden && !open ? 0 : 1,
-          transition: "transform .28s cubic-bezier(.2,0,0,1), opacity .2s ease",
+          transition: `transform ${DOCK_TRANSITION}, opacity ${DOCK_TRANSITION}`,
           "& .MuiSpeedDial-fab": {
             width: DOCK_FAB_SIZE,
             height: DOCK_FAB_SIZE,
