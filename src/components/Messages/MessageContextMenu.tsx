@@ -45,7 +45,9 @@ const MessageContextMenu: React.FC<MessageContextMenuProps> = ({
       open={Boolean(msg)}
       onClose={onClose}
       PaperProps={{
-        sx: { borderRadius: "16px 16px 0 0", pb: 2 },
+        // Portaled, so the body's safe-area padding doesn't apply: clear the
+        // gesture bar ourselves.
+        sx: { borderRadius: "16px 16px 0 0", pb: "calc(16px + env(safe-area-inset-bottom))" },
       }}
     >
       {msg && (

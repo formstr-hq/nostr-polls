@@ -6,7 +6,9 @@ import {
   Box,
   Button,
   Fade,
+  Theme,
 } from "@mui/material";
+import { useInsideSlab } from "../Common/SlabContext";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ForumOutlinedIcon from "@mui/icons-material/ForumOutlined";
@@ -87,6 +89,8 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
   };
 
   const isNested = depth > 0;
+  const insideSlab = useInsideSlab();
+  const fadeTo = (theme: Theme) => (insideSlab ? theme.palette.cb.inner : theme.palette.cb.slab);
 
   return (
     <Card
@@ -122,7 +126,15 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
               scrollbarWidth: "none",
               "&::-webkit-scrollbar": { display: "none" },
               "& > *": { flexShrink: 0 },
-              ...(isNested ? { "& svg": { fontSize: "18px !important" } } : {}),
+              ...(isNested
+                ? {
+                    "& svg": { fontSize: "18px !important" },
+                    // The 18px icons stay as designed, but their tap target
+                    // shouldn't: grow it to 36px and pull it back with negative
+                    // margins so the row's layout is unchanged.
+                    "& .MuiIconButton-root": { minWidth: 36, minHeight: 36, m: "-6px" },
+                  }
+                : {}),
             }}
           >
             {reachedMaxDepth ? (
@@ -168,11 +180,10 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
                 display: "flex",
                 alignItems: "center",
                 cursor: "pointer",
+                // Fade into the surface the row actually sits on (the item's slab),
+                // not background.paper, which is a different shade.
                 background: (theme) =>
-                  `linear-gradient(to left, transparent, ${theme.palette.mode === "dark"
-                    ? theme.palette.background.paper
-                    : theme.palette.background.paper
-                  } 60%)`,
+                  `linear-gradient(to left, transparent, ${fadeTo(theme)} 60%)`,
                 pr: 2,
                 pl: 0.25,
                 pointerEvents: canScrollLeft ? "auto" : "none",
@@ -200,12 +211,8 @@ export const FeedbackMenu: React.FC<FeedbackMenuProps> = ({
                 display: "flex",
                 alignItems: "center",
                 cursor: "pointer",
-                // Gradient fade from transparent to card background
                 background: (theme) =>
-                  `linear-gradient(to right, transparent, ${theme.palette.mode === "dark"
-                    ? theme.palette.background.paper
-                    : theme.palette.background.paper
-                  } 60%)`,
+                  `linear-gradient(to right, transparent, ${fadeTo(theme)} 60%)`,
                 pl: 2,
                 pr: 0.25,
                 pointerEvents: canScrollRight ? "auto" : "none",

@@ -134,6 +134,7 @@ export const Notes: React.FC<NotesProps> = ({
   })();
 
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
@@ -364,7 +365,8 @@ export const Notes: React.FC<NotesProps> = ({
   const checkOverflow = () => {
     const el = contentRef.current;
     if (el) {
-      setIsOverflowing(el.scrollHeight > el.clientHeight);
+      // >1 so sub-pixel rounding on a short note doesn't produce a "See more".
+      setIsOverflowing(el.scrollHeight - el.clientHeight > 1);
     }
   };
 
@@ -377,6 +379,10 @@ export const Notes: React.FC<NotesProps> = ({
   }, [event.pubkey]);
 
   useResizeObserver(contentRef, checkOverflow);
+  // While collapsed, contentRef is pinned at maxHeight so its own box never
+  // resizes when images/embeds load and grow the content. Watch the inner
+  // wrapper too, otherwise a long note can end up clipped with no "See more".
+  useResizeObserver(innerRef, checkOverflow);
 
   const timeAgo = calculateTimeAgo(event.created_at);
   const expirationTs = event.tags.find((t) => t[0] === "expiration")?.[1];
@@ -712,6 +718,7 @@ export const Notes: React.FC<NotesProps> = ({
                 p: 2,
               }}
             >
+              <div ref={innerRef}>
               <SlabContext.Provider value={true}>
               <TextWithImages content={displayContent} tags={event.tags} />
 
@@ -729,6 +736,7 @@ export const Notes: React.FC<NotesProps> = ({
 
               </SlabContext.Provider>
               <ClientChip tags={event.tags} />
+              </div>
 
               {!isExpanded && isOverflowing && (
                 <div
@@ -737,7 +745,7 @@ export const Notes: React.FC<NotesProps> = ({
                     bottom: 0,
                     left: 0,
                     width: "100%",
-                    height: "60px",
+                    height: "72px",
                     background: subtleGradient,
                     display: "flex",
                     justifyContent: "center",
@@ -745,9 +753,9 @@ export const Notes: React.FC<NotesProps> = ({
                     pointerEvents: "none",
                   }}
                 >
+                  {/* No backdrop-filter here: it drew a visible blurred box behind the button. */}
                   <div
                     style={{
-                      backdropFilter: "blur(6px)",
                       paddingBottom: 8,
                       pointerEvents: "auto",
                     }}

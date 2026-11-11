@@ -636,7 +636,8 @@ const PollResponseForm: React.FC<PollResponseFormProps> = ({
                       pointerEvents: "none",
                     }}
                   >
-                    <Box sx={{ backdropFilter: "blur(6px)", pb: 1, pointerEvents: "auto" }}>
+                    {/* No backdrop-filter: it drew a visible blurred box behind the button. */}
+                    <Box sx={{ pb: 1, pointerEvents: "auto" }}>
                       <Button variant="contained" size="small" onClick={() => setIsExpanded(true)}>
                         See more
                       </Button>
