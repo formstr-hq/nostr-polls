@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef } from "react";
-import { Box, CircularProgress, Fab, LinearProgress } from "@mui/material";
+import { Box, CircularProgress, Fab } from "@mui/material";
+import { useReportHeaderLoading } from "../../contexts/HeaderLoading";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { useNotification } from "../../contexts/notification-context";
 import useTopicExplorerScroll from "../../hooks/useTopicExplorerScroll";
@@ -85,6 +86,13 @@ function UnifiedFeed<T>({
   const { reportScrollState, reportNewItems } = useFeedActions();
 
   const virtuosoRef = (externalVirtuosoRef ?? internalVirtuosoRef) as React.RefObject<VirtuosoHandle>;
+
+  // The loader lives on the block header's curved edge, not inside the feed.
+  // It covers initial loads and refreshes; paging older items keeps its own
+  // footer spinner, so a feed never shows two loaders at once. Embedded feeds
+  // (profile tabs) sit under their own page and didn't show the bar before, so
+  // only immersive/nested feeds report.
+  useReportHeaderLoading(!customScrollParent && !!(refreshing || loading));
 
   const isEmbedded = !!customScrollParent;
   const isNested = !!scrollContainerRef;
@@ -177,18 +185,6 @@ function UnifiedFeed<T>({
   const feedContent = (
     <>
       <div ref={containerRef} style={{ height: "100%", position: "relative" }}>
-        {(refreshing || loading || loadingMore) && (
-          <LinearProgress
-            sx={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              zIndex: 10,
-              height: 2,
-            }}
-          />
-        )}
         {headerContent}
         {showLoading ? (
           <Box sx={{ minHeight: "200px" }} />

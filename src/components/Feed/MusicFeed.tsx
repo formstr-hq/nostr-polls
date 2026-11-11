@@ -88,8 +88,7 @@ const MusicNostrFeed: React.FC<{ source: "discover" | "following" }> = ({
       itemContent={renderItem}
       computeItemKey={computeKey}
       ListHeader={MusicHeader}
-      loading={false}
-      loadingMore={loading}
+      loading={loading}
       onEndReached={loadOlder}
       emptyState={
         !loading ? (
