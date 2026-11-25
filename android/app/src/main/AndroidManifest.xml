@@ -67,6 +67,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- QR scanner (getUserMedia in the WebView). -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Background music playback foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

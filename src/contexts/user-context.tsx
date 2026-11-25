@@ -21,6 +21,7 @@ export type User = {
   website?: string;
   nip05?: string;
   lud16?: string;
+  lud06?: string;
   pubkey: string;
   privateKey?: string;
   follows?: string[];

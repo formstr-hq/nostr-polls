@@ -23,10 +23,14 @@ import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import TagIcon from "@mui/icons-material/Tag";
 import PersonIcon from "@mui/icons-material/Person";
 import HubIcon from "@mui/icons-material/Hub";
+import QrCodeScannerIcon from "@mui/icons-material/QrCodeScannerRounded";
 import { useNavigate } from "react-router-dom";
 import { nip19, Event } from "nostr-tools";
 import { useSearch, Nip19Result } from "./useSearch";
 import { useAppContext } from "../../hooks/useAppContext";
+import { useNotification } from "../../contexts/notification-context";
+import QrScannerDialog from "../Common/QR/QrScannerDialog";
+import { resolveScannedInput } from "../../utils/scannedInput";
 
 const INITIAL_LIMIT = 4;
 
@@ -211,6 +215,7 @@ export function SearchModal({ open, onClose }: Props) {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const { fetchUserProfileThrottled } = useAppContext();
+  const { showNotification } = useNotification();
   const {
     query,
     setQuery,
@@ -227,6 +232,7 @@ export function SearchModal({ open, onClose }: Props) {
   const [showAllProfiles, setShowAllProfiles] = useState(false);
   const [showAllNotes, setShowAllNotes] = useState(false);
   const [showAllPolls, setShowAllPolls] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
   // Reset "see more" state whenever results change
   useEffect(() => {
@@ -261,6 +267,19 @@ export function SearchModal({ open, onClose }: Props) {
     handleClose();
   };
 
+  const handleScan = async (value: string) => {
+    const path = await resolveScannedInput(value);
+    setScanOpen(false);
+    if (path) {
+      goTo(path);
+    } else {
+      showNotification(
+        "That QR code isn't a Pollerama profile, note or NIP-05 address.",
+        "error"
+      );
+    }
+  };
+
   const handleNip19Navigate = () => {
     if (!nip19Result) return;
     const path = resolveNip19Path(nip19Result);
@@ -293,11 +312,12 @@ export function SearchModal({ open, onClose }: Props) {
     : results.polls.slice(0, INITIAL_LIMIT);
 
   return (
-    <Dialog
-      open={open}
-      onClose={handleClose}
-      fullWidth
-      maxWidth="sm"
+    <>
+      <Dialog
+        open={open}
+        onClose={handleClose}
+        fullWidth
+        maxWidth="sm"
       PaperProps={{
         sx: {
           borderRadius: { xs: 0, sm: 2 },
@@ -346,6 +366,13 @@ export function SearchModal({ open, onClose }: Props) {
           variant="outlined"
           size="small"
         />
+        <IconButton
+          onClick={() => setScanOpen(true)}
+          size="small"
+          aria-label="Scan QR code"
+        >
+          <QrCodeScannerIcon fontSize="small" />
+        </IconButton>
         <IconButton onClick={handleClose} size="small" edge="end">
           <CloseIcon fontSize="small" />
         </IconButton>
@@ -622,6 +649,12 @@ export function SearchModal({ open, onClose }: Props) {
       {inputType === "text" && searchedRelays.length > 0 && (
         <RelayFooter relays={searchedRelays} />
       )}
-    </Dialog>
+      </Dialog>
+      <QrScannerDialog
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onResult={handleScan}
+      />
+    </>
   );
 }

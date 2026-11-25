@@ -27,7 +27,7 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { isScrolledDown, scrollToTop, refresh, newItemCount, newItemLabel, showNewItems } =
+  const { isScrolledDown, scrollToTop, newItemCount, newItemLabel, showNewItems } =
     useFeedActions();
   const { showNotification } = useNotification();
   const { drafts } = useDrafts();
@@ -59,11 +59,6 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   const handleScrollToTop = () => {
     setOpen(false);
     scrollToTop();
-  };
-
-  const handleRefresh = () => {
-    setOpen(false);
-    refresh();
   };
 
   const handleShowNew = () => {
@@ -141,12 +136,6 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
               sx={actionSx}
             />
           )}
-          <SpeedDialAction
-            icon={<RefreshIcon />}
-            tooltipTitle="Refresh"
-            onClick={handleRefresh}
-            sx={actionSx}
-          />
           {extraActions.map((action, index) => (
             <SpeedDialAction
               key={`extra-action-${index}`}
@@ -182,29 +171,34 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   // a rounded square in the block color.
   if (!isDesktop) {
     return (
-      <Box
-        sx={{
-          position: "fixed",
-          right: 14,
-          bottom: `calc(${DOCK_BOTTOM + 1}px + env(safe-area-inset-bottom))`,
-          zIndex: 1150,
-          // Leaves with the nav dock during immersive scrolling.
-          transform: immersiveHidden && !open ? "translateY(calc(100% + 40px))" : "none",
-          opacity: immersiveHidden && !open ? 0 : 1,
-          transition: "transform .28s cubic-bezier(.2,0,0,1), opacity .2s ease",
-          "& .MuiSpeedDial-fab": {
-            width: DOCK_FAB_SIZE,
-            height: DOCK_FAB_SIZE,
-            borderRadius: "22px",
-            border: "none !important",
-            background: section.fill,
-            color: section.on,
-            "&:hover": { background: section.fill },
-          },
-        }}
-      >
-        {renderDial("br")}
-      </Box>
+      <>
+        <Box
+          sx={{
+            position: "fixed",
+            right: 14,
+            bottom: `calc(${DOCK_BOTTOM + 1}px + env(safe-area-inset-bottom))`,
+            zIndex: 1150,
+            // Leaves with the nav dock during immersive scrolling.
+            transform: immersiveHidden && !open ? "translateY(calc(100% + 40px))" : "none",
+            opacity: immersiveHidden && !open ? 0 : 1,
+            transition: "transform .28s cubic-bezier(.2,0,0,1), opacity .2s ease",
+            "& .MuiSpeedDial-fab": {
+              width: DOCK_FAB_SIZE,
+              height: DOCK_FAB_SIZE,
+              borderRadius: "22px",
+              border: "none !important",
+              background: section.fill,
+              color: section.on,
+              "&:hover": { background: section.fill },
+            },
+          }}
+        >
+          {renderDial("br")}
+        </Box>
+        {/* Refresh lives in the header next to Search on mobile too; the dial
+            keeps Create, Drafts, New items and Back to top. */}
+        <HeaderFeedActions refreshOnly />
+      </>
     );
   }
 
@@ -214,7 +208,10 @@ const CreateFAB: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   return <HeaderFeedActions extraActions={extraActions} />;
 };
 
-const HeaderFeedActions: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
+const HeaderFeedActions: React.FC<CreateFABProps & { refreshOnly?: boolean }> = ({
+  extraActions = [],
+  refreshOnly = false,
+}) => {
   const { isScrolledDown, scrollToTop, refresh, newItemCount, newItemLabel, showNewItems } =
     useFeedActions();
   const section = useSectionColor();
@@ -225,7 +222,7 @@ const HeaderFeedActions: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
   if (!slot) return null;
   return createPortal(
     <>
-      {newItemCount > 0 && (
+      {!refreshOnly && newItemCount > 0 && (
         <ButtonBase
           onClick={showNewItems}
           sx={{
@@ -244,7 +241,7 @@ const HeaderFeedActions: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
           {newItemCount} new {newItemLabel}
         </ButtonBase>
       )}
-      {isScrolledDown && (
+      {!refreshOnly && isScrolledDown && (
         <Tooltip title="Back to top">
           <IconButton color="inherit" onClick={scrollToTop} aria-label="Back to top">
             <KeyboardArrowUpIcon />
@@ -256,13 +253,14 @@ const HeaderFeedActions: React.FC<CreateFABProps> = ({ extraActions = [] }) => {
           <RefreshIcon />
         </IconButton>
       </Tooltip>
-      {extraActions.map((action) => (
-        <Tooltip key={action.name} title={action.name}>
-          <IconButton color="inherit" onClick={action.onClick} aria-label={action.name}>
-            {action.icon}
-          </IconButton>
-        </Tooltip>
-      ))}
+      {!refreshOnly &&
+        extraActions.map((action) => (
+          <Tooltip key={action.name} title={action.name}>
+            <IconButton color="inherit" onClick={action.onClick} aria-label={action.name}>
+              {action.icon}
+            </IconButton>
+          </Tooltip>
+        ))}
     </>,
     slot,
   );

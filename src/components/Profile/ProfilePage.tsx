@@ -39,6 +39,7 @@ import { useNotification } from "../../contexts/notification-context";
 import { Nip05Badge } from "../Common/Nip05Badge";
 import { TextWithImages } from "../Common/Parsers/TextWithImages";
 import EditIcon from "@mui/icons-material/Edit";
+import QrCode2Icon from "@mui/icons-material/QrCode2Rounded";
 import LinkIcon from "@mui/icons-material/Link";
 import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
 import GroupsIcon from "@mui/icons-material/GroupsRounded";
@@ -51,6 +52,9 @@ import { ProfileEditModal } from "./ProfileEditModal";
 import { NetworkFollowedBy } from "./NetworkFollowedBy";
 import { ProfileListDialog } from "../Common/ProfileListDialog";
 import { useFollowersPagination } from "./useFollowersPagination";
+import ProfilePayments from "./ProfilePayments";
+import QrShareDialog from "../Common/QR/QrShareDialog";
+import { buildProfileUrl } from "../../utils/profileShare";
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
@@ -88,6 +92,7 @@ const ProfilePage: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [addToPackOpen, setAddToPackOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [followsYou, setFollowsYou] = useState(false);
   const [showContactListWarning, setShowContactListWarning] = useState(false);
   const [pendingFollowKey, setPendingFollowKey] = useState<string | null>(null);
@@ -440,6 +445,7 @@ const ProfilePage: React.FC = () => {
               display: "flex",
               gap: 1,
               mt: 2,
+              flexWrap: "wrap",
               justifyContent: { xs: "center", sm: "flex-start" },
             }}
           >
@@ -512,6 +518,14 @@ const ProfilePage: React.FC = () => {
                 </Button>
               </>
             ) : null}
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<QrCode2Icon />}
+              onClick={() => setShareOpen(true)}
+            >
+              QR
+            </Button>
           </Box>
 
           {/* Bio */}
@@ -551,6 +565,8 @@ const ProfilePage: React.FC = () => {
               </Typography>
             </Box>
           )}
+
+          <ProfilePayments pubkey={pubkey} profile={profile} />
 
           {/* Stats + Rate */}
           <Divider sx={{ my: 2 }} />
@@ -615,7 +631,7 @@ const ProfilePage: React.FC = () => {
             "& .MuiTab-root.Mui-selected": { bgcolor: "text.primary", color: "background.default" },
           }}
         >
-          <Tab label="Notes" />
+          <Tab label="Activity" />
           <Tab label="Polls" />
           <Tab label="Articles" />
           <Tab label="Ratings" />
@@ -736,6 +752,14 @@ const ProfilePage: React.FC = () => {
         hasMore={hasMoreFollowers}
         loadingMore={loadingMoreFollowers}
         onLoadMore={loadMoreFollowers}
+      />
+
+      <QrShareDialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        title={profile?.name || profile?.username || "Profile"}
+        subtitle="Scan to open this profile on Pollerama"
+        value={buildProfileUrl(pubkey)}
       />
     </FeedActionsProvider>
   );
