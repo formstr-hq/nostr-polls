@@ -49,7 +49,10 @@
     "build": "react-scripts build",
     "serve": "node server/index.mjs",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "applinks": "node scripts/assetlinks.mjs",
+    "applinks:generate": "node scripts/assetlinks.mjs generate",
+    "applinks:verify": "node scripts/assetlinks.mjs verify"
   },
   "jest": {
     "transform": {

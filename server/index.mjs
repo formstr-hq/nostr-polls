@@ -307,6 +307,31 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Android verifies https App Links against this file right after install.
+  // Serve it explicitly so the content type / cache headers are right even if
+  // a proxy in front of us is opinionated about extension-less static files.
+  if (pathname === "/.well-known/assetlinks.json") {
+    try {
+      const body = await readFile(
+        path.join(config.staticDir, ".well-known", "assetlinks.json")
+      );
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": body.length,
+        "cache-control": "public, max-age=300, must-revalidate",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(req.method === "HEAD" ? undefined : body);
+    } catch {
+      res.writeHead(404, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end("Not found");
+    }
+    return;
+  }
+
   if (pathname === "/api/link-preview") {
     await serveLinkPreview(req, res, url.searchParams.get("url") || "");
     return;
