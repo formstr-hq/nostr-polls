@@ -54,7 +54,7 @@ import { ProfileListDialog } from "../Common/ProfileListDialog";
 import { useFollowersPagination } from "./useFollowersPagination";
 import ProfilePayments from "./ProfilePayments";
 import QrShareDialog from "../Common/QR/QrShareDialog";
-import { buildProfileUrl } from "../../utils/profileShare";
+import { buildProfileNostrUri, buildProfileUrl } from "../../utils/profileShare";
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
@@ -758,8 +758,11 @@ const ProfilePage: React.FC = () => {
         open={shareOpen}
         onClose={() => setShareOpen(false)}
         title={profile?.name || profile?.username || "Profile"}
-        subtitle="Scan to open this profile on Pollerama"
-        value={buildProfileUrl(pubkey)}
+        subtitle="Scan with any Nostr app, or switch to the web link"
+        value={buildProfileNostrUri(pubkey)}
+        alternateValue={buildProfileUrl(pubkey)}
+        primaryLabel="Nostr"
+        alternateLabel="Web link"
       />
     </FeedActionsProvider>
   );

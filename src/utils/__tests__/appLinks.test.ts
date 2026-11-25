@@ -33,6 +33,40 @@ describe("resolveAppLink", () => {
     });
   });
 
+  it("opens NIP-21 nostr: profile links", () => {
+    const npub = nip19.npubEncode(HEX);
+    expect(resolveAppLink(`nostr:${npub}`)).toEqual({
+      route: `/profile/${npub}`,
+      account: undefined,
+      https: false,
+    });
+    expect(resolveAppLink(`nostr://${npub}`)).toEqual({
+      route: `/profile/${npub}`,
+      account: undefined,
+      https: false,
+    });
+  });
+
+  it("opens NIP-21 note and article links", () => {
+    const note = nip19.noteEncode(HEX);
+    const nevent = nip19.neventEncode({ id: HEX });
+    expect(resolveAppLink(`nostr:${note}`)?.route).toBe(`/note/${nevent}`);
+
+    const naddr = nip19.naddrEncode({
+      kind: 30023,
+      pubkey: HEX,
+      identifier: "post",
+    });
+    expect(resolveAppLink(`nostr:${naddr}`)?.route).toBe(
+      `/feeds/articles/${naddr}`
+    );
+  });
+
+  it("ignores private keys in nostr: links", () => {
+    const nsec = nip19.nsecEncode(new Uint8Array(32).fill(1));
+    expect(resolveAppLink(`nostr:${nsec}`)).toBeNull();
+  });
+
   it("maps the bare origin to the app root", () => {
     expect(resolveAppLink("https://pollerama.fun")?.route).toBe("/");
     expect(resolveAppLink("https://pollerama.fun/")?.route).toBe("/");

@@ -1,53 +1,16 @@
 // Turns whatever a QR scanner (or a pasted code) produced into an in-app route.
 //
-// Profile QRs in Pollerama encode the public web URL, but people may also point
-// at `nostr:` URIs, raw NIP-19 identifiers, njump/other client URLs, or a
-// NIP-05 address. Keep all of that resolution in one testable place.
+// Profile QRs in Pollerama encode a NIP-21 `nostr:` URI (with a web-link
+// fallback in the dialog), but people may also point at raw NIP-19 ids,
+// njump/other client URLs, or a NIP-05 address. Keep all of that resolution in
+// one testable place.
 
 import { nip05, nip19 } from "nostr-tools";
 import { resolveAppLink } from "./appLinks";
-
-const NIP19_PREFIXES = [
-  "npub1",
-  "note1",
-  "nevent1",
-  "nprofile1",
-  "naddr1",
-] as const;
+import { nostrUriValue, routeForNip19 } from "./nostrUri";
 
 // Same shape SearchModal uses, without accepting arbitrary whitespace.
 const NIP05_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function routeForNip19(raw: string): string | null {
-  const value = raw.trim();
-  const lower = value.toLowerCase();
-  if (!NIP19_PREFIXES.some((prefix) => lower.startsWith(prefix))) return null;
-
-  try {
-    const decoded = nip19.decode(value);
-    switch (decoded.type) {
-      case "npub":
-      case "nprofile":
-        return `/profile/${value}`;
-      case "note":
-        return `/note/${nip19.neventEncode({ id: decoded.data })}`;
-      case "nevent":
-        return `/note/${value}`;
-      case "naddr":
-        return decoded.data.kind === 30023
-          ? `/feeds/articles/${value}`
-          : `/note/${value}`;
-      default:
-        return null;
-    }
-  } catch {
-    return null;
-  }
-}
-
-function stripNostrPrefix(value: string): string {
-  return value.startsWith("nostr:") ? value.slice("nostr:".length) : value;
-}
 
 /** Best-effort extraction of a NIP-19 identifier from a web URL path. */
 function routeFromUrl(raw: string): string | null {
@@ -78,8 +41,15 @@ export async function resolveScannedInput(raw: string): Promise<string | null> {
   const fromUrl = routeFromUrl(trimmed);
   if (fromUrl) return fromUrl;
 
-  const stripped = stripNostrPrefix(trimmed);
-  const fromNip19 = routeForNip19(stripped);
+  // `nostr:npub…` / `nostr://nprofile…` (also handled by resolveAppLink for OS
+  // deep links; repeated here for pasted values).
+  const fromNostrUri = nostrUriValue(trimmed);
+  if (fromNostrUri) {
+    const route = routeForNip19(fromNostrUri);
+    if (route) return route;
+  }
+
+  const fromNip19 = routeForNip19(trimmed);
   if (fromNip19) return fromNip19;
 
   if (NIP05_REGEX.test(trimmed)) {

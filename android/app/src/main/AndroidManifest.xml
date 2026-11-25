@@ -34,6 +34,15 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="nostr-polls" />
             </intent-filter>
+            <!-- NIP-21 `nostr:` links (nostr:npub…, nostr:nevent…). Multiple
+                 Nostr clients can register; Android shows a chooser unless the
+                 user has picked a default. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="nostr" />
+            </intent-filter>
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

@@ -7,6 +7,8 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -26,6 +28,10 @@ interface QrShareDialogProps {
   value: string;
   /** Human-readable value shown under the QR (defaults to `value`). */
   displayValue?: string;
+  /** Optional second payload, e.g. a web URL next to a NIP-21 profile URI. */
+  alternateValue?: string;
+  primaryLabel?: string;
+  alternateLabel?: string;
 }
 
 /**
@@ -39,18 +45,29 @@ export default function QrShareDialog({
   subtitle,
   value,
   displayValue,
+  alternateValue,
+  primaryLabel = "Nostr",
+  alternateLabel = "Web link",
 }: QrShareDialogProps) {
   const { showNotification } = useNotification();
   const [copied, setCopied] = useState(false);
+  const [showAlternate, setShowAlternate] = useState(false);
   const canShare = typeof navigator !== "undefined" && !!navigator.share;
 
   useEffect(() => {
-    if (!open) setCopied(false);
+    if (!open) {
+      setCopied(false);
+      setShowAlternate(false);
+    }
   }, [open]);
+
+  const selectedValue = showAlternate && alternateValue ? alternateValue : value;
+  const selectedDisplay =
+    showAlternate && alternateValue ? alternateValue : displayValue || value;
 
   const copy = async () => {
     try {
-      await copyToClipboard(value);
+      await copyToClipboard(selectedValue);
       setCopied(true);
       showNotification("Copied to clipboard", "success");
     } catch {
@@ -63,10 +80,13 @@ export default function QrShareDialog({
       await copy();
       return;
     }
+    // When both payloads exist, share the web link: it opens in the app via
+    // App Links and is still readable by people without a Nostr client.
+    const shareValue = alternateValue || selectedValue;
     try {
-      const data: ShareData = value.startsWith("http")
-        ? { title, text: subtitle, url: value }
-        : { title, text: value };
+      const data: ShareData = shareValue.startsWith("http")
+        ? { title, text: subtitle, url: shareValue }
+        : { title, text: shareValue };
       await navigator.share(data);
     } catch {
       // User cancelled the share sheet — leave the dialog as-is.
@@ -94,6 +114,24 @@ export default function QrShareDialog({
       </DialogTitle>
 
       <DialogContent>
+        {alternateValue && (
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            fullWidth
+            value={showAlternate ? "alternate" : "primary"}
+            onChange={(_, next) => {
+              if (!next) return;
+              setShowAlternate(next === "alternate");
+              setCopied(false);
+            }}
+            sx={{ mb: 2 }}
+          >
+            <ToggleButton value="primary">{primaryLabel}</ToggleButton>
+            <ToggleButton value="alternate">{alternateLabel}</ToggleButton>
+          </ToggleButtonGroup>
+        )}
+
         <Box
           sx={{
             display: "flex",
@@ -104,7 +142,7 @@ export default function QrShareDialog({
             mb: 2,
           }}
         >
-          <QRCodeSVG value={value} size={232} level="M" includeMargin={false} />
+          <QRCodeSVG value={selectedValue} size={232} level="M" includeMargin={false} />
         </Box>
         <Typography
           variant="caption"
@@ -117,7 +155,7 @@ export default function QrShareDialog({
             px: 1,
           }}
         >
-          {displayValue || value}
+          {selectedDisplay}
         </Typography>
       </DialogContent>
 

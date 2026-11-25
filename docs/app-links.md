@@ -33,6 +33,33 @@ before routing and is removed from the route.
 `www.pollerama.fun` is declared as a second host. It currently serves the same
 app, so the same asset links file is available there.
 
+## NIP-21 `nostr:` links and QR interoperability
+
+Pollerama also registers for NIP-21 `nostr:` links
+(`nostr:npub…`, `nostr:nprofile…`, `nostr:note…`, `nostr:nevent…`,
+`nostr:naddr…`) through a scheme intent filter. Tapping one of those links opens
+Pollerama (or the Android chooser when other Nostr clients are installed).
+`routeForNostrUri`/`resolveAppLink` map the payload to the same SPA routes as
+https links.
+
+Profile QRs default to a **Nostr** payload, `nostr:nprofile…`, so other Nostr
+apps can scan them directly. The QR dialog has a **Web link** toggle for the
+`https://pollerama.fun/profile/<npub>` App Link, which is the one a generic
+phone camera should use. Payment target QRs stay as wallet URIs
+(`lightning:`, `monero:`, `bitcoin:`, or the published address).
+
+The in-app scanner accepts:
+
+- `nostr:` / `nostr://` NIP-19 URIs
+- raw `npub`, `nprofile`, `note`, `nevent`, `naddr`
+- Pollerama profile/note URLs and other clients' URLs that contain a NIP-19 id
+- NIP-05 addresses such as `name@domain.com`
+
+It does not claim or interpret other clients' proprietary schemes
+(`damus://`, `amethyst://`, …), bare 64-character hex values, or payment QRs.
+On iOS, the same scheme needs a `CFBundleURLTypes` entry once an iOS project
+exists.
+
 ## The signing certificate must match
 
 `public/.well-known/assetlinks.json` contains the SHA-256 fingerprint of the
