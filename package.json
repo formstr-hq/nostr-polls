@@ -30,6 +30,7 @@
     "@types/react-router-dom": "^5.3.3",
     "dayjs": "^1.11.13",
     "emoji-picker-react": "^4.16.1",
+    "jsqr": "^1.4.0",
     "nostr-signer-capacitor-plugin": "^0.0.5",
     "nostr-tools": "^2.23.5",
     "qrcode.react": "^4.2.0",

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Box, IconButton, Badge, ButtonBase, CircularProgress, useMediaQuery, useTheme } from "@mui/material";
 import MailIcon from "@mui/icons-material/MailRounded";
 import SearchIcon from "@mui/icons-material/SearchRounded";
+import QrCodeScannerIcon from "@mui/icons-material/QrCodeScannerRounded";
 import ArrowBackIcon from "@mui/icons-material/ArrowBackRounded";
 import { UserMenu } from "./UserMenu";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -14,6 +15,9 @@ import { useSectionColor } from "../Shell/useSectionColor";
 import { useHeaderTitleOverride } from "../../contexts/HeaderTitleContext";
 import { useHeaderActionState } from "../../contexts/HeaderActionContext";
 import { useHeaderLoading } from "../../contexts/HeaderLoading";
+import { useNotification } from "../../contexts/notification-context";
+import QrScannerDialog from "../Common/QR/QrScannerDialog";
+import { resolveScannedInput } from "../../utils/scannedInput";
 import HeaderLoadingEdge from "./HeaderLoadingEdge";
 
 /**
@@ -29,6 +33,8 @@ const Header: React.FC = () => {
   const { unreadTotal } = useDMContext();
   const { items: subNavItems } = useSubNav();
   const [searchOpen, setSearchOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
+  const { showNotification } = useNotification();
   const titleOverride = useHeaderTitleOverride();
   const headerAction = useHeaderActionState();
   const info = routeInfo(location.pathname);
@@ -56,6 +62,19 @@ const Header: React.FC = () => {
   const goBack = () => {
     if (window.history.length > 1) navigate(-1);
     else navigate("/");
+  };
+
+  const handleScan = async (value: string) => {
+    const route = await resolveScannedInput(value);
+    setScanOpen(false);
+    if (route) {
+      navigate(route);
+    } else {
+      showNotification(
+        "That QR code isn't a Pollerama profile, note or NIP-05 address.",
+        "error"
+      );
+    }
   };
 
   return (
@@ -146,6 +165,15 @@ const Header: React.FC = () => {
               {/* Desktop: the mounted feed portals its actions (new items, back to
                   top, refresh) in here — see CreateFAB. */}
               <Box id={HEADER_FEED_ACTIONS_ID} sx={{ display: "flex", alignItems: "center" }} />
+              {isDesktop && (
+                <IconButton
+                  color="inherit"
+                  onClick={() => setScanOpen(true)}
+                  aria-label="Scan QR code"
+                >
+                  <QrCodeScannerIcon />
+                </IconButton>
+              )}
               <IconButton color="inherit" onClick={() => setSearchOpen(true)} aria-label="Search">
                 <SearchIcon />
               </IconButton>
@@ -209,6 +237,11 @@ const Header: React.FC = () => {
         />
       </Box>
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
+      <QrScannerDialog
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onResult={handleScan}
+      />
     </>
   );
 };

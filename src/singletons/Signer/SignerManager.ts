@@ -157,6 +157,7 @@ function buildUserFromAccount(account: PackageStoredAccount): User {
     website: cached?.website,
     nip05: cached?.nip05,
     lud16: cached?.lud16,
+    lud06: cached?.lud06,
     about: cached?.about,
   };
 }
@@ -489,17 +490,37 @@ class SignerManager {
       throw new SignerPubkeyMismatchError(user.pubkey, signerPubkey);
     }
     
-    // Build profile object including extended fields if they exist
-    const profileContent: Record<string, any> = {
-      name: user.name,
-      about: user.about || "",
-      picture: user.picture || "",
-    };
-    if (user.display_name) profileContent.display_name = user.display_name;
-    if (user.banner) profileContent.banner = user.banner;
-    if (user.website) profileContent.website = user.website;
-    if (user.nip05) profileContent.nip05 = user.nip05;
-    if (user.lud16) profileContent.lud16 = user.lud16;
+    // Start from the cached kind-0 so fields this form doesn't edit (e.g.
+    // lud06, bot, or a newer NIP field another client wrote) survive a save.
+    // Known fields are then set or deleted explicitly, so clearing one in the
+    // editor actually removes it instead of reviving the cached value.
+    let existingProfile: Record<string, any> =
+      getCachedUserData(user.pubkey) ?? {};
+    try {
+      const kind0 = await fetchUserProfile(user.pubkey);
+      if (kind0) {
+        existingProfile = { ...existingProfile, ...JSON.parse(kind0.content || "{}") };
+      }
+    } catch {
+      // Cache-only fallback: publishing should not fail because the read did.
+    }
+    const profileContent: Record<string, any> = { ...existingProfile };
+    profileContent.name = user.name;
+    profileContent.about = user.about || "";
+    profileContent.picture = user.picture || "";
+
+    const knownFields = [
+      "display_name",
+      "banner",
+      "website",
+      "nip05",
+      "lud16",
+      "lud06",
+    ] as const;
+    for (const field of knownFields) {
+      if (user[field]) profileContent[field] = user[field];
+      else delete profileContent[field];
+    }
 
     const kind0Event: EventTemplate = {
       kind: 0,
@@ -765,6 +786,7 @@ class SignerManager {
         website: parsed.website,
         nip05: parsed.nip05,
         lud16: parsed.lud16,
+        lud06: parsed.lud06,
         about: parsed.about,
       });
       // Refresh exposed user; the signer.onChange callback already set

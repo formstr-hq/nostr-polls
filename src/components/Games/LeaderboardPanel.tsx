@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Avatar, Box, IconButton, Stack, Typography } from "@mui/material";
+import { Avatar, Box, CircularProgress, IconButton, Stack, Typography } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import { useNavigate } from "react-router-dom";
 import { nip19 } from "nostr-tools";
@@ -12,6 +12,11 @@ export interface LeaderboardPanelProps {
   onReplay: (entry: LeaderboardEntry) => void;
   /** Optional unit appended to each score, e.g. "days" for Sudoku streaks. */
   scoreSuffix?: string;
+  /** Show the UTC day a result belongs to (all-time view). */
+  showDate?: boolean;
+  /** All-time history is fetched/verified lazily. */
+  loading?: boolean;
+  emptyMessage?: string;
 }
 
 /** Avatar/name via the same convention as ReviewCard.tsx: `useAppContext`'s
@@ -20,6 +25,9 @@ export default function LeaderboardPanel({
   entries,
   onReplay,
   scoreSuffix,
+  showDate = false,
+  loading = false,
+  emptyMessage = "No verified scores yet today — be the first.",
 }: LeaderboardPanelProps) {
   const { profiles, fetchUserProfileThrottled } = useAppContext();
   const navigate = useNavigate();
@@ -30,10 +38,21 @@ export default function LeaderboardPanel({
     }
   }, [entries, profiles, fetchUserProfileThrottled]);
 
+  if (loading) {
+    return (
+      <Stack alignItems="center" spacing={1} sx={{ py: 4 }}>
+        <CircularProgress size={22} />
+        <Typography variant="body2" color="text.secondary">
+          Verifying all-time scores…
+        </Typography>
+      </Stack>
+    );
+  }
+
   if (entries.length === 0) {
     return (
       <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
-        No verified scores yet today — be the first.
+        {emptyMessage}
       </Typography>
     );
   }
@@ -69,14 +88,16 @@ export default function LeaderboardPanel({
               }}
             >
               <Avatar src={profile?.picture} alt={displayName} sx={{ width: 28, height: 28 }} />
-              <Typography
-                className="leaderboard-name"
-                variant="body2"
-                noWrap
-                sx={{ flex: 1, minWidth: 0 }}
-              >
-                {displayName}
-              </Typography>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography className="leaderboard-name" variant="body2" noWrap>
+                  {displayName}
+                </Typography>
+                {showDate && entry.dateIso && (
+                  <Typography variant="caption" color="text.secondary" component="div" noWrap>
+                    {entry.dateIso}
+                  </Typography>
+                )}
+              </Box>
             </Box>
             <Typography variant="body2" fontWeight={600}>
               {entry.score}

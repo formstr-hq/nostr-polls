@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Event, Filter } from "nostr-tools";
-import { Box, Typography, Tabs, Tab } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { dataLayer } from "@formstr/local-relay";
 import { useRelayRefresh } from "../../dataLayer/hooks";
 import { isRelayHydrated } from "../../dataLayer/relayRefresh";
@@ -17,16 +17,9 @@ interface UserNotesFeedProps {
 
 const KIND_NOTE = 1;
 
-// A note is a "conversation" (reply) if it references another event with an
-// `e` tag. Quotes use a `q` tag (NIP-18), so those stay "posts"; we also skip
-// legacy quote-style `e` tags marked "mention". Everything else is a "post".
-const isReply = (event: Event): boolean =>
-  event.tags.some((t) => t[0] === "e" && t[3] !== "mention");
-
 const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRef }) => {
   const [notes, setNotes] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const [subTab, setSubTab] = useState(0);
   const relayRefresh = useRelayRefresh();
 
   const fetchNotes = useCallback(() => {
@@ -72,54 +65,38 @@ const UserNotesFeed: React.FC<UserNotesFeedProps> = ({ pubkey, scrollContainerRe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchNotes, relayRefresh]);
 
-  // Reposts fold into their original note; the reply/post split then looks at
-  // the original (a repost itself carries an `e` tag and would otherwise always
-  // land in Conversations).
-  const items = useMemo(() => buildFeedItems(notes, [KIND_NOTE]), [notes]);
-  const itemNote = (i: FeedItem) => (i.type === "repost" ? i.note : i.event);
-  const posts = useMemo(() => items.filter((i) => !isReply(itemNote(i))), [items]);
-  const conversations = useMemo(() => items.filter((i) => isReply(itemNote(i))), [items]);
-
-  const data = subTab === 0 ? posts : conversations;
+  // Reposts fold into their original note; the feed stays one chronological
+  // stream so the profile doesn't nest a Posts/Conversations tab inside the
+  // outer Activity/Polls/Articles tabs.
+  const items: FeedItem[] = useMemo(
+    () => buildFeedItems(notes, [KIND_NOTE]),
+    [notes]
+  );
 
   return (
-    <Box>
-      <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 2 }}>
-        <Tabs
-          value={subTab}
-          onChange={(_, v) => setSubTab(v)}
-          aria-label="notes sub tabs"
-          variant="fullWidth"
-        >
-          <Tab label="Posts" />
-          <Tab label="Conversations" />
-        </Tabs>
-      </Box>
-
-      <UnifiedFeed
-        data={data}
-        loading={loading}
-        customScrollParent={scrollContainerRef?.current ?? undefined}
-        emptyState={
-          <Box sx={{ p: 3, textAlign: "center" }}>
-            <Typography variant="body1" color="text.secondary">
-              {subTab === 0 ? "No posts yet" : "No conversations yet"}
-            </Typography>
+    <UnifiedFeed
+      data={items}
+      loading={loading}
+      customScrollParent={scrollContainerRef?.current ?? undefined}
+      emptyState={
+        <Box sx={{ p: 3, textAlign: "center" }}>
+          <Typography variant="body1" color="text.secondary">
+            No activity yet
+          </Typography>
+        </Box>
+      }
+      itemContent={(index, item) =>
+        item.type === "repost" ? (
+          <Box key={`repost:${item.note.id}`} sx={{ mb: 2 }}>
+            <RepostsCard note={item.note} reposts={item.reposts} />
           </Box>
-        }
-        itemContent={(index, item) =>
-          item.type === "repost" ? (
-            <Box key={`repost:${item.note.id}`} sx={{ mb: 2 }}>
-              <RepostsCard note={item.note} reposts={item.reposts} />
-            </Box>
-          ) : (
-            <Box key={item.event.id} sx={{ mb: 2 }}>
-              <Notes event={item.event} />
-            </Box>
-          )
-        }
-      />
-    </Box>
+        ) : (
+          <Box key={item.event.id} sx={{ mb: 2 }}>
+            <Notes event={item.event} />
+          </Box>
+        )
+      }
+    />
   );
 };
 

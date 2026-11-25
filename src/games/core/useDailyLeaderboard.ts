@@ -22,6 +22,8 @@ export interface LeaderboardEntry {
    *  was just used to verify the entry. */
   seed: string;
   inputLog: GameInput[];
+  /** UTC day this result belongs to (daily and all-time rows). */
+  dateIso: string;
 }
 
 /** Optional game-specific verification, for metrics that replay alone can't
@@ -102,6 +104,7 @@ export function useDailyLeaderboard<TAction extends string = string>(
                 createdAt: event.created_at,
                 seed: parsed.seed,
                 inputLog: parsed.inputLog,
+                dateIso,
               });
               return next;
             });

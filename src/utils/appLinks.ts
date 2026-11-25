@@ -12,6 +12,7 @@
 // Everything below is pure so it can be unit-tested without Capacitor.
 
 import { nip19 } from "nostr-tools";
+import { routeForNostrUri } from "./nostrUri";
 
 /** Hosts declared with `android:autoVerify` in AndroidManifest.xml. */
 export const APP_LINK_HOSTS = ["pollerama.fun", "www.pollerama.fun"] as const;
@@ -56,6 +57,13 @@ export function resolveAppLink(rawUrl: string): ResolvedAppLink | null {
   }
 
   const protocol = url.protocol.toLowerCase();
+
+  // NIP-21: nostr:npub… (and the nostr:// form some clients emit).
+  if (protocol === "nostr:") {
+    const route = routeForNostrUri(rawUrl);
+    return route ? { route, https: false } : null;
+  }
+
   const isHttp = protocol === "https:" || protocol === "http:";
   const isHttps = isHttp && HOSTS.has(url.hostname.toLowerCase());
   const isCustom = !isHttp && SCHEMES.has(protocol);
