@@ -26,6 +26,7 @@ reverse proxy → pollerama-web :8080
 | `/p/:id` | `noindex,nofollow`, no preview |
 | `/api/link-preview?url=` | OG metadata (JSON) for links inside notes; includes direct video files when the page exposes one |
 | `/og-default.png` | bundled fallback card |
+| `/.well-known/assetlinks.json` | Android App Links certificate proof (copied from `public/`) |
 | `/healthz` | `{"ok":true}` |
 | everything else | the SPA shell / static assets |
 

@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.formstr.pollerama",
+      "sha256_cert_fingerprints": [
+        "A1:8C:93:B8:E6:06:42:85:7B:A9:1C:C5:F9:A2:E2:5C:1D:1F:52:FB:D9:12:92:58:AD:A6:D2:CD:84:DB:DE:4B"
+      ]
+    }
+  }
+]

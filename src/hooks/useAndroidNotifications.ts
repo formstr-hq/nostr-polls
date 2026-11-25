@@ -17,6 +17,7 @@ import { dataLayer } from '@formstr/local-relay';
 import { contentPolicy } from '../utils/contentPolicy';
 import { buildWotBloom } from '../utils/wotBloom';
 import { useModerationVersion } from '../contexts/moderation-context';
+import { resolveAppLink } from '../utils/appLinks';
 
 const NOTIF_ID_DMS = 1002;
 // Cap how many relays the background worker polls — it opens one socket per relay.
@@ -172,54 +173,25 @@ function profileName(content: string): string | undefined {
   }
 }
 
-/** Pull the `acct` (hex pubkey) query param a notification deep link may carry. */
-function extractAcct(url: string): string | undefined {
-  const q = url.indexOf('?');
-  if (q === -1) return undefined;
-  const acct = new URLSearchParams(url.slice(q + 1)).get('acct');
-  return acct || undefined;
-}
-
-/** Strip the query string so the existing path matching below stays simple. */
-function stripQuery(url: string): string {
-  const q = url.indexOf('?');
-  return q === -1 ? url : url.slice(0, q);
-}
-
+/**
+ * Route URLs handed over by Android: verified https App Links
+ * (https://pollerama.fun/...) and the notification worker's
+ * nostr-polls://app/... links. See utils/appLinks.ts for the mapping.
+ */
 async function handleDeepLink(
   rawUrl: string,
   navigate: ReturnType<typeof useNavigate>,
   switchToAccount?: (pubkey: string) => Promise<void>
 ) {
-  const acct = extractAcct(rawUrl);
-  if (acct && switchToAccount) {
-    await switchToAccount(acct).catch((e) =>
+  const target = resolveAppLink(rawUrl);
+  if (!target) return;
+
+  if (target.account && switchToAccount) {
+    await switchToAccount(target.account).catch((e) =>
       console.warn('[useAndroidNotifications] switchAccount on deep link failed:', e)
     );
   }
-  const url = stripQuery(rawUrl);
-  if (url.includes('/messages/')) {
-    const npub = url.split('/messages/')[1];
-    navigate(`/messages/${npub}`);
-  } else if (url.includes('/messages')) {
-    navigate('/messages');
-  } else if (url.includes('/respond-hex/')) {
-    const hex = url.split('/respond-hex/')[1];
-    const nevent = encodeHexToNevent(hex);
-    navigate(nevent ? `/respond/${nevent}` : '/notifications');
-  } else if (url.includes('/respond/')) {
-    const nevent = url.split('/respond/')[1];
-    navigate(`/respond/${nevent}`);
-  } else if (url.includes('/note-hex/')) {
-    const hex = url.split('/note-hex/')[1];
-    const nevent = encodeHexToNevent(hex);
-    navigate(nevent ? `/note/${nevent}` : '/notifications');
-  } else if (url.includes('/note/')) {
-    const nevent = url.split('/note/')[1];
-    navigate(`/note/${nevent}`);
-  } else if (url.includes('/notifications')) {
-    navigate('/notifications');
-  }
+  navigate(target.route);
 }
 
 export function useAndroidNotifications() {
