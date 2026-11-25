@@ -1,3 +1,14 @@
+# 2.4.0
+
+- Android App Links: tapping a pollerama.fun link now opens Pollerama instead of the browser. Links to profiles, notes, polls, articles, music, movies, packs, messages and games route straight to the right screen.
+- NIP-21: Pollerama can open `nostr:` links shared by other Nostr apps, and profile QRs now default to `nostr:nprofile` so other clients can scan them. The QR dialog has a Web link mode for generic cameras.
+- Profile payments: see a person's lightning address, LNURL and every published payment target (Monero, Bitcoin, etc.). Copy an address or show its payment QR.
+- Share a profile QR and scan profile QRs with the camera (or a photo). Scans open profiles, notes and articles, and accept NIP-05 addresses.
+- Profiles: Activity replaces the nested Posts/Conversations tabs, so posts, replies and reposts share one feed.
+- Games: leaderboards now open on All-time, with Today as a second tab. All-time keeps each player's best verified result; Sudoku ranks longest streak.
+- Mobile: Refresh moved out of the create speed dial to the header next to Search. Desktop already worked this way.
+- Profiles no longer drop lud06 or newer kind-0 fields when saving.
+
 # 2.3.2
 
 - Sudoku: your in-progress puzzle is now saved automatically. Switching feeds, backgrounding the app, a WebView reload or a full restart restores the board, pencil notes, selected cell and timer instead of wiping the run.
